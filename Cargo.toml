@@ -1,8 +1,8 @@
 [package]
 name = "ramdog"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "RamDog — gerenciador de RAM ultra leve: origem, árvore, categorias, kill e lock de processos"
+description = "RamDog — gerenciador de processos para Windows e macOS: origem, árvore, categorias, kill e lock"
 
 [dependencies]
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
