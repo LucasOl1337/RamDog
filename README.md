@@ -32,9 +32,19 @@ Este app existe por isso.
 
 ## Instalar
 
-[Release](https://github.com/LucasOl1337/RamDog/releases) com o `exe` pronto.
+Windows x64, um comando no PowerShell — baixa o release, coloca em `%LOCALAPPDATA%\RamDog`, PATH e atalho (pede UAC, temperatura da CPU):
 
-Ou do código:
+```powershell
+irm https://raw.githubusercontent.com/LucasOl1337/RamDog/main/install.ps1 | iex
+```
+
+Depois: `ramdog` no terminal, ou o atalho **RamDog** na área de trabalho.
+
+Não roda no macOS. O app fala Win32 (processos, PDH, NVML, ralos, UAC). O helper de temperatura é .NET + LibreHardwareMonitor. Sem Windows não tem o que portar em cima.
+
+[Release](https://github.com/LucasOl1337/RamDog/releases) com o zip, se preferir baixar na mão.
+
+Do código (precisa [Rust](https://rustup.rs/) e, pro helper de temp, [SDK .NET 8](https://dotnet.microsoft.com/download/dotnet/8.0)):
 
 ```bash
 git clone https://github.com/LucasOl1337/RamDog.git
@@ -43,9 +53,7 @@ cargo build --release
 dotnet publish hwtemp -c Release -o target/release --no-self-contained
 ```
 
-Executável: `target\release\ramdog.exe`. Basta abrir.
-
-O `dotnet publish` é opcional: publica o helper `hwtemp.exe` (temperatura de CPU/RAM) na mesma pasta. Precisa do [SDK .NET 8](https://dotnet.microsoft.com/download/dotnet/8.0). Sem o helper o RamDog roda igual, só sem esses dois números.
+Executável: `target\release\ramdog.exe`. Sem o `dotnet publish` o RamDog abre igual, só sem temperatura de CPU/RAM.
 
 ## Uso
 
