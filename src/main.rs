@@ -3,12 +3,17 @@
 mod app;
 mod categories;
 mod config;
+#[cfg(windows)]
+mod drains;
+#[cfg(not(windows))]
+#[path = "drains_stub.rs"]
 mod drains;
 mod hwtemp;
 mod icons;
 mod metrics;
 mod procs;
 mod sampler;
+#[cfg(windows)]
 mod sys;
 
 fn main() -> eframe::Result<()> {

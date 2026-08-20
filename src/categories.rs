@@ -118,7 +118,7 @@ const PERSONAL_NAMES: &[&str] = &[
 /// Hosts genéricos: herdam a categoria do pai (node lançado pelo Codex é IA; pelo VS Code é Dev).
 const GENERIC_HOSTS: &[&str] = &[
     "node", "nodejs", "python", "python3", "pythonw", "py", "uv", "uvx", "npm", "npx", "pnpm", "yarn",
-    "bun", "deno", "conhost", "cmd", "powershell", "pwsh", "bash", "sh", "zsh", "wsl", "wslhost",
+    "bun", "deno", "conhost", "cmd", "powershell", "pwsh", "bash", "sh", "zsh", "fish", "login", "wsl", "wslhost",
     "msedgewebview2", "java", "javaw", "ruby", "perl", "php", "electron", "webview2", "dotnet",
     "cscript", "wscript", "mshta", "rundll32", "esbuild", "tsserver", "typescript", "cargo", "rustc",
     "link", "cl", "gcc", "g++", "clang", "clang++", "make", "cmake", "ninja", "git", "ssh", "sshd",
@@ -275,5 +275,6 @@ pub fn is_critical(name_lower: &str, pid: u32) -> bool {
         base_name(name_lower),
         "system" | "registry" | "memory compression" | "secure system" | "smss" | "csrss" | "wininit"
             | "winlogon" | "services" | "lsass" | "fontdrvhost" | "dwm" | "sihost" | "logonui" | "lsaiso"
+            | "kernel_task" | "launchd" | "windowserver" | "loginwindow" | "syspolicyd"
     )
 }

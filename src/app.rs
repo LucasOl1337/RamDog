@@ -617,16 +617,23 @@ impl App {
     }
 
     fn relaunch_as_admin(&mut self) {
-        use windows::core::{w, PCWSTR};
-        use windows::Win32::UI::Shell::ShellExecuteW;
-        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-        let exe = std::env::current_exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-        let wide: Vec<u16> = exe.encode_utf16().chain(std::iter::once(0)).collect();
-        let r = unsafe { ShellExecuteW(None, w!("runas"), PCWSTR(wide.as_ptr()), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
-        if r.0 as usize > 32 {
-            std::process::exit(0);
-        } else {
-            self.toast("Elevação cancelada ou falhou".into(), true);
+        #[cfg(windows)]
+        {
+            use windows::core::{w, PCWSTR};
+            use windows::Win32::UI::Shell::ShellExecuteW;
+            use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+            let exe = std::env::current_exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+            let wide: Vec<u16> = exe.encode_utf16().chain(std::iter::once(0)).collect();
+            let r = unsafe { ShellExecuteW(None, w!("runas"), PCWSTR(wide.as_ptr()), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
+            if r.0 as usize > 32 {
+                std::process::exit(0);
+            } else {
+                self.toast("Elevação cancelada ou falhou".into(), true);
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            self.toast("No macOS, rode o RamDog com sudo se precisar matar processos de outros usuários.".into(), true);
         }
     }
 
@@ -802,6 +809,8 @@ impl App {
             let cpu_temp = self.hwtemp.cpu_temp.map(|t| t.round() as u32);
             let cpu_tip = if self.hwtemp.cpu_temp.is_some() {
                 "CPU".to_string()
+            } else if cfg!(not(windows)) {
+                "Temperatura de CPU no macOS ainda não está ligada (o helper hwtemp é Windows).".into()
             } else if self.is_admin {
                 "Temperatura indisponível: hwtemp.exe não achado ao lado do ramdog.exe, ou placa-mãe sem sensor suportado.".into()
             } else {
@@ -892,7 +901,7 @@ impl App {
                 if self.is_admin {
                     ui.label(RichText::new("ADMIN").color(Color32::from_rgb(90, 220, 130)).strong())
                         .on_hover_text("Rodando elevado: pode encerrar processos de outros usuários/serviços");
-                } else if ui
+                } else if cfg!(windows) && ui
                     .button("Reabrir como admin")
                     .on_hover_text("Necessário para encerrar serviços e processos de outros usuários")
                     .clicked()
@@ -2131,9 +2140,23 @@ fn fmt_age(secs: u64) -> String {
 }
 
 pub fn open_url(url: &str) {
+    #[cfg(windows)]
     let _ = std::process::Command::new("cmd").args(["/c", "start", "", url]).spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }
 
 fn open_in_explorer(path: &str) {
+    #[cfg(windows)]
     let _ = std::process::Command::new("explorer.exe").arg(format!("/select,{path}")).spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").args(["-R", path]).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Some(dir) = std::path::Path::new(path).parent() {
+            let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
+        }
+    }
 }

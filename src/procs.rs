@@ -2,26 +2,38 @@
 //! caminho/linha de comando via NtQueryInformationProcess, kill via TerminateProcess.
 
 use std::collections::HashMap;
-use std::ffi::c_void;
+#[cfg(windows)]
 use std::time::Instant;
 
+#[cfg(windows)]
+use std::ffi::c_void;
+#[cfg(windows)]
 use windows::core::PWSTR;
+#[cfg(windows)]
 use windows::Wdk::System::SystemInformation::{NtQuerySystemInformation, SystemProcessInformation};
+#[cfg(windows)]
 use windows::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation, ProcessCommandLineInformation};
+#[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, HANDLE, STATUS_INFO_LENGTH_MISMATCH, UNICODE_STRING};
+#[cfg(windows)]
 use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+#[cfg(windows)]
 use windows::Win32::Security::{
     AdjustTokenPrivileges, LookupPrivilegeValueW, SE_DEBUG_NAME, SE_PRIVILEGE_ENABLED,
     TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES,
 };
+#[cfg(windows)]
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+#[cfg(windows)]
 use windows::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, TerminateProcess,
     PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, PROCESS_VM_READ,
 };
+#[cfg(windows)]
 use windows::Win32::UI::Shell::IsUserAnAdmin;
 
 /// Layout real de SYSTEM_PROCESS_INFORMATION (o crate `windows` expõe campos como Reserved*).
+#[cfg(windows)]
 #[repr(C)]
 #[allow(dead_code)]
 struct SysProcInfo {
@@ -61,7 +73,9 @@ struct SysProcInfo {
     other_transfer_count: i64,
 }
 
+#[cfg(windows)]
 struct OwnedHandle(HANDLE);
+#[cfg(windows)]
 impl Drop for OwnedHandle {
     fn drop(&mut self) {
         unsafe {
@@ -147,6 +161,7 @@ impl MemStatus {
     }
 }
 
+#[cfg(windows)]
 pub fn mem_status() -> MemStatus {
     let mut m = MEMORYSTATUSEX {
         dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
@@ -166,6 +181,7 @@ pub fn mem_status() -> MemStatus {
 }
 
 /// Info imutável durante a vida do processo (cacheada por (pid, create_time)).
+#[cfg(windows)]
 #[derive(Clone, Default)]
 struct StaticInfo {
     exe_path: String,
@@ -173,6 +189,7 @@ struct StaticInfo {
     launcher: Launcher,
 }
 
+#[cfg(windows)]
 #[derive(Clone, Copy)]
 struct CpuSample {
     total_100ns: i64,
@@ -180,6 +197,7 @@ struct CpuSample {
     at: Instant,
 }
 
+#[cfg(windows)]
 pub struct Sampler {
     statics: HashMap<(u32, i64), StaticInfo>,
     cpu_prev: HashMap<(u32, i64), CpuSample>,
@@ -187,6 +205,7 @@ pub struct Sampler {
     buf: Vec<u8>,
 }
 
+#[cfg(windows)]
 impl Sampler {
     pub fn new() -> Self {
         let ncpu = std::thread::available_parallelism()
@@ -337,6 +356,7 @@ impl Sampler {
     }
 }
 
+#[cfg(windows)]
 struct RawProc {
     pid: u32,
     ppid: u32,
@@ -353,6 +373,7 @@ struct RawProc {
     io_bytes: u64,
 }
 
+#[cfg(windows)]
 fn query_static(pid: u32) -> StaticInfo {
     let mut st = StaticInfo::default();
     if pid == 4 {
@@ -399,6 +420,7 @@ fn query_static(pid: u32) -> StaticInfo {
 /// variáveis-impressão-digital de agentes/terminais. Precisa de PROCESS_VM_READ (mesmo usuário
 /// ou admin); em caso de falha devolve Launcher vazio.
 #[cfg(target_pointer_width = "64")]
+#[cfg(windows)]
 fn read_launcher(pid: u32) -> Launcher {
     const PEB_PROCESS_PARAMETERS: usize = 0x20;
     const RUPP_ENVIRONMENT: usize = 0x80;
@@ -455,19 +477,26 @@ fn read_launcher(pid: u32) -> Launcher {
 }
 
 #[cfg(not(target_pointer_width = "64"))]
+#[cfg(windows)]
 fn read_launcher(_pid: u32) -> Launcher {
     Launcher::default()
 }
 
 /// Extrai as impressões digitais de um bloco "KEY=VAL NUL KEY=VAL NUL NUL".
+#[cfg(windows)]
 fn parse_launcher(words: &[u16]) -> Launcher {
+    let lines: Vec<String> = words
+        .split(|&w| w == 0)
+        .filter(|e| !e.is_empty())
+        .map(String::from_utf16_lossy)
+        .collect();
+    launcher_from_env_lines(&lines)
+}
+
+pub(crate) fn launcher_from_env_lines(lines: &[String]) -> Launcher {
     let mut l = Launcher::default();
     let mut host_rank = 0u8; // prioridade: Maestri > VS Code/Cursor > Windows Terminal/outros
-    for entry in words.split(|&w| w == 0) {
-        if entry.is_empty() {
-            continue;
-        }
-        let s = String::from_utf16_lossy(entry);
+    for s in lines {
         let Some((k, v)) = s.split_once('=') else { continue };
         let ku = k.to_ascii_uppercase();
         let mut set_host = |name: &str, rank: u8, l: &mut Launcher| {
@@ -509,7 +538,9 @@ fn parse_launcher(words: &[u16]) -> Launcher {
             "TERM_PROGRAM" => {
                 let vl = v.to_ascii_lowercase();
                 let name = if vl == "vscode" { Some("VS Code") } else if vl.contains("cursor") { Some("Cursor") }
-                    else if vl.contains("zed") { Some("Zed") } else if vl.contains("warp") { Some("Warp") } else { None };
+                    else if vl.contains("zed") { Some("Zed") } else if vl.contains("warp") { Some("Warp") }
+                    else if vl.contains("iterm") { Some("iTerm") } else if vl.contains("apple_terminal") { Some("Terminal") }
+                    else if vl.contains("wezterm") { Some("WezTerm") } else { None };
                 if let Some(nm) = name {
                     set_host(nm, 2, &mut l);
                 }
@@ -526,6 +557,7 @@ fn parse_launcher(words: &[u16]) -> Launcher {
     l
 }
 
+#[cfg(windows)]
 pub fn kill(pid: u32) -> Result<(), String> {
     unsafe {
         let h = OpenProcess(PROCESS_TERMINATE, false, pid).map_err(|e| fmt_err(&e))?;
@@ -534,6 +566,7 @@ pub fn kill(pid: u32) -> Result<(), String> {
     }
 }
 
+#[cfg(windows)]
 fn fmt_err(e: &windows::core::Error) -> String {
     let code = e.code().0 as u32 & 0xFFFF;
     match code {
@@ -543,11 +576,13 @@ fn fmt_err(e: &windows::core::Error) -> String {
     }
 }
 
+#[cfg(windows)]
 pub fn is_admin() -> bool {
     unsafe { IsUserAnAdmin().as_bool() }
 }
 
 /// Habilita SeDebugPrivilege (só funciona elevado; ignorado silenciosamente caso contrário).
+#[cfg(windows)]
 pub fn enable_debug_privilege() {
     unsafe {
         let mut token = HANDLE::default();
@@ -564,6 +599,12 @@ pub fn enable_debug_privilege() {
         let _ = AdjustTokenPrivileges(token.0, false, Some(&tp), 0, None, None);
     }
 }
+
+#[cfg(not(windows))]
+#[path = "procs_unix.rs"]
+mod procs_unix;
+#[cfg(not(windows))]
+pub use procs_unix::{enable_debug_privilege, is_admin, kill, mem_status, Sampler};
 
 /// FILETIME atual (100 ns desde 1601-01-01 UTC).
 pub fn now_filetime() -> i64 {

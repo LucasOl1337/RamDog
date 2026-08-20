@@ -45,8 +45,18 @@ impl Default for Config {
 }
 
 pub fn config_path() -> PathBuf {
+    #[cfg(windows)]
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    #[cfg(target_os = "macos")]
+    let base = std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join("Library/Application Support"))
+        .unwrap_or_else(|| PathBuf::from("."));
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
         .unwrap_or_else(|| PathBuf::from("."));
     base.join("RamDog").join("config.json")
 }

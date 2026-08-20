@@ -1,14 +1,19 @@
-//! Extração do ícone do executável (SHGetFileInfoW → HICON → RGBA).
+//! Extração do ícone do executável (SHGetFileInfoW → HICON → RGBA). No macOS/Linux: None.
 
+#[cfg(windows)]
 use std::ffi::c_void;
-
+#[cfg(windows)]
 use windows::core::PCWSTR;
+#[cfg(windows)]
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetObjectW, BITMAP, BITMAPINFO, BITMAPINFOHEADER,
     BI_RGB, DIB_RGB_COLORS, HGDIOBJ,
 };
+#[cfg(windows)]
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
+#[cfg(windows)]
 use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
 
 #[derive(Clone)]
@@ -18,6 +23,12 @@ pub struct RgbaIcon {
     pub rgba: Vec<u8>,
 }
 
+#[cfg(not(windows))]
+pub fn icon_for_exe(_path: &str) -> Option<RgbaIcon> {
+    None
+}
+
+#[cfg(windows)]
 pub fn icon_for_exe(path: &str) -> Option<RgbaIcon> {
     if path.is_empty() {
         return None;
@@ -41,6 +52,7 @@ pub fn icon_for_exe(path: &str) -> Option<RgbaIcon> {
     }
 }
 
+#[cfg(windows)]
 unsafe fn hicon_to_rgba(hicon: HICON) -> Option<RgbaIcon> {
     let mut info = ICONINFO::default();
     GetIconInfo(hicon, &mut info).ok()?;

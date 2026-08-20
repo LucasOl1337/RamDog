@@ -12,7 +12,10 @@
 //! sobe (asInvoker) mas Tctl/DIMM vêm vazios — a UI mostra "–", nunca inventa número.
 
 use std::io::{BufRead, BufReader};
+#[cfg(windows)]
 use std::process::{Child, Command, Stdio};
+#[cfg(not(windows))]
+use std::process::Child;
 use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
@@ -46,40 +49,43 @@ pub struct HwTempReader {
 impl HwTempReader {
     /// `None` só se `hwtemp.exe` não estiver ao lado do `ramdog.exe` (ou o spawn falhar).
     pub fn spawn() -> Option<Self> {
-        let exe = std::env::current_exe().ok()?;
-        let helper = exe.parent()?.join("hwtemp.exe");
-        if !helper.exists() {
+        #[cfg(not(windows))]
+        {
             return None;
         }
-        let pid = std::process::id();
-        #[cfg(windows)]
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let mut cmd = Command::new(&helper);
-        cmd.arg(pid.to_string())
-            .stdout(Stdio::piped())
-            .stdin(Stdio::null())
-            .stderr(Stdio::null());
         #[cfg(windows)]
         {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            let exe = std::env::current_exe().ok()?;
+            let helper = exe.parent()?.join("hwtemp.exe");
+            if !helper.exists() {
+                return None;
+            }
+            let pid = std::process::id();
+            let mut cmd = Command::new(&helper);
+            cmd.arg(pid.to_string())
+                .stdout(Stdio::piped())
+                .stdin(Stdio::null())
+                .stderr(Stdio::null());
             cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-        let mut child = cmd.spawn().ok()?;
-        let stdout = child.stdout.take()?;
-        let latest = Arc::new(Mutex::new(HwTemp::default()));
-        let latest2 = latest.clone();
-        let _ = std::thread::Builder::new().name("hwtemp-reader".into()).spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                let Ok(line) = line else { break };
-                if let Ok(msg) = serde_json::from_str::<HwTempMsg>(&line) {
-                    if let Ok(mut g) = latest2.lock() {
-                        g.cpu_temp = msg.cpu_temp;
-                        g.dimm_temps = msg.dimm;
+            let mut child = cmd.spawn().ok()?;
+            let stdout = child.stdout.take()?;
+            let latest = Arc::new(Mutex::new(HwTemp::default()));
+            let latest2 = latest.clone();
+            let _ = std::thread::Builder::new().name("hwtemp-reader".into()).spawn(move || {
+                for line in BufReader::new(stdout).lines() {
+                    let Ok(line) = line else { break };
+                    if let Ok(msg) = serde_json::from_str::<HwTempMsg>(&line) {
+                        if let Ok(mut g) = latest2.lock() {
+                            g.cpu_temp = msg.cpu_temp;
+                            g.dimm_temps = msg.dimm;
+                        }
                     }
                 }
-            }
-        });
-        Some(Self { latest, child })
+            });
+            Some(Self { latest, child })
+        }
     }
 
     pub fn read(&self) -> HwTemp {

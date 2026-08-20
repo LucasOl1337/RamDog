@@ -32,28 +32,37 @@ Este app existe por isso.
 
 ## Instalar
 
-Windows x64, um comando no PowerShell — baixa o release, coloca em `%LOCALAPPDATA%\RamDog`, PATH e atalho (pede UAC, temperatura da CPU):
+**Windows x64** (PowerShell):
 
 ```powershell
 irm https://raw.githubusercontent.com/LucasOl1337/RamDog/main/install.ps1 | iex
 ```
 
-Depois: `ramdog` no terminal, ou o atalho **RamDog** na área de trabalho.
+Depois: `ramdog` no terminal, ou o atalho **RamDog** na área de trabalho (UAC = temperatura da CPU).
 
-Não roda no macOS. O app fala Win32 (processos, PDH, NVML, ralos, UAC). O helper de temperatura é .NET + LibreHardwareMonitor. Sem Windows não tem o que portar em cima.
+**macOS** (Apple Silicon ou Intel):
 
-[Release](https://github.com/LucasOl1337/RamDog/releases) com o zip, se preferir baixar na mão.
+```bash
+curl -sSfL https://raw.githubusercontent.com/LucasOl1337/RamDog/main/install.sh | sh
+```
 
-Do código (precisa [Rust](https://rustup.rs/) e, pro helper de temp, [SDK .NET 8](https://dotnet.microsoft.com/download/dotnet/8.0)):
+No Mac: lista, categorias, origem, árvore, kill. Sem ralos do Windows, sem temp de CPU (LibreHardwareMonitor) e sem GPU NVIDIA/NVML. Se ainda não houver release macOS, o script compila do source (precisa [rustup](https://rustup.rs) + git).
+
+[Release](https://github.com/LucasOl1337/RamDog/releases) com zip/tar, se preferir baixar na mão.
+
+Do código:
 
 ```bash
 git clone https://github.com/LucasOl1337/RamDog.git
 cd RamDog
 cargo build --release
-dotnet publish hwtemp -c Release -o target/release --no-self-contained
 ```
 
-Executável: `target\release\ramdog.exe`. Sem o `dotnet publish` o RamDog abre igual, só sem temperatura de CPU/RAM.
+Windows, helper de temperatura (opcional, [SDK .NET 8](https://dotnet.microsoft.com/download/dotnet/8.0)):
+
+```bash
+dotnet publish hwtemp -c Release -o target/release --no-self-contained
+```
 
 ## Uso
 
