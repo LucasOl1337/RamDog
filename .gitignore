@@ -1,0 +1,8 @@
+/target/
+hwtemp/bin/
+hwtemp/obj/
+.vs/
+*.user
+*.suo
+*.pdb
+*.log
