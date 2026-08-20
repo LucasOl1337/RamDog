@@ -4,8 +4,8 @@
 // ler via acesso direto a hardware (MSR da CPU, Super I/O da placa-mãe pelo SMBus), que exige
 // um driver de kernel assinado. Em vez de reimplementar esse driver em Rust, este helper usa a
 // LibreHardwareMonitorLib (mesma lib do nosso outro app, TempHUD, já validada nesta
-// máquina) e imprime uma linha JSON por leitura em stdout. O RamDog (Rust) só o inicia quando
-// já está elevado — sem token de admin, Tctl vem 0 e nenhum sensor DIMM aparece (testado).
+// máquina) e imprime uma linha JSON por leitura em stdout. Herda o token do RamDog
+// (asInvoker). Sem admin, Tctl vem vazio e nenhum sensor DIMM aparece — o RamDog mostra "–".
 //
 // Uso: hwtemp.exe <pid-do-processo-pai>
 // Sai sozinho quando o processo pai morre — não fica órfão rodando em segundo plano.
@@ -38,10 +38,14 @@ while (parent is null || !parent.HasExited)
     {
         if (hw.HardwareType == HardwareType.Cpu)
         {
-            var t = hw.Sensors.FirstOrDefault(s =>
-                s.SensorType == SensorType.Temperature &&
-                (s.Name.Contains("Tctl") || s.Name.Contains("Tdie") || s.Name.Contains("Package")));
-            if (t?.Value is float v && v > 0)
+            var t = hw.Sensors
+                .Where(s => s.SensorType == SensorType.Temperature && s.Value is float v && v > 0)
+                .OrderBy(s =>
+                    s.Name.Contains("Tctl") ? 0 :
+                    s.Name.Contains("Tdie") ? 1 :
+                    s.Name.Contains("Package") ? 2 : 3)
+                .FirstOrDefault();
+            if (t?.Value is float v)
             {
                 cpuTemp = v;
             }

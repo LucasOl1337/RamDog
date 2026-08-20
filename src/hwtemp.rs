@@ -8,9 +8,8 @@
 //! (já validada nesta máquina) num executável .NET pequeno — `hwtemp/`, ao lado deste crate —
 //! que imprime uma linha JSON por leitura em stdout.
 //!
-//! Só é iniciado quando o RamDog já está elevado (herda o token, sem UAC extra) e o binário do
-//! helper existe ao lado do `ramdog.exe`. Qualquer outra situação = `None` silencioso, nunca um
-//! número inventado.
+//! Inicia sempre que `hwtemp.exe` está ao lado do `ramdog.exe`. Sem admin o helper
+//! sobe (asInvoker) mas Tctl/DIMM vêm vazios — a UI mostra "–", nunca inventa número.
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
@@ -45,25 +44,27 @@ pub struct HwTempReader {
 }
 
 impl HwTempReader {
-    /// `None` sem tentar nada se não estiver admin (não tem sentido lançar o helper pra ver
-    /// zero) ou se `hwtemp.exe` não estiver ao lado do `ramdog.exe`.
-    pub fn spawn(is_admin: bool) -> Option<Self> {
-        if !is_admin {
-            return None;
-        }
+    /// `None` só se `hwtemp.exe` não estiver ao lado do `ramdog.exe` (ou o spawn falhar).
+    pub fn spawn() -> Option<Self> {
         let exe = std::env::current_exe().ok()?;
         let helper = exe.parent()?.join("hwtemp.exe");
         if !helper.exists() {
             return None;
         }
         let pid = std::process::id();
-        let mut child = Command::new(&helper)
-            .arg(pid.to_string())
+        #[cfg(windows)]
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut cmd = Command::new(&helper);
+        cmd.arg(pid.to_string())
             .stdout(Stdio::piped())
             .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = cmd.spawn().ok()?;
         let stdout = child.stdout.take()?;
         let latest = Arc::new(Mutex::new(HwTemp::default()));
         let latest2 = latest.clone();

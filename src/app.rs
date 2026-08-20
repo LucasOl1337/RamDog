@@ -22,10 +22,15 @@ const ICON: f32 = 16.0;
 /// Altura das barrinhas dos medidores do topo (CPU/RAM/GPU/Disco) — uma só constante pras
 /// quatro pra elas ficarem realmente alinhadas, não só "parecidas".
 const TOP_BAR_H: f32 = 8.0;
-/// Altura alocada pra linha inteira do topo (rótulo + medidores + controles à direita).
-/// Precisa ser explícita: sem isso o bloco de botões à direita centraliza contra a altura do
-/// painel inteiro, não a da linha, e sai visualmente desalinhado dos medidores.
-const TOP_ROW_H: f32 = 34.0;
+/// Altura da linha de rótulo (CPU 7.7% 62°C) — fixa pra os quatro medidores
+/// compartilharem a mesma baseline, sem o texto extra da RAM empurrar a barra.
+const METER_HEAD_H: f32 = 18.0;
+
+enum MeterExtra {
+    None,
+    Temp(Option<u32>),
+    Text(String),
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SortKey {
@@ -109,7 +114,7 @@ impl App {
         setup_style(&cc.egui_ctx);
         let cfg = Config::load();
         let is_admin = procs::is_admin();
-        let sampler = sampler::spawn(cc.egui_ctx.clone(), cfg.refresh_ms, is_admin);
+        let sampler = sampler::spawn(cc.egui_ctx.clone(), cfg.refresh_ms);
         Self {
             cfg,
             cfg_dirty: false,
@@ -167,7 +172,13 @@ impl App {
         self.mem = snap.mem;
         self.last_sample = Some(snap.taken);
         self.sample_ms = snap.sample_ms;
+        // Primeira amostra de GetSystemTimes não tem delta — guarda o % anterior
+        // pra o medidor não piscar "–" no primeiro tick.
+        let cpu_keep = if snap.sys.cpu_pct.is_none() { self.sys.cpu_pct } else { None };
         self.sys = snap.sys;
+        if let Some(p) = cpu_keep {
+            self.sys.cpu_pct = Some(p);
+        }
         self.gpu_per_proc = snap.gpu_per_proc;
         self.hwtemp = snap.hwtemp;
         self.rebuild_indexes();
@@ -714,36 +725,60 @@ impl App {
         }
     }
 
-    /// Um medidor compacto: rótulo, barra fininha, percentual, temperatura opcional — mesma
-    /// linguagem visual para CPU/GPU/Disco. `None` vira "–" cinza com o tooltip explicando por
-    /// quê, nunca um 0 falso.
-    fn mini_meter(ui: &mut egui::Ui, label: &str, pct: Option<f32>, temp_c: Option<u32>, width: f32, unavailable_tip: &str) -> egui::Response {
-        ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(label).color(MUTED).size(10.5));
-                if let Some(p) = pct {
-                    ui.label(num(Self::fmt_pct(p)).size(12.5).strong().color(Self::load_color(p / 100.0)));
-                } else {
-                    ui.label(RichText::new("–").color(Color32::from_gray(90)).size(12.5));
-                }
-                if let Some(t) = temp_c {
-                    ui.label(RichText::new(format!("{t}°C")).size(11.0).strong().color(Self::temp_color(t)));
-                }
-            });
-            let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, TOP_BAR_H), egui::Sense::hover());
-            let p = ui.painter();
-            p.rect_filled(rect, 2.0, Color32::from_rgb(30, 34, 41));
-            if let Some(pct) = pct {
-                let frac = (pct / 100.0).clamp(0.0, 1.0);
-                if frac > 0.01 {
-                    let bar = Rect::from_min_size(rect.min, Vec2::new(rect.width() * frac, rect.height()));
-                    p.rect_filled(bar, 2.0, Self::load_color(frac));
-                }
+    /// Rótulo + % + extra numa linha de altura fixa. Sem wrap: o GB da RAM não
+    /// empurra a barra pra baixo nem desalinha CPU/GPU/Disco.
+    fn meter_head(ui: &mut egui::Ui, label: &str, pct: Option<f32>, extra: MeterExtra) {
+        ui.scope(|ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.allocate_ui_with_layout(
+                Vec2::new(ui.available_width(), METER_HEAD_H),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.label(RichText::new(label).color(MUTED).size(11.0));
+                    match pct {
+                        Some(p) => {
+                            ui.label(num(Self::fmt_pct(p)).strong().color(Self::load_color(p / 100.0)));
+                        }
+                        None => {
+                            ui.label(RichText::new("–").monospace().size(12.5).color(Color32::from_gray(90)));
+                        }
+                    }
+                    match extra {
+                        MeterExtra::Temp(Some(t)) => {
+                            ui.label(
+                                RichText::new(format!("{t}°C"))
+                                    .monospace()
+                                    .size(12.5)
+                                    .strong()
+                                    .color(Self::temp_color(t)),
+                            );
+                        }
+                        MeterExtra::Temp(None) => {
+                            ui.label(RichText::new("–").monospace().size(12.5).color(Color32::from_gray(90)));
+                        }
+                        MeterExtra::Text(s) => {
+                            ui.label(RichText::new(s).color(MUTED).size(11.0));
+                        }
+                        MeterExtra::None => {}
+                    }
+                },
+            );
+        });
+    }
+
+    fn meter_bar(ui: &mut egui::Ui, width: f32, pct: Option<f32>, tip: impl Into<egui::WidgetText>) -> egui::Response {
+        let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, TOP_BAR_H), egui::Sense::hover());
+        let p = ui.painter();
+        p.rect_filled(rect, 2.0, Color32::from_rgb(30, 34, 41));
+        if let Some(pct) = pct {
+            let frac = (pct / 100.0).clamp(0.0, 1.0);
+            if frac > 0.01 {
+                let bar = Rect::from_min_size(rect.min, Vec2::new(rect.width() * frac, rect.height()));
+                p.rect_filled(bar, 2.0, Self::load_color(frac));
             }
-            resp
-        })
-        .inner
-        .on_hover_text(if pct.is_some() { label.to_string() } else { unavailable_tip.to_string() })
+        }
+        resp.on_hover_text(tip)
     }
 
     fn ui_top(&mut self, ui: &mut egui::Ui) {
@@ -755,63 +790,59 @@ impl App {
         // Altura fixa alocada explicitamente: sem isso o bloco da direita (botões) centraliza
         // contra a altura do painel inteiro em vez da altura da própria linha, e some
         // desalinhado dos medidores.
-        let row_w = ui.available_width();
-        ui.allocate_ui_with_layout(Vec2::new(row_w, TOP_ROW_H), Layout::left_to_right(Align::Center), |ui| {
-            ui.label(RichText::new("RamDog").strong().size(16.0).color(MUTED));
-            ui.add_space(10.0);
+        // Topo alinhado pelo topo (não pelo centro): a linha extra da RAM (compromisso)
+        // não empurra CPU/GPU/Disco. Cada medidor tem a mesma altura de rótulo.
+        ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
+            ui.add_space(2.0);
+            ui.allocate_ui_with_layout(Vec2::new(72.0, METER_HEAD_H + TOP_BAR_H), Layout::left_to_right(Align::Center), |ui| {
+                ui.label(RichText::new("RamDog").strong().size(16.0).color(MUTED));
+            });
+            ui.add_space(12.0);
 
             let cpu_temp = self.hwtemp.cpu_temp.map(|t| t.round() as u32);
-            Self::mini_meter(ui, "CPU", self.sys.cpu_pct, cpu_temp, 90.0, if self.is_admin {
-                "Temperatura indisponível: hwtemp.exe não achado ao lado do ramdog.exe, ou placa-mãe sem sensor suportado."
+            let cpu_tip = if self.hwtemp.cpu_temp.is_some() {
+                "CPU".to_string()
+            } else if self.is_admin {
+                "Temperatura indisponível: hwtemp.exe não achado ao lado do ramdog.exe, ou placa-mãe sem sensor suportado.".into()
             } else {
-                "Temperatura de CPU precisa do RamDog rodando como admin (acesso a hardware, sem API pública do Windows)."
+                "Temperatura de CPU precisa de admin (driver de hardware). Use Reabrir como admin.".into()
+            };
+            ui.vertical(|ui| {
+                ui.set_width(148.0);
+                ui.spacing_mut().item_spacing.y = 3.0;
+                Self::meter_head(ui, "CPU", self.sys.cpu_pct, MeterExtra::Temp(cpu_temp));
+                Self::meter_bar(ui, 90.0, self.sys.cpu_pct, cpu_tip);
             });
-            ui.add_space(14.0);
+            ui.add_space(16.0);
 
             let used = self.mem.used_phys();
             let total = self.mem.total_phys.max(1);
             let frac = used as f32 / total as f32;
-            let color = Self::load_color(frac);
             let ram_temp = self.hwtemp.ram_max();
             ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("RAM").color(MUTED).size(10.5));
-                    ui.label(num(format!("{:.0}%", frac * 100.0)).size(12.5).strong().color(color));
-                    ui.label(RichText::new(format!("{} / {}", fmt_gb(used), fmt_gb(total))).color(MUTED).size(10.5));
-                    if let Some(t) = ram_temp {
-                        ui.label(RichText::new(format!("{:.0}°C", t)).size(11.0).strong().color(Self::temp_color(t.round() as u32)));
-                    }
-                });
+                ui.set_width(220.0);
+                ui.spacing_mut().item_spacing.y = 3.0;
+                let extra = if let Some(t) = ram_temp {
+                    MeterExtra::Text(format!("{} / {}  {:.0}°C", fmt_gb(used), fmt_gb(total), t))
+                } else {
+                    MeterExtra::Text(format!("{} / {}", fmt_gb(used), fmt_gb(total)))
+                };
+                Self::meter_head(ui, "RAM", Some(frac * 100.0), extra);
                 self.ram_gauge(ui, &totals, 200.0);
+                ui.label(
+                    RichText::new(format!("compromisso {} / {}", fmt_gb(self.mem.used_commit()), fmt_gb(self.mem.total_commit)))
+                        .color(MUTED)
+                        .size(10.5),
+                )
+                .on_hover_text("Memória confirmada (RAM + arquivo de paginação)");
             });
-            ui.add_space(14.0);
+            ui.add_space(16.0);
 
             if let Some(g) = self.sys.gpu.clone() {
                 ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("GPU").color(MUTED).size(10.5));
-                        match g.util_pct {
-                            Some(p) => {
-                                ui.label(num(Self::fmt_pct(p)).size(12.5).strong().color(Self::load_color(p / 100.0)));
-                            }
-                            None => {
-                                ui.label(RichText::new("–").color(Color32::from_gray(90)).size(12.5));
-                            }
-                        }
-                        if let Some(t) = g.temp_c {
-                            ui.label(RichText::new(format!("{t}°C")).size(11.0).strong().color(Self::temp_color(t)));
-                        }
-                    });
-                    let (rect, resp) = ui.allocate_exact_size(Vec2::new(90.0, TOP_BAR_H), egui::Sense::hover());
-                    let p = ui.painter();
-                    p.rect_filled(rect, 2.0, Color32::from_rgb(30, 34, 41));
-                    if let Some(pct) = g.util_pct {
-                        let frac = (pct / 100.0).clamp(0.0, 1.0);
-                        if frac > 0.01 {
-                            let bar = Rect::from_min_size(rect.min, Vec2::new(rect.width() * frac, rect.height()));
-                            p.rect_filled(bar, 2.0, Self::load_color(frac));
-                        }
-                    }
+                    ui.set_width(148.0);
+                    ui.spacing_mut().item_spacing.y = 3.0;
+                    Self::meter_head(ui, "GPU", g.util_pct, MeterExtra::Temp(g.temp_c));
                     let mut tip = g.name.clone();
                     if g.mem_total > 0 {
                         tip.push_str(&format!("\nVRAM: {} / {}", fmt_gb(g.mem_used), fmt_gb(g.mem_total)));
@@ -822,51 +853,42 @@ impl App {
                     if let Some(f) = g.fan_pct {
                         tip.push_str(&format!("\nCooler: {f}%"));
                     }
-                    resp.on_hover_text(tip);
+                    Self::meter_bar(ui, 90.0, g.util_pct, tip);
                 });
             } else {
-                Self::mini_meter(ui, "GPU", None, None, 90.0, "Sem GPU NVIDIA detectada (nvml.dll não carregou) — sem essa leitura em placas AMD/Intel aqui ainda.");
+                ui.vertical(|ui| {
+                    ui.set_width(148.0);
+                    ui.spacing_mut().item_spacing.y = 3.0;
+                    Self::meter_head(ui, "GPU", None, MeterExtra::Temp(None));
+                    Self::meter_bar(ui, 90.0, None, "Sem GPU NVIDIA detectada (nvml.dll não carregou) — sem essa leitura em placas AMD/Intel aqui ainda.");
+                });
             }
-            ui.add_space(14.0);
+            ui.add_space(16.0);
 
-            // Disco: % sozinho fica ilegível num SSD NVMe rápido (fica quase sempre <1%, e
-            // arredondado sem casa decimal parece travado em "0%") — junto do throughput real
-            // (bytes/s) fica claro que o contador está vivo, só que o disco está mesmo ocioso.
+            // Disco: % sozinho fica ilegível num SSD NVMe rápido (fica quase sempre <1%).
             ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("DISCO").color(MUTED).size(10.5));
-                    match self.sys.disk_pct {
-                        Some(p) => {
-                            ui.label(num(Self::fmt_pct(p)).size(12.5).strong().color(Self::load_color(p / 100.0)));
-                        }
-                        None => {
-                            ui.label(RichText::new("–").color(Color32::from_gray(90)).size(12.5));
-                        }
-                    }
-                    if let Some(bps) = self.sys.disk_bps {
-                        if bps >= 1024.0 {
-                            ui.label(RichText::new(fmt_bps(bps)).color(MUTED).size(10.5));
-                        }
-                    }
-                });
-                let (rect, resp) = ui.allocate_exact_size(Vec2::new(90.0, TOP_BAR_H), egui::Sense::hover());
-                let p = ui.painter();
-                p.rect_filled(rect, 2.0, Color32::from_rgb(30, 34, 41));
-                if let Some(pct) = self.sys.disk_pct {
-                    let frac = (pct / 100.0).clamp(0.0, 1.0);
-                    if frac > 0.01 {
-                        let bar = Rect::from_min_size(rect.min, Vec2::new(rect.width() * frac, rect.height()));
-                        p.rect_filled(bar, 2.0, Self::load_color(frac));
-                    }
-                }
-                resp.on_hover_text(if self.sys.disk_pct.is_some() {
-                    "% de tempo ocupado do disco (todos os volumes) — igual ao Gerenciador de Tarefas".to_string()
-                } else {
-                    "Contador de disco indisponível neste host.".to_string()
-                });
+                ui.set_width(150.0);
+                ui.spacing_mut().item_spacing.y = 3.0;
+                let extra = self
+                    .sys
+                    .disk_bps
+                    .filter(|bps| *bps >= 1024.0)
+                    .map(|bps| MeterExtra::Text(fmt_bps(bps)))
+                    .unwrap_or(MeterExtra::None);
+                Self::meter_head(ui, "DISCO", self.sys.disk_pct, extra);
+                Self::meter_bar(
+                    ui,
+                    90.0,
+                    self.sys.disk_pct,
+                    if self.sys.disk_pct.is_some() {
+                        "% de tempo ocupado do disco (todos os volumes) — igual ao Gerenciador de Tarefas"
+                    } else {
+                        "Contador de disco indisponível neste host."
+                    },
+                );
             });
 
-            ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), TOP_ROW_H), Layout::right_to_left(Align::Center), |ui| {
+            ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), METER_HEAD_H + TOP_BAR_H), Layout::right_to_left(Align::Center), |ui| {
                 if self.is_admin {
                     ui.label(RichText::new("ADMIN").color(Color32::from_rgb(90, 220, 130)).strong())
                         .on_hover_text("Rodando elevado: pode encerrar processos de outros usuários/serviços");
@@ -905,17 +927,7 @@ impl App {
                 }
             });
         });
-        ui.add_space(3.0);
-        ui.horizontal(|ui| {
-            ui.add_space(46.0);
-            ui.label(
-                RichText::new(format!("compromisso {} / {}", fmt_gb(self.mem.used_commit()), fmt_gb(self.mem.total_commit)))
-                    .color(MUTED)
-                    .size(10.5),
-            )
-            .on_hover_text("Memória confirmada (RAM + arquivo de paginação)");
-        });
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
             let te = egui::TextEdit::singleline(&mut self.search)
                 .hint_text("Buscar nome, PID, caminho ou comando…")

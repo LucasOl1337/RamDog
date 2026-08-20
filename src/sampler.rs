@@ -35,7 +35,7 @@ pub struct SamplerHandle {
     pub force: Arc<AtomicBool>,
 }
 
-pub fn spawn(ctx: egui::Context, interval_ms: u64, is_admin: bool) -> SamplerHandle {
+pub fn spawn(ctx: egui::Context, interval_ms: u64) -> SamplerHandle {
     let (tx, rx): (Sender<Snapshot>, Receiver<Snapshot>) = channel();
     let interval = Arc::new(AtomicU64::new(interval_ms));
     let paused = Arc::new(AtomicBool::new(false));
@@ -52,7 +52,7 @@ pub fn spawn(ctx: egui::Context, interval_ms: u64, is_admin: bool) -> SamplerHan
             let mut sampler = Sampler::new();
             let mut metrics = Metrics::new();
             let gpu_per_proc = metrics.gpu_per_process_available();
-            let hwtemp_reader = HwTempReader::spawn(is_admin);
+            let hwtemp_reader = HwTempReader::spawn();
             let mut icons_sent: HashSet<String> = HashSet::new();
             let mut last = Instant::now() - Duration::from_secs(3600);
             loop {

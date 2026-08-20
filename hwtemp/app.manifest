@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <!-- Só chamado pelo RamDog quando ele já está elevado (sem UAC extra, herda o token).
-       requireAdministrator aqui é só pra deixar isso explícito e evitar um double-click
-       acidental sem admin, que não leria nenhum sensor mesmo (Tctl/DIMM exigem ring-0). -->
+  <!-- asInvoker: herda o token do RamDog. Sem isso o CreateProcess falha com
+       ERROR_ELEVATION_REQUIRED quando o app não está elevado, e a temp da CPU
+       some da UI. Tctl/DIMM ainda só respondem com token de admin. -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>
-        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
       </requestedPrivileges>
     </security>
   </trustInfo>
