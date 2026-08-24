@@ -1,4 +1,4 @@
-//! Visão "Ralos": Defender, serviços dispensáveis, apps de sistema e inicialização.
+//! Visão "Ralos": Defender, serviços dispensáveis e apps de sistema.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -8,7 +8,7 @@ use egui::{Color32, RichText};
 
 use crate::app::{fmt_bytes, fmt_bytes_short, LINE, MUTED, SURFACE, SURFACE_HI};
 use crate::procs::ProcInfo;
-use crate::sys::{self, DefenderStatus, StartupApp, SvcStart, SvcState, SvcStatus, SysResult};
+use crate::sys::{self, DefenderStatus, SvcStart, SvcState, SvcStatus, SysResult};
 
 /// Eventos que a visão devolve para o App tratar.
 pub enum DrainOut {
@@ -23,8 +23,6 @@ enum Action {
     DefenderExclude(Vec<String>),
     DefenderCpu(u32),
     DefenderRealtime(bool),
-    StartupToggle(StartupApp, bool),
-    StartupRemove(StartupApp),
     AppxRemove(&'static str),
 }
 
@@ -38,7 +36,6 @@ pub struct Drains {
     svc: Vec<SvcStatus>,
     protected: Vec<SvcStatus>,
     defender: DefenderStatus,
-    startup: Vec<StartupApp>,
     appx: HashSet<String>,
     last_refresh: Option<Instant>,
     tx: Sender<SysResult>,
@@ -56,7 +53,6 @@ impl Drains {
             svc: Vec::new(),
             protected: Vec::new(),
             defender: DefenderStatus::default(),
-            startup: Vec::new(),
             appx: HashSet::new(),
             last_refresh: None,
             tx,
@@ -72,7 +68,6 @@ impl Drains {
         self.svc = sys::SERVICES.iter().map(|e| sys::query_service(e.name)).collect();
         self.protected = sys::PROTECTED_SERVICES.iter().map(|(n, _)| sys::query_service(n)).collect();
         self.defender = sys::defender_status();
-        self.startup = sys::startup_apps();
         self.appx = sys::installed_appx_families().into_iter().collect();
         self.last_refresh = Some(Instant::now());
     }
@@ -174,43 +169,6 @@ impl Drains {
                     format!("Set-MpPreference -DisableRealtimeMonitoring ${}", if disable { "true" } else { "false" }),
                     self,
                 );
-            }
-            Action::StartupToggle(app, enabled) => {
-                if !app.machine || is_admin {
-                    match sys::set_startup_enabled(&app, enabled) {
-                        Ok(()) => out.push(DrainOut::Toast(format!("{}: {}", app.name, if enabled { "ativado na inicialização" } else { "desativado na inicialização" }), false)),
-                        Err(e) => out.push(DrainOut::Toast(format!("{}: {e}", app.name), true)),
-                    }
-                    self.last_refresh = None;
-                } else {
-                    let bytes = if enabled { "2,0,0,0,0,0,0,0,0,0,0,0" } else { "3,0,0,0,0,0,0,0,0,0,0,0" };
-                    elevated(
-                        &format!("{}: inicialização", app.name),
-                        format!(
-                            "Set-ItemProperty -Path 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run' -Name {} -Value ([byte[]]({bytes}))",
-                            sys::ps_quote(&app.name)
-                        ),
-                        self,
-                    );
-                }
-            }
-            Action::StartupRemove(app) => {
-                if !app.machine || is_admin {
-                    match sys::remove_startup(&app) {
-                        Ok(()) => out.push(DrainOut::Toast(format!("{}: removido da inicialização", app.name), false)),
-                        Err(e) => out.push(DrainOut::Toast(format!("{}: {e}", app.name), true)),
-                    }
-                    self.last_refresh = None;
-                } else {
-                    elevated(
-                        &format!("{}: remover da inicialização", app.name),
-                        format!(
-                            "Remove-ItemProperty -Path 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name {0}; Remove-ItemProperty -Path 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run' -Name {0} -ErrorAction SilentlyContinue",
-                            sys::ps_quote(&app.name)
-                        ),
-                        self,
-                    );
-                }
             }
             Action::AppxRemove(pkg) => {
                 // Remove-AppxPackage do usuário atual não exige admin, mas rodamos elevado para
@@ -491,46 +449,8 @@ impl Drains {
                 }
             });
 
-            // ---------- Inicialização ----------
-            section(ui, "Inicialização", "o mesmo interruptor do Gerenciador de Tarefas › Aplicativos de inicialização", |ui| {
-                let apps = self.startup.clone();
-                if apps.is_empty() {
-                    ui.label(RichText::new("Nada nas chaves Run.").color(muted));
-                }
-                egui::Grid::new("startup_grid").num_columns(4).spacing([14.0, 4.0]).striped(true).show(ui, |ui| {
-                    for app in apps {
-                        let mut on = app.enabled;
-                        if ui.checkbox(&mut on, "").on_hover_text(if on { "Desativar na inicialização" } else { "Ativar na inicialização" }).changed() {
-                            queued.push(Action::StartupToggle(app.clone(), on));
-                        }
-                        ui.vertical(|ui| {
-                            ui.set_width(230.0);
-                            ui.label(RichText::new(&app.name).strong().color(if app.enabled { Color32::from_gray(225) } else { muted }));
-                            ui.label(RichText::new(if app.machine { "todos os usuários (HKLM)" } else { "este usuário (HKCU)" }).small().color(muted));
-                        });
-                        ui.vertical(|ui| {
-                            ui.set_max_width(440.0);
-                            ui.add(egui::Label::new(RichText::new(&app.command).monospace().small().color(muted)).truncate());
-                        });
-                        ui.horizontal(|ui| {
-                            // processo correspondente rodando?
-                            let exe = exe_name_from_cmd(&app.command);
-                            let pids: Vec<u32> = exe.as_ref().and_then(|e| by_name.get(e)).map(|x| x.2.clone()).unwrap_or_default();
-                            if !pids.is_empty() && ui.small_button("Finalizar").on_hover_text(format!("{} processo(s) de {}", pids.len(), exe.clone().unwrap_or_default())).clicked() {
-                                out.push(DrainOut::Kill(pids));
-                            }
-                            if ui.add(egui::Button::new(RichText::new("Remover").color(warn_c)).small()).on_hover_text("Apaga a entrada de inicialização (o app continua instalado)").clicked() {
-                                confirm = Some(Pending {
-                                    title: format!("Remover {} da inicialização", app.name),
-                                    lines: vec![app.command.clone()],
-                                    action: Action::StartupRemove(app.clone()),
-                                });
-                            }
-                        });
-                        ui.end_row();
-                    }
-                });
-            });
+            ui.add_space(8.0);
+            ui.label(RichText::new("O que sobe com o PC (registro, pasta Iniciar, tarefas, serviços) está na visão Partida — não o recorte do Gerenciador de Tarefas.").color(muted).small());
             ui.add_space(12.0);
         });
 
@@ -614,14 +534,4 @@ fn pill(ui: &mut egui::Ui, label: &str, (value, color): (&str, Color32)) {
         });
 }
 
-/// "C:\\x\\Foo.exe" --arg → "foo.exe"
-fn exe_name_from_cmd(cmd: &str) -> Option<String> {
-    let c = cmd.trim();
-    let path = if let Some(rest) = c.strip_prefix('"') {
-        rest.split('"').next().unwrap_or("")
-    } else {
-        c.split_whitespace().next().unwrap_or("")
-    };
-    let name = path.rsplit(['\\', '/']).next()?.to_lowercase();
-    if name.is_empty() { None } else { Some(name) }
-}
+

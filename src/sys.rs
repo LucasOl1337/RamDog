@@ -2,17 +2,21 @@
 //! Leituras são diretas (SCM / registro); ações que exigem admin rodam via PowerShell elevado
 //! (UAC) numa thread, devolvendo o resultado por canal.
 
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::mpsc::Sender;
 
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegDeleteValueW, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
-    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_SET_VALUE, REG_BINARY, REG_DWORD, REG_VALUE_TYPE,
+    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW,
+    RegSetValueExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_SET_VALUE, REG_BINARY, REG_DWORD,
+    REG_OPTION_NON_VOLATILE, REG_VALUE_TYPE,
 };
 use windows::Win32::System::Services::{
-    ChangeServiceConfigW, CloseServiceHandle, ControlService, OpenSCManagerW, OpenServiceW, QueryServiceConfigW,
+    ChangeServiceConfigW, CloseServiceHandle, ControlService, EnumServicesStatusExW, OpenSCManagerW, OpenServiceW,
+    QueryServiceConfigW, ENUM_SERVICE_STATUS_PROCESSW, SC_ENUM_PROCESS_INFO, SC_MANAGER_ENUMERATE_SERVICE,
+    SERVICE_STATE_ALL, SERVICE_WIN32,
     QueryServiceStatus, StartServiceW, QUERY_SERVICE_CONFIGW, SC_MANAGER_CONNECT, SERVICE_AUTO_START,
     SERVICE_CHANGE_CONFIG, SERVICE_CONTROL_STOP, SERVICE_DEMAND_START, SERVICE_DISABLED, SERVICE_ERROR,
     SERVICE_NO_CHANGE, SERVICE_QUERY_CONFIG, SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_START, SERVICE_STATUS,
@@ -81,11 +85,90 @@ pub const PROTECTED_SERVICES: &[(&str, &str)] = &[
     ("MDCoreSvc", "Defender Core Service (MpDefenderCoreService.exe)"),
 ];
 
-fn wide(s: &str) -> Vec<u16> {
+pub(crate) fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-struct ScHandle(windows::Win32::System::Services::SC_HANDLE);
+/// Lê uma string terminada em NUL a partir de um ponteiro UTF-16 do Win32.
+pub(crate) unsafe fn from_wide(p: *const u16) -> String {
+    if p.is_null() {
+        return String::new();
+    }
+    let mut n = 0usize;
+    while *p.add(n) != 0 {
+        n += 1;
+    }
+    String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
+}
+
+/// Qual serviço roda dentro de cada PID.
+///
+/// Existe por causa do `svchost.exe`: vinte processos de nome idêntico não dizem nada, e
+/// a linha de comando (`-k netsvcs`) diz menos ainda. Com isto cada um vira "Windows
+/// Update", "Áudio", "Spooler". Não exige admin — `SC_MANAGER_ENUMERATE_SERVICE` é
+/// concedido a usuários comuns.
+///
+/// Um processo pode hospedar vários serviços, daí o `Vec`. O par é
+/// `(nome interno, nome de exibição)`.
+pub fn services_by_pid() -> HashMap<u32, Vec<(String, String)>> {
+    let mut out: HashMap<u32, Vec<(String, String)>> = HashMap::new();
+    unsafe {
+        let scm = match OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_ENUMERATE_SERVICE) {
+            Ok(h) => ScHandle(h),
+            Err(_) => return out,
+        };
+        let mut needed = 0u32;
+        let mut returned = 0u32;
+        // Primeira chamada só para dimensionar: ela falha com ERROR_MORE_DATA de propósito.
+        let _ = EnumServicesStatusExW(
+            scm.0,
+            SC_ENUM_PROCESS_INFO,
+            SERVICE_WIN32,
+            SERVICE_STATE_ALL,
+            None,
+            &mut needed,
+            &mut returned,
+            None,
+            PCWSTR::null(),
+        );
+        if needed == 0 {
+            return out;
+        }
+        let mut buf = vec![0u8; needed as usize];
+        if EnumServicesStatusExW(
+            scm.0,
+            SC_ENUM_PROCESS_INFO,
+            SERVICE_WIN32,
+            SERVICE_STATE_ALL,
+            Some(&mut buf),
+            &mut needed,
+            &mut returned,
+            None,
+            PCWSTR::null(),
+        )
+        .is_err()
+        {
+            return out;
+        }
+        let items = buf.as_ptr() as *const ENUM_SERVICE_STATUS_PROCESSW;
+        for i in 0..returned as usize {
+            let e = &*items.add(i);
+            let pid = e.ServiceStatusProcess.dwProcessId;
+            if pid == 0 {
+                continue; // serviço parado: não pertence a processo nenhum
+            }
+            let name = from_wide(e.lpServiceName.0);
+            let display = from_wide(e.lpDisplayName.0);
+            out.entry(pid).or_default().push((name, display));
+        }
+    }
+    for v in out.values_mut() {
+        v.sort_by_key(|(_, display)| display.to_lowercase());
+    }
+    out
+}
+
+pub(crate) struct ScHandle(pub windows::Win32::System::Services::SC_HANDLE);
 impl Drop for ScHandle {
     fn drop(&mut self) {
         unsafe {
@@ -197,7 +280,7 @@ pub fn set_start_type(name: &str, start: SvcStart) -> Result<(), String> {
 
 // ---------- Registro (helpers) ----------
 
-struct RegKey(HKEY);
+pub(crate) struct RegKey(pub HKEY);
 impl Drop for RegKey {
     fn drop(&mut self) {
         unsafe {
@@ -206,7 +289,7 @@ impl Drop for RegKey {
     }
 }
 
-fn reg_open(root: HKEY, path: &str, write: bool) -> Option<RegKey> {
+pub(crate) fn reg_open(root: HKEY, path: &str, write: bool) -> Option<RegKey> {
     unsafe {
         let mut h = HKEY::default();
         let w = wide(path);
@@ -216,7 +299,7 @@ fn reg_open(root: HKEY, path: &str, write: bool) -> Option<RegKey> {
     }
 }
 
-fn reg_dword(root: HKEY, path: &str, value: &str) -> Option<u32> {
+pub(crate) fn reg_dword(root: HKEY, path: &str, value: &str) -> Option<u32> {
     let k = reg_open(root, path, false)?;
     unsafe {
         let w = wide(value);
@@ -229,7 +312,7 @@ fn reg_dword(root: HKEY, path: &str, value: &str) -> Option<u32> {
 }
 
 /// Enumera valores (nome, dado-como-string-ou-bytes) de uma chave.
-fn reg_values(k: &RegKey) -> Vec<(String, REG_VALUE_TYPE, Vec<u8>)> {
+pub(crate) fn reg_values(k: &RegKey) -> Vec<(String, REG_VALUE_TYPE, Vec<u8>)> {
     let mut out = Vec::new();
     unsafe {
         let mut i = 0u32;
@@ -260,7 +343,7 @@ fn reg_values(k: &RegKey) -> Vec<(String, REG_VALUE_TYPE, Vec<u8>)> {
     out
 }
 
-fn reg_subkeys(k: &RegKey) -> Vec<String> {
+pub(crate) fn reg_subkeys(k: &RegKey) -> Vec<String> {
     let mut out = Vec::new();
     unsafe {
         let mut i = 0u32;
@@ -277,10 +360,66 @@ fn reg_subkeys(k: &RegKey) -> Vec<String> {
     out
 }
 
-fn utf16_bytes_to_string(b: &[u8]) -> String {
+pub(crate) fn utf16_bytes_to_string(b: &[u8]) -> String {
     let w: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
     let s = String::from_utf16_lossy(&w);
     s.trim_end_matches('\0').to_string()
+}
+
+pub(crate) fn reg_create(root: HKEY, path: &str) -> Result<RegKey, String> {
+    unsafe {
+        let mut h = HKEY::default();
+        let w = wide(path);
+        let mut disp = windows::Win32::System::Registry::REG_CREATE_KEY_DISPOSITION::default();
+        RegCreateKeyExW(
+            root,
+            PCWSTR(w.as_ptr()),
+            None,
+            PCWSTR::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_READ | KEY_SET_VALUE,
+            None,
+            &mut h,
+            Some(&mut disp),
+        )
+        .ok()
+        .map_err(|e| {
+            let c = e.code().0 as u32 & 0xFFFF;
+            if c == 5 { "acesso negado — precisa de admin".into() } else { e.message() }
+        })?;
+        Ok(RegKey(h))
+    }
+}
+
+pub(crate) fn reg_set_binary(root: HKEY, path: &str, name: &str, data: &[u8]) -> Result<(), String> {
+    let k = match reg_open(root, path, true) {
+        Some(k) => k,
+        None => reg_create(root, path)?,
+    };
+    unsafe {
+        let w = wide(name);
+        RegSetValueExW(k.0, PCWSTR(w.as_ptr()), None, REG_BINARY, Some(data)).ok().map_err(|e| e.message())
+    }
+}
+
+pub(crate) fn reg_set_dword(root: HKEY, path: &str, name: &str, value: u32) -> Result<(), String> {
+    let k = match reg_open(root, path, true) {
+        Some(k) => k,
+        None => reg_create(root, path)?,
+    };
+    unsafe {
+        let w = wide(name);
+        let bytes = value.to_le_bytes();
+        RegSetValueExW(k.0, PCWSTR(w.as_ptr()), None, REG_DWORD, Some(&bytes)).ok().map_err(|e| e.message())
+    }
+}
+
+pub(crate) fn reg_delete_value(root: HKEY, path: &str, name: &str) -> Result<(), String> {
+    let k = reg_open(root, path, true).ok_or_else(|| "acesso negado — precisa de admin".to_string())?;
+    unsafe {
+        let w = wide(name);
+        RegDeleteValueW(k.0, PCWSTR(w.as_ptr())).ok().map_err(|e| e.message())
+    }
 }
 
 // ---------- Defender ----------
@@ -304,71 +443,6 @@ pub fn defender_status() -> DefenderStatus {
     d.scan_cpu_factor = reg_dword(HKEY_LOCAL_MACHINE, &format!("{base}\\Scan"), "AvgCPULoadFactor")
         .or_else(|| reg_dword(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", "AvgCPULoadFactor"));
     d
-}
-
-// ---------- Inicialização (Run + StartupApproved) ----------
-
-#[derive(Clone, Debug)]
-pub struct StartupApp {
-    pub name: String,
-    pub command: String,
-    pub enabled: bool,
-    /// true = HKLM (precisa de admin para alternar)
-    pub machine: bool,
-}
-
-const RUN: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-const APPROVED: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run";
-
-pub fn startup_apps() -> Vec<StartupApp> {
-    let mut out = Vec::new();
-    for (root, machine) in [(HKEY_CURRENT_USER, false), (HKEY_LOCAL_MACHINE, true)] {
-        let Some(run) = reg_open(root, RUN, false) else { continue };
-        let approved: std::collections::HashMap<String, bool> = reg_open(root, APPROVED, false)
-            .map(|k| reg_values(&k).into_iter().map(|(n, _, d)| (n.to_lowercase(), d.first().map(|b| *b != 3).unwrap_or(true))).collect())
-            .unwrap_or_default();
-        for (name, ty, data) in reg_values(&run) {
-            if ty != windows::Win32::System::Registry::REG_SZ && ty != windows::Win32::System::Registry::REG_EXPAND_SZ {
-                continue;
-            }
-            let enabled = approved.get(&name.to_lowercase()).copied().unwrap_or(true);
-            out.push(StartupApp { command: utf16_bytes_to_string(&data), enabled, machine, name });
-        }
-    }
-    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    out
-}
-
-/// Alterna o mesmo bit que o Gerenciador de Tarefas > Inicialização (StartupApproved).
-pub fn set_startup_enabled(app: &StartupApp, enabled: bool) -> Result<(), String> {
-    let root = if app.machine { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
-    let k = reg_open(root, APPROVED, true).ok_or_else(|| {
-        if app.machine { "acesso negado — precisa de admin".to_string() } else { "não foi possível abrir StartupApproved".to_string() }
-    })?;
-    let mut data = [0u8; 12];
-    data[0] = if enabled { 2 } else { 3 };
-    if !enabled {
-        let ft = crate::procs::now_filetime();
-        data[4..12].copy_from_slice(&ft.to_le_bytes());
-    }
-    unsafe {
-        let w = wide(&app.name);
-        RegSetValueExW(k.0, PCWSTR(w.as_ptr()), None, REG_BINARY, Some(&data)).ok().map_err(|e| e.message())
-    }
-}
-
-/// Remove a entrada de inicialização de vez (Run + StartupApproved).
-pub fn remove_startup(app: &StartupApp) -> Result<(), String> {
-    let root = if app.machine { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
-    let k = reg_open(root, RUN, true).ok_or_else(|| "acesso negado — precisa de admin".to_string())?;
-    unsafe {
-        let w = wide(&app.name);
-        RegDeleteValueW(k.0, PCWSTR(w.as_ptr())).ok().map_err(|e| e.message())?;
-        if let Some(a) = reg_open(root, APPROVED, true) {
-            let _ = RegDeleteValueW(a.0, PCWSTR(w.as_ptr()));
-        }
-    }
-    Ok(())
 }
 
 // ---------- Apps de sistema (Appx) ----------

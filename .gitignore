@@ -1,6 +1,9 @@
 /target/
+/target-ui/
+design/
 hwtemp/bin/
 hwtemp/obj/
+hwtemp/pub/
 .vs/
 *.user
 *.suo

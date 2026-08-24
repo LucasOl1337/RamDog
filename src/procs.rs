@@ -23,6 +23,8 @@ use windows::Win32::Security::{
     TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES,
 };
 #[cfg(windows)]
+use windows::Win32::System::ProcessStatus::{GetPerformanceInfo, PERFORMANCE_INFORMATION};
+#[cfg(windows)]
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
@@ -159,6 +161,46 @@ impl MemStatus {
     pub fn used_commit(&self) -> u64 {
         self.total_commit.saturating_sub(self.avail_commit)
     }
+}
+
+/// Memória do kernel que não pertence a processo nenhum e por isso nunca aparece numa
+/// lista de processos — a maior parte do buraco entre "em uso" e a soma da lista.
+///
+/// Fonte: `GetPerformanceInfo` (psapi), documentada e estável. Não usamos o campo
+/// `SystemCache` dela: no Windows 10+ ele reporta standby + cache (23,6 GB numa máquina
+/// com 1,8 GB de cache realmente residente), ou seja memória *disponível*, não em uso.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct KernelMem {
+    /// Pool paginado (`KernelPaged`). Drivers e o próprio kernel; pode ser paginado ao disco,
+    /// então superestima o residente em ~2% na prática.
+    pub paged_pool: u64,
+    /// Pool não-paginado (`KernelNonpaged`). Sempre residente na RAM física.
+    pub nonpaged_pool: u64,
+    /// `false` quando a chamada falhou — a UI omite as linhas em vez de mostrar zero.
+    pub ok: bool,
+}
+
+#[cfg(windows)]
+pub fn kernel_mem() -> KernelMem {
+    let mut pi = PERFORMANCE_INFORMATION::default();
+    let cb = std::mem::size_of::<PERFORMANCE_INFORMATION>() as u32;
+    unsafe {
+        if GetPerformanceInfo(&mut pi, cb).is_err() {
+            return KernelMem::default();
+        }
+    }
+    let ps = pi.PageSize as u64;
+    KernelMem {
+        paged_pool: pi.KernelPaged as u64 * ps,
+        nonpaged_pool: pi.KernelNonpaged as u64 * ps,
+        ok: true,
+    }
+}
+
+#[cfg(not(windows))]
+pub fn kernel_mem() -> KernelMem {
+    // macOS/Linux: a wired memory do kernel não tem equivalente barato via sysinfo.
+    KernelMem::default()
 }
 
 #[cfg(windows)]

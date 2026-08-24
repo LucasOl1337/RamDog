@@ -7,14 +7,16 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::hwtemp::{HwTemp, HwTempReader};
+use crate::hwtemp::{HwCmd, HwTemp, HwTempReader};
 use crate::icons::{icon_for_exe, RgbaIcon};
 use crate::metrics::{Metrics, SysSample};
-use crate::procs::{mem_status, MemStatus, ProcInfo, Sampler};
+use crate::procs::{kernel_mem, mem_status, KernelMem, MemStatus, ProcInfo, Sampler};
 
 pub struct Snapshot {
     pub procs: Vec<ProcInfo>,
     pub mem: MemStatus,
+    /// Pools do kernel — a parcela do "em uso" que nenhuma lista de processos mostra.
+    pub kernel: KernelMem,
     /// (caminho do exe em minúsculo, ícone) — só os ainda não enviados.
     pub new_icons: Vec<(String, Option<RgbaIcon>)>,
     pub taken: Instant,
@@ -33,6 +35,8 @@ pub struct SamplerHandle {
     pub interval_ms: Arc<AtomicU64>,
     pub paused: Arc<AtomicBool>,
     pub force: Arc<AtomicBool>,
+    /// Comandos de fan pro helper `hwtemp.exe` (visão Térmico). `None` = sem helper.
+    pub hw_cmd: Option<HwCmd>,
 }
 
 pub fn spawn(ctx: egui::Context, interval_ms: u64) -> SamplerHandle {
@@ -40,11 +44,14 @@ pub fn spawn(ctx: egui::Context, interval_ms: u64) -> SamplerHandle {
     let interval = Arc::new(AtomicU64::new(interval_ms));
     let paused = Arc::new(AtomicBool::new(false));
     let force = Arc::new(AtomicBool::new(true));
+    // Reader criado aqui fora pra UI ganhar o canal de comando; a thread fica dona dele.
+    let hwtemp_reader = HwTempReader::spawn();
     let h = SamplerHandle {
         rx,
         interval_ms: interval.clone(),
         paused: paused.clone(),
         force: force.clone(),
+        hw_cmd: hwtemp_reader.as_ref().map(|r| r.sender()),
     };
     thread::Builder::new()
         .name("ramdog-sampler".into())
@@ -52,7 +59,6 @@ pub fn spawn(ctx: egui::Context, interval_ms: u64) -> SamplerHandle {
             let mut sampler = Sampler::new();
             let mut metrics = Metrics::new();
             let gpu_per_proc = metrics.gpu_per_process_available();
-            let hwtemp_reader = HwTempReader::spawn();
             let mut icons_sent: HashSet<String> = HashSet::new();
             let mut last = Instant::now() - Duration::from_secs(3600);
             loop {
@@ -63,6 +69,7 @@ pub fn spawn(ctx: egui::Context, interval_ms: u64) -> SamplerHandle {
                     let t0 = Instant::now();
                     let mut procs = sampler.sample();
                     let mem = mem_status();
+                    let kernel = kernel_mem();
                     let sys = metrics.sample();
                     for p in procs.iter_mut() {
                         p.gpu_pct = sys.gpu_by_pid.get(&p.pid).copied().unwrap_or(0.0);
@@ -84,6 +91,7 @@ pub fn spawn(ctx: egui::Context, interval_ms: u64) -> SamplerHandle {
                     let snap = Snapshot {
                         procs,
                         mem,
+                        kernel,
                         new_icons,
                         taken: t0,
                         sample_ms: t0.elapsed().as_secs_f32() * 1000.0,
