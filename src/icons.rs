@@ -122,3 +122,77 @@ unsafe fn hicon_to_rgba(hicon: HICON) -> Option<RgbaIcon> {
     }
     result
 }
+
+// ---------- banco de ícones sob demanda ----------
+
+use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::{channel, Receiver, Sender};
+
+/// Cache de ícones por caminho, carregados numa thread à parte.
+///
+/// O `Snapshot` do sampler já traz o ícone de todo processo vivo, mas a Partida precisa do
+/// ícone de coisa que *não* está rodando — e `SHGetFileInfoW` custa milissegundos por
+/// arquivo. Numa lista de 366 entradas isso travaria a UI por meio segundo a cada refresh.
+pub struct IconBank {
+    tex: HashMap<String, Option<egui::TextureHandle>>,
+    pending: HashSet<String>,
+    req: Sender<String>,
+    done: Receiver<(String, Option<RgbaIcon>)>,
+}
+
+impl IconBank {
+    pub fn new() -> Self {
+        let (req, req_rx) = channel::<String>();
+        let (done_tx, done) = channel::<(String, Option<RgbaIcon>)>();
+        std::thread::Builder::new()
+            .name("ramdog-icons".into())
+            .spawn(move || {
+                init_com_for_shell();
+                while let Ok(path) = req_rx.recv() {
+                    let icon = icon_for_exe(&path);
+                    if done_tx.send((path, icon)).is_err() {
+                        return;
+                    }
+                }
+            })
+            .expect("spawn icon thread");
+        Self { tex: HashMap::new(), pending: HashSet::new(), req, done }
+    }
+
+    /// Sobe para textura tudo que a thread devolveu desde o frame anterior.
+    pub fn poll(&mut self, ctx: &egui::Context) -> bool {
+        let mut got = false;
+        while let Ok((path, icon)) = self.done.try_recv() {
+            self.pending.remove(&path);
+            let handle = icon.map(|ic| {
+                let img = egui::ColorImage::from_rgba_unmultiplied([ic.width, ic.height], &ic.rgba);
+                ctx.load_texture(format!("bank:{path}"), img, egui::TextureOptions::LINEAR)
+            });
+            self.tex.insert(path, handle);
+            got = true;
+        }
+        got
+    }
+
+    /// Ícone do caminho, pedindo o carregamento na primeira vez que é perguntado.
+    pub fn get(&mut self, path: &str) -> Option<egui::TextureHandle> {
+        if let Some(t) = self.tex.get(path) {
+            return t.clone();
+        }
+        if self.pending.insert(path.to_string()) {
+            let _ = self.req.send(path.to_string());
+        }
+        None
+    }
+}
+
+#[cfg(windows)]
+fn init_com_for_shell() {
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+    }
+}
+
+#[cfg(not(windows))]
+fn init_com_for_shell() {}

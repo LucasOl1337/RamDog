@@ -29,6 +29,9 @@ pub struct Config {
     pub mini: bool,
     /// No modo mini, manter a janela por cima das outras.
     pub mini_on_top: bool,
+    /// Presets da Partida: nome do preset → (id da entrada → deve estar ativa).
+    /// Só entradas que dão para alternar entram; o resto não teria como ser restaurado.
+    pub boot_presets: BTreeMap<String, BTreeMap<String, bool>>,
 }
 
 /// Qual das três medidas de memória a coluna RAM exibe.
@@ -114,6 +117,7 @@ impl Default for Config {
             show_kernel_rows: true,
             mini: false,
             mini_on_top: true,
+            boot_presets: BTreeMap::new(),
         }
     }
 }

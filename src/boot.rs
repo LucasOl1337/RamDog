@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use egui::{Color32, RichText};
+use egui::{Color32, RichText, TextureHandle};
 use egui_extras::{Column, TableBuilder};
 use windows::core::{BSTR, Interface, IUnknown, PCWSTR};
 
@@ -34,13 +34,18 @@ use windows::Win32::System::TaskScheduler::{
 use windows::Win32::System::Variant::{VARIANT, VT_I4};
 use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
 
-use crate::app::{LINE, MUTED, SURFACE};
+use crate::app::{ACCENT, ACCENT_BG, LINE, MUTED, SURFACE};
+use crate::config::Config;
+use crate::icons::IconBank;
 use crate::procs::{self, ProcInfo};
 use crate::sys::{self, SvcStart, SysResult};
+use crate::usage;
 
 pub enum BootOut {
     Toast(String, bool),
     Kill(Vec<u32>),
+    /// A Partida mexeu na config (presets) — o `App` grava.
+    SaveCfg,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -138,6 +143,10 @@ struct Entry {
 enum Action {
     Toggle(Entry, bool),
     Remove(Entry),
+    /// Alinha várias entradas de uma vez ao estado guardado num preset.
+    Preset(String, Vec<(Entry, bool)>),
+    /// Cria um atalho na pasta Iniciar do usuário apontando para um executável.
+    AddStartup { exe: String, label: String },
 }
 
 struct Pending {
@@ -146,14 +155,63 @@ struct Pending {
     action: Action,
 }
 
+/// Por qual coluna a lista está ordenada.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SortKey {
+    /// Rodando → no boot → desligada → ausente. É o padrão: responde "o que está de pé".
+    State,
+    Name,
+    Kind,
+    Scope,
+    Usage,
+}
+
+/// O que a Partida sabe do executável de uma entrada. Calculado uma vez por refresh —
+/// `SHGetFileInfoW` e `Path::exists` por linha por frame seriam caros demais.
+#[derive(Clone, Default)]
+struct Resolved {
+    /// Arquivo de onde tirar o ícone (o exe, ou o próprio .lnk quando o alvo sumiu).
+    icon: Option<String>,
+    /// Caminho do exe em minúsculo, chave do mapa de uso.
+    exe: Option<String>,
+}
+
+/// Dado de uso já pronto para uma linha, para o corpo da tabela não tocar em `self`.
+#[derive(Clone, Copy, Default)]
+struct RowUsage {
+    focus: u64,
+    open: u64,
+    last: i64,
+}
+
+impl RowUsage {
+    fn total(self) -> u64 {
+        self.focus + self.open
+    }
+}
+
 pub struct Boot {
     entries: Vec<Entry>,
+    /// id da entrada → executável/ícone resolvidos.
+    resolved: HashMap<String, Resolved>,
     last_refresh: Option<Instant>,
     kinds: HashSet<Kind>,
     hide_microsoft: bool,
     only_enabled: bool,
     only_running: bool,
+    sort: SortKey,
+    sort_desc: bool,
     selected: Option<String>,
+    icons: IconBank,
+    /// Ranking completo de uso (Scan). Também alimenta a coluna "Uso" da lista.
+    rank: Vec<usage::Ranked>,
+    /// caminho em minúsculo → índice em `rank`.
+    rank_idx: HashMap<String, usize>,
+    usage_at: Option<Instant>,
+    scan_open: bool,
+    /// Nome digitado para salvar um preset novo.
+    preset_name: String,
+    preset_sel: String,
     tx: Sender<SysResult>,
     rx: Receiver<SysResult>,
     busy: usize,
@@ -165,12 +223,22 @@ impl Boot {
         let (tx, rx) = channel();
         Self {
             entries: Vec::new(),
+            resolved: HashMap::new(),
             last_refresh: None,
             kinds: Kind::ALL.iter().copied().filter(|k| *k != Kind::Driver).collect(),
             hide_microsoft: false,
             only_enabled: false,
             only_running: false,
+            sort: SortKey::State,
+            sort_desc: false,
             selected: None,
+            icons: IconBank::new(),
+            rank: Vec::new(),
+            rank_idx: HashMap::new(),
+            usage_at: None,
+            scan_open: false,
+            preset_name: String::new(),
+            preset_sel: String::new(),
             tx,
             rx,
             busy: 0,
@@ -180,6 +248,11 @@ impl Boot {
 
     fn refresh(&mut self) {
         self.entries = collect();
+        self.resolved = self
+            .entries
+            .iter()
+            .map(|e| (e.id.clone(), resolve_entry(e)))
+            .collect();
         self.last_refresh = Some(Instant::now());
     }
 
@@ -190,12 +263,56 @@ impl Boot {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, procs: &[ProcInfo], search: &str, is_admin: bool) -> Vec<BootOut> {
+    /// Relê UserAssist e funde com a contagem local. Custa uma varredura de registro —
+    /// por isso vale por um minuto, não por frame.
+    fn refresh_usage(&mut self, tracker: &usage::Tracker) {
+        let ua = usage::user_assist();
+        self.rank = usage::rank(tracker.apps(), &ua, 0);
+        self.rank_idx = self
+            .rank
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.path.to_lowercase(), i))
+            .collect();
+        self.usage_at = Some(Instant::now());
+    }
+
+    fn maybe_refresh_usage(&mut self, tracker: &usage::Tracker) {
+        let due = self.usage_at.map(|t| t.elapsed() > Duration::from_secs(60)).unwrap_or(true);
+        if due {
+            self.refresh_usage(tracker);
+        }
+    }
+
+    fn usage_of(&self, exe_lower: Option<&String>) -> RowUsage {
+        let Some(key) = exe_lower else { return RowUsage::default() };
+        match self.rank_idx.get(key) {
+            Some(i) => {
+                let r = &self.rank[*i];
+                RowUsage { focus: r.focus_secs, open: r.open_secs, last: r.last_used }
+            }
+            None => RowUsage::default(),
+        }
+    }
+
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        procs: &[ProcInfo],
+        search: &str,
+        is_admin: bool,
+        cfg: &mut Config,
+        tracker: &usage::Tracker,
+    ) -> Vec<BootOut> {
         while let Ok(_r) = self.rx.try_recv() {
             self.busy = self.busy.saturating_sub(1);
             self.last_refresh = None;
         }
         self.maybe_refresh();
+        self.maybe_refresh_usage(tracker);
+        if self.icons.poll(ui.ctx()) {
+            ui.ctx().request_repaint();
+        }
 
         let mut out = Vec::new();
         let mut queued: Vec<Action> = Vec::new();
@@ -204,7 +321,7 @@ impl Boot {
         let running = running_exes(procs);
         let q = search.trim().to_lowercase();
 
-        let filtered: Vec<Entry> = self
+        let mut filtered: Vec<Entry> = self
             .entries
             .iter()
             .filter(|e| self.kinds.contains(&e.kind))
@@ -228,6 +345,55 @@ impl Boot {
             .cloned()
             .collect();
 
+        // Ordenação escolhida pelo usuário. O desempate é sempre o nome, para a lista não
+        // trocar de ordem sozinha entre dois refreshes.
+        {
+            let key = self.sort;
+            let desc = self.sort_desc;
+            let mut with_meta: Vec<(Entry, u8, u64, String)> = filtered
+                .drain(..)
+                .map(|e| {
+                    let is_run = e.running_hint || exe_running(&e.command, &running);
+                    let st = state_rank(&e, is_run);
+                    let exe = self.resolved.get(&e.id).and_then(|r| r.exe.clone());
+                    let usage = self.usage_of(exe.as_ref()).total();
+                    let name = e.name.to_lowercase();
+                    (e, st, usage, name)
+                })
+                .collect();
+            with_meta.sort_by(|a, b| {
+                let ord = match key {
+                    SortKey::State => a.1.cmp(&b.1),
+                    SortKey::Usage => a.2.cmp(&b.2),
+                    SortKey::Name => a.3.cmp(&b.3),
+                    SortKey::Kind => kind_ord(a.0.kind).cmp(&kind_ord(b.0.kind)),
+                    SortKey::Scope => a.0.machine.cmp(&b.0.machine),
+                };
+                let ord = if desc { ord.reverse() } else { ord };
+                // Dentro do mesmo grupo, o que você mais usa vem primeiro — é o que faz a
+                // lista responder "o que importa aqui" em vez de despejar a ordem alfabética.
+                ord.then_with(|| b.2.cmp(&a.2)).then_with(|| a.3.cmp(&b.3))
+            });
+            filtered = with_meta.into_iter().map(|t| t.0).collect();
+        }
+
+        // Tudo que a tabela precisa saber por linha, resolvido antes do corpo — dentro do
+        // closure `self` já está emprestado.
+        let row_icons: Vec<Option<TextureHandle>> = filtered
+            .iter()
+            .map(|e| {
+                let path = self.resolved.get(&e.id).and_then(|r| r.icon.clone());
+                path.and_then(|p| self.icons.get(&p))
+            })
+            .collect();
+        let row_usage: Vec<RowUsage> = filtered
+            .iter()
+            .map(|e| {
+                let exe = self.resolved.get(&e.id).and_then(|r| r.exe.clone());
+                self.usage_of(exe.as_ref())
+            })
+            .collect();
+
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("Partida").strong().size(16.0));
@@ -236,8 +402,19 @@ impl Boot {
                     .color(MUTED),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Atualizar").clicked() {
+                if ui.small_button("Atualizar").on_hover_text("Relê registro, pasta Iniciar, tarefas e serviços").clicked() {
                     self.last_refresh = None;
+                }
+                let scan = egui::Button::new(RichText::new("⌕ Scan de uso").color(Color32::WHITE).strong())
+                    .fill(ACCENT_BG)
+                    .stroke(egui::Stroke::new(1.0_f32, ACCENT));
+                if ui
+                    .add(scan)
+                    .on_hover_text("Mede quais programas você mais usa (tempo em foco + tempo aberto) e sugere o que vale colocar na partida")
+                    .clicked()
+                {
+                    self.refresh_usage(tracker);
+                    self.scan_open = true;
                 }
                 if self.busy > 0 {
                     ui.spinner();
@@ -282,6 +459,8 @@ impl Boot {
             ui.checkbox(&mut self.hide_microsoft, "esconder Microsoft");
             ui.checkbox(&mut self.only_enabled, "só ativas");
             ui.checkbox(&mut self.only_running, "só as que estão rodando");
+            ui.separator();
+            self.presets_bar(ui, &mut confirm, cfg, &mut out);
         });
         ui.add_space(4.0);
 
@@ -289,6 +468,28 @@ impl Boot {
         let mut remove: Option<Entry> = None;
         let mut kill: Option<Vec<u32>> = None;
         let mut select: Option<String> = None;
+        let mut add: Option<(String, String)> = None;
+        let mut sort_click: Option<SortKey> = None;
+
+        if self.scan_open {
+            self.scan_panel(ui, &mut add);
+            ui.add_space(4.0);
+        }
+
+        let sort = self.sort;
+        let sort_desc = self.sort_desc;
+        let head = |ui: &mut egui::Ui, text: &str, key: SortKey, click: &mut Option<SortKey>| {
+            let arrow = if sort == key {
+                if sort_desc { " ▼" } else { " ▲" }
+            } else {
+                ""
+            };
+            let color = if sort == key { ACCENT } else { MUTED };
+            let b = egui::Button::new(RichText::new(format!("{text}{arrow}")).small().color(color).strong()).frame(false);
+            if ui.add(b).on_hover_text("Ordenar por esta coluna").clicked() {
+                *click = Some(key);
+            }
+        };
 
         let row_h = 26.0;
         let n = filtered.len();
@@ -298,19 +499,21 @@ impl Boot {
             .sense(egui::Sense::click())
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(Column::exact(28.0))
-            .column(Column::initial(220.0).at_least(120.0).clip(true))
+            .column(Column::initial(240.0).at_least(140.0).clip(true))
             .column(Column::initial(110.0).at_least(80.0).clip(true))
-            .column(Column::initial(88.0).at_least(70.0))
-            .column(Column::remainder().at_least(160.0).clip(true))
-            .column(Column::initial(88.0).at_least(70.0))
+            .column(Column::initial(80.0).at_least(64.0))
+            .column(Column::remainder().at_least(140.0).clip(true))
+            .column(Column::initial(84.0).at_least(70.0))
+            .column(Column::initial(84.0).at_least(64.0))
             .column(Column::initial(132.0).at_least(90.0))
             .header(22.0, |mut h| {
                 h.col(|_| {});
-                h.col(|ui| { ui.label(RichText::new("Nome").small().color(MUTED).strong()); });
-                h.col(|ui| { ui.label(RichText::new("Origem").small().color(MUTED).strong()); });
-                h.col(|ui| { ui.label(RichText::new("Escopo").small().color(MUTED).strong()); });
+                h.col(|ui| head(ui, "Nome", SortKey::Name, &mut sort_click));
+                h.col(|ui| head(ui, "Origem", SortKey::Kind, &mut sort_click));
+                h.col(|ui| head(ui, "Escopo", SortKey::Scope, &mut sort_click));
                 h.col(|ui| { ui.label(RichText::new("Comando").small().color(MUTED).strong()); });
-                h.col(|ui| { ui.label(RichText::new("Estado").small().color(MUTED).strong()); });
+                h.col(|ui| head(ui, "Estado", SortKey::State, &mut sort_click));
+                h.col(|ui| head(ui, "Uso", SortKey::Usage, &mut sort_click));
                 h.col(|ui| { ui.label(RichText::new("Ações").small().color(MUTED).strong()); });
             })
             .body(|body| {
@@ -333,6 +536,16 @@ impl Boot {
                         }
                     });
                     row.col(|ui| {
+                        match &row_icons[i] {
+                            Some(tex) => {
+                                ui.add(egui::Image::new((tex.id(), egui::Vec2::splat(16.0))));
+                            }
+                            None => {
+                                let (r, _) = ui.allocate_exact_size(egui::Vec2::splat(16.0), egui::Sense::hover());
+                                ui.painter().circle_filled(r.center(), 4.0, e.kind.color().gamma_multiply(0.6));
+                            }
+                        }
+                        ui.add_space(4.0);
                         let name_c = if e.missing {
                             MUTED
                         } else if e.enabled {
@@ -340,7 +553,7 @@ impl Boot {
                         } else {
                             MUTED
                         };
-                        ui.label(RichText::new(&e.name).strong().color(name_c));
+                        ui.add(egui::Label::new(RichText::new(&e.name).strong().color(name_c)).truncate());
                     });
                     row.col(|ui| {
                         ui.label(RichText::new(e.kind.label()).small().color(e.kind.color()));
@@ -369,6 +582,21 @@ impl Boot {
                         ui.label(RichText::new(txt).small().color(c));
                     });
                     row.col(|ui| {
+                        let u = row_usage[i];
+                        if u.total() == 0 {
+                            ui.label(RichText::new("—").small().color(MUTED));
+                        } else {
+                            let strong = u.total() >= 3600;
+                            let c = if strong { Color32::from_rgb(120, 200, 140) } else { MUTED };
+                            ui.label(RichText::new(usage::fmt_secs(u.total())).small().color(c)).on_hover_text(format!(
+                                "Em foco: {}\nAberto (medido pelo RamDog): {}\nÚltima vez: {}",
+                                usage::fmt_secs(u.focus),
+                                usage::fmt_secs(u.open),
+                                usage::fmt_ago(u.last)
+                            ));
+                        }
+                    });
+                    row.col(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         if is_run {
                             if let Some(name) = exe_name_from_cmd(&e.command) {
@@ -389,11 +617,23 @@ impl Boot {
                 });
             });
 
+        if let Some(k) = sort_click {
+            if self.sort == k {
+                self.sort_desc = !self.sort_desc;
+            } else {
+                self.sort = k;
+                // Uso só interessa do maior para o menor; as outras leem melhor em ordem direta.
+                self.sort_desc = k == SortKey::Usage;
+            }
+        }
         if let Some(id) = select {
             self.selected = Some(id);
         }
         if let Some((e, on)) = toggle {
             queued.push(Action::Toggle(e, on));
+        }
+        if let Some((exe, label)) = add {
+            queued.push(Action::AddStartup { exe, label });
         }
         if let Some(e) = remove {
             confirm = Some(Pending {
@@ -466,6 +706,209 @@ impl Boot {
         out
     }
 
+    /// Faixa de presets: guarda o ligado/desligado de tudo que dá para alternar e devolve
+    /// a máquina a esse estado depois.
+    fn presets_bar(
+        &mut self,
+        ui: &mut egui::Ui,
+        confirm: &mut Option<Pending>,
+        cfg: &mut Config,
+        out: &mut Vec<BootOut>,
+    ) {
+        ui.label(RichText::new("Presets:").small().color(MUTED));
+        let names: Vec<String> = cfg.boot_presets.keys().cloned().collect();
+        let shown = if self.preset_sel.is_empty() { "—".to_string() } else { self.preset_sel.clone() };
+        egui::ComboBox::from_id_salt("boot_preset")
+            .selected_text(RichText::new(shown).size(12.0))
+            .width(140.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut self.preset_sel, String::new(), "—");
+                for n in &names {
+                    ui.selectable_value(&mut self.preset_sel, n.clone(), n);
+                }
+            });
+
+        let has_sel = cfg.boot_presets.contains_key(&self.preset_sel);
+        if ui
+            .add_enabled(has_sel, egui::Button::new(RichText::new("Aplicar").small()))
+            .on_hover_text("Liga e desliga as entradas até a partida ficar igual ao preset")
+            .clicked()
+        {
+            let want = cfg.boot_presets.get(&self.preset_sel).cloned().unwrap_or_default();
+            let diff = preset_diff(&self.entries, &want);
+            if diff.is_empty() {
+                out.push(BootOut::Toast(format!("{}: a partida já está assim", self.preset_sel), false));
+            } else {
+                let machine = diff.iter().filter(|(e, _)| e.machine).count();
+                let mut lines: Vec<String> = diff
+                    .iter()
+                    .take(12)
+                    .map(|(e, w)| format!("{} {}", if *w { "ligar" } else { "desligar" }, e.name))
+                    .collect();
+                if diff.len() > 12 {
+                    lines.push(format!("… e mais {}", diff.len() - 12));
+                }
+                if machine > 0 {
+                    lines.push(format!("{machine} entrada(s) de máquina — vai pedir UAC uma vez só."));
+                }
+                *confirm = Some(Pending {
+                    title: format!("Aplicar preset \"{}\" — {} mudança(s)?", self.preset_sel, diff.len()),
+                    lines,
+                    action: Action::Preset(self.preset_sel.clone(), diff),
+                });
+            }
+        }
+        if ui
+            .add_enabled(has_sel, egui::Button::new(RichText::new("Excluir").small().color(Color32::from_rgb(232, 120, 100))))
+            .clicked()
+        {
+            cfg.boot_presets.remove(&self.preset_sel);
+            out.push(BootOut::Toast(format!("preset \"{}\" excluído", self.preset_sel), false));
+            self.preset_sel.clear();
+            out.push(BootOut::SaveCfg);
+        }
+
+        ui.add_space(6.0);
+        ui.add(
+            egui::TextEdit::singleline(&mut self.preset_name)
+                .hint_text("nome do preset")
+                .desired_width(120.0),
+        );
+        let can_save = !self.preset_name.trim().is_empty() && !self.entries.is_empty();
+        if ui
+            .add_enabled(can_save, egui::Button::new(RichText::new("Salvar atual").small()))
+            .on_hover_text("Guarda o estado ligado/desligado de todas as entradas que dá para alternar")
+            .clicked()
+        {
+            let name = self.preset_name.trim().to_string();
+            let snap: std::collections::BTreeMap<String, bool> = self
+                .entries
+                .iter()
+                .filter(|e| e.can_toggle)
+                .map(|e| (e.id.clone(), e.enabled))
+                .collect();
+            let n = snap.len();
+            cfg.boot_presets.insert(name.clone(), snap);
+            self.preset_sel = name.clone();
+            self.preset_name.clear();
+            out.push(BootOut::Toast(format!("preset \"{name}\" salvo com {n} entradas"), false));
+            out.push(BootOut::SaveCfg);
+        }
+    }
+
+    /// Painel do Scan: os programas mais usados, com ícone, e um botão para pôr na partida.
+    fn scan_panel(&mut self, ui: &mut egui::Ui, add: &mut Option<(String, String)>) {
+        // Quem já está na partida não precisa de sugestão — só de um selo.
+        let already: HashSet<String> = self
+            .resolved
+            .values()
+            .filter_map(|r| r.exe.clone())
+            .collect();
+        // `add_sized` centraliza o conteúdo na caixa; aqui o que se quer é coluna alinhada
+        // à esquerda, senão cada linha começa num lugar diferente.
+        fn cell(ui: &mut egui::Ui, w: f32, text: RichText) -> egui::Response {
+            ui.allocate_ui_with_layout(
+                egui::Vec2::new(w, 18.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    // Sem o mínimo a caixa encolhe até o texto e as colunas somem.
+                    ui.set_min_width(w);
+                    ui.add(egui::Label::new(text).truncate())
+                },
+            )
+            .response
+        }
+
+        let top: Vec<usage::Ranked> = self.rank.iter().take(30).cloned().collect();
+        let icons: Vec<Option<TextureHandle>> = top.iter().map(|r| self.icons.get(&r.path.to_lowercase())).collect();
+        let mut close = false;
+
+        egui::Frame::new()
+            .fill(SURFACE)
+            .stroke(egui::Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.5)))
+            .inner_margin(egui::Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("O que você mais usa neste PC").strong().size(14.0));
+                    ui.label(
+                        RichText::new("— tempo em foco (histórico do Windows) + tempo aberto medido pelo RamDog")
+                            .small()
+                            .color(MUTED),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("Fechar").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                if top.is_empty() {
+                    ui.label(
+                        RichText::new(
+                            "Nada medido ainda. O histórico do Windows (UserAssist) pode estar limpo — \
+                             deixe o RamDog aberto e a contagem própria começa a preencher a lista.",
+                        )
+                        .color(MUTED),
+                    );
+                    return;
+                }
+                egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                    for (i, r) in top.iter().enumerate() {
+                        let on_startup = already.contains(&r.path.to_lowercase());
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(format!("{:>2}.", i + 1)).small().color(MUTED).monospace());
+                            match &icons[i] {
+                                Some(tex) => {
+                                    ui.add(egui::Image::new((tex.id(), egui::Vec2::splat(20.0))));
+                                }
+                                None => {
+                                    let (rc, _) = ui.allocate_exact_size(egui::Vec2::splat(20.0), egui::Sense::hover());
+                                    ui.painter().circle_filled(rc.center(), 5.0, MUTED.gamma_multiply(0.5));
+                                }
+                            }
+                            cell(ui, 200.0, RichText::new(&r.name).strong()).on_hover_text(&r.path);
+                            cell(
+                                ui,
+                                92.0,
+                                RichText::new(usage::fmt_secs(r.focus_secs + r.open_secs)).color(Color32::from_rgb(120, 200, 140)),
+                            )
+                            .on_hover_text(format!(
+                                "Em foco: {}\nAberto com janela (medido pelo RamDog): {}",
+                                usage::fmt_secs(r.focus_secs),
+                                usage::fmt_secs(r.open_secs)
+                            ));
+                            cell(ui, 60.0, RichText::new(format!("{}×", r.launches)).small().color(MUTED))
+                                .on_hover_text("Vezes que o programa foi aberto");
+                            cell(ui, 96.0, RichText::new(usage::fmt_ago(r.last_used)).small().color(MUTED))
+                                .on_hover_text("Última vez usado");
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if on_startup {
+                                    ui.label(
+                                        RichText::new("já na partida")
+                                            .small()
+                                            .color(Color32::from_rgb(120, 200, 140)),
+                                    );
+                                } else if ui
+                                    .add(egui::Button::new(RichText::new("+ Partida").small().color(Color32::WHITE)).fill(ACCENT_BG))
+                                    .on_hover_text("Cria um atalho na pasta Iniciar do seu usuário — sem UAC")
+                                    .clicked()
+                                {
+                                    let label = std::path::Path::new(&r.path)
+                                        .file_stem()
+                                        .map(|s| s.to_string_lossy().into_owned())
+                                        .unwrap_or_else(|| r.name.clone());
+                                    *add = Some((r.path.clone(), label));
+                                }
+                            });
+                        });
+                    }
+                });
+            });
+        if close {
+            self.scan_open = false;
+        }
+    }
+
     fn run(&mut self, action: Action, is_admin: bool, out: &mut Vec<BootOut>) {
         match action {
             Action::Toggle(e, enabled) => {
@@ -496,9 +939,193 @@ impl Boot {
                     Err(err) => out.push(BootOut::Toast(format!("{}: {err}", e.name), true)),
                 }
             }
+            Action::Preset(name, list) => {
+                let mut ok = 0usize;
+                let mut failed: Vec<String> = Vec::new();
+                // Tudo que precisa de admin vira UM script elevado: 20 prompts de UAC
+                // seguidos seriam pior que não ter preset nenhum.
+                let mut elevate: Vec<String> = Vec::new();
+                for (e, want) in list {
+                    match apply_toggle(&e, want) {
+                        Ok(()) => ok += 1,
+                        Err(err) if e.machine && !is_admin && err.contains("acesso negado") => {
+                            let ps = toggle_ps(&e, want);
+                            if ps.is_empty() {
+                                failed.push(e.name.clone());
+                            } else {
+                                elevate.push(ps);
+                            }
+                        }
+                        Err(_) => failed.push(e.name.clone()),
+                    }
+                }
+                if !elevate.is_empty() {
+                    self.busy += 1;
+                    sys::run_elevated_ps(format!("preset {name}"), elevate.join("; "), self.tx.clone());
+                }
+                self.last_refresh = None;
+                let mut msg = format!("preset \"{name}\": {ok} aplicada(s)");
+                if !elevate.is_empty() {
+                    msg.push_str(&format!(", {} via UAC", elevate.len()));
+                }
+                if !failed.is_empty() {
+                    msg.push_str(&format!(", {} falharam", failed.len()));
+                }
+                out.push(BootOut::Toast(msg, !failed.is_empty()));
+            }
+            Action::AddStartup { exe, label } => match create_startup_lnk(&exe, &label) {
+                Ok(name) => {
+                    out.push(BootOut::Toast(format!("{name} agora sobe com o PC"), false));
+                    self.last_refresh = None;
+                }
+                Err(err) => out.push(BootOut::Toast(format!("{label}: {err}"), true)),
+            },
         }
     }
 }
+
+/// O que precisa mudar para a partida ficar igual ao preset: só entradas que dá para
+/// alternar, que o preset conhece, e cujo estado atual difere do guardado.
+fn preset_diff(entries: &[Entry], want: &std::collections::BTreeMap<String, bool>) -> Vec<(Entry, bool)> {
+    entries
+        .iter()
+        .filter(|e| e.can_toggle)
+        .filter_map(|e| want.get(&e.id).map(|w| (e.clone(), *w)))
+        .filter(|(e, w)| e.enabled != *w)
+        .collect()
+}
+
+/// Ordem de "quem está de pé primeiro": rodando, no boot, desligada, ausente.
+fn state_rank(e: &Entry, is_run: bool) -> u8 {
+    if is_run {
+        0
+    } else if e.missing {
+        3
+    } else if e.enabled {
+        1
+    } else {
+        2
+    }
+}
+
+/// De onde tirar ícone e uso de uma entrada.
+fn resolve_entry(e: &Entry) -> Resolved {
+    let exe = exe_path_from_cmd(&e.command);
+    match &e.target {
+        // Atalho com alvo quebrado ainda tem ícone próprio — melhor que uma bolinha.
+        Target::Folder { path, .. } => Resolved {
+            icon: exe.clone().or_else(|| Some(path.to_string_lossy().into_owned())),
+            exe: exe.map(|p| p.to_lowercase()),
+        },
+        Target::Uwp { .. } => Resolved::default(),
+        _ => Resolved { icon: exe.clone(), exe: exe.map(|p| p.to_lowercase()) },
+    }
+}
+
+/// Caminho completo do executável de uma linha de comando, já com variáveis expandidas.
+/// Devolve `None` quando o arquivo não existe — sem arquivo não há ícone nem uso.
+fn exe_path_from_cmd(cmd: &str) -> Option<String> {
+    let c = cmd.trim();
+    if c.is_empty() {
+        return None;
+    }
+    let raw = if let Some(rest) = c.strip_prefix('"') {
+        rest.split('"').next().unwrap_or("")
+    } else {
+        // Serviço costuma vir como `\??\C:\...\x.sys` ou `C:\...\svc.exe -k algo`.
+        c.split_whitespace().next().unwrap_or("")
+    };
+    let raw = raw.trim_start_matches(r"\??\");
+    let full = expand_env(raw);
+    let p = Path::new(&full);
+    if p.is_file() {
+        return Some(full);
+    }
+    // Sem extensão o Windows completa com .exe.
+    if p.extension().is_none() {
+        let with_exe = format!("{full}.exe");
+        if Path::new(&with_exe).is_file() {
+            return Some(with_exe);
+        }
+    }
+    None
+}
+
+/// Expande `%VAR%` no meio de um caminho do registro.
+fn expand_env(s: &str) -> String {
+    if !s.contains('%') {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        match after.find('%') {
+            Some(end) => {
+                let name = &after[..end];
+                match std::env::var(name) {
+                    Ok(v) => out.push_str(&v),
+                    Err(_) => {
+                        out.push('%');
+                        out.push_str(name);
+                        out.push('%');
+                    }
+                }
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push('%');
+                out.push_str(after);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Cria o atalho na pasta Iniciar do usuário. Sem registro, sem UAC: é só um arquivo.
+fn create_startup_lnk(exe: &str, label: &str) -> Result<String, String> {
+    ensure_com();
+    let dir = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .ok_or_else(|| "não achei %APPDATA%".to_string())?
+        .join(r"Microsoft\Windows\Start Menu\Programs\Startup");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let safe: String = label
+        .chars()
+        .map(|c| if r#"\/:*?"<>|"#.contains(c) { '_' } else { c })
+        .collect();
+    let safe = safe.trim().to_string();
+    if safe.is_empty() {
+        return Err("nome de atalho vazio".into());
+    }
+    let file = dir.join(format!("{safe}.lnk"));
+    if file.exists() {
+        return Err(format!("{safe}.lnk já existe na pasta Iniciar"));
+    }
+    unsafe {
+        let link: IShellLinkW =
+            CoCreateInstance::<Option<&IUnknown>, IShellLinkW>(&ShellLink, None, CLSCTX_INPROC_SERVER)
+                .map_err(|e| e.message())?;
+        let w = sys::wide(exe);
+        link.SetPath(PCWSTR(w.as_ptr())).map_err(|e| e.message())?;
+        if let Some(parent) = Path::new(exe).parent() {
+            let wd = sys::wide(&parent.to_string_lossy());
+            let _ = link.SetWorkingDirectory(PCWSTR(wd.as_ptr()));
+        }
+        let d = sys::wide("Adicionado à partida pelo RamDog");
+        let _ = link.SetDescription(PCWSTR(d.as_ptr()));
+        let persist: IPersistFile = link.cast().map_err(|e| e.message())?;
+        let wf = sys::wide(&file.to_string_lossy());
+        persist.Save(PCWSTR(wf.as_ptr()), true).map_err(|e| e.message())?;
+    }
+    // Sobra de StartupApproved com o mesmo nome deixaria o atalho novo nascer desligado.
+    let _ = sys::reg_delete_value(HKEY_CURRENT_USER, APPROVED_FOLDER, &format!("{safe}.lnk"));
+    Ok(safe)
+}
+
 
 // ---------- coleta ----------
 
@@ -1261,5 +1888,124 @@ impl Drop for Sc {
         unsafe {
             let _ = CloseServiceHandle(self.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expande_variavel_de_ambiente_no_meio_do_caminho() {
+        let win = std::env::var("WINDIR").unwrap();
+        assert_eq!(expand_env(r"%WINDIR%\explorer.exe"), format!(r"{win}\explorer.exe"));
+        assert_eq!(expand_env(r"C:\sem\variavel.exe"), r"C:\sem\variavel.exe");
+        // Variável que não existe fica como estava, em vez de virar caminho quebrado.
+        assert_eq!(expand_env(r"%NAO_EXISTE_XYZ%\a.exe"), r"%NAO_EXISTE_XYZ%\a.exe");
+    }
+
+    #[test]
+    fn tira_o_exe_da_linha_de_comando() {
+        let win = std::env::var("WINDIR").unwrap();
+        let explorer = format!(r"{win}\explorer.exe");
+        assert_eq!(exe_path_from_cmd(&format!("\"{explorer}\" -algo")), Some(explorer.clone()));
+        assert_eq!(exe_path_from_cmd(&format!(r"\??\{explorer}")), Some(explorer.clone()));
+        assert_eq!(exe_path_from_cmd(r"%WINDIR%\explorer.exe /n"), Some(explorer));
+        assert_eq!(exe_path_from_cmd(r"C:\nao\existe\nada.exe"), None);
+        assert_eq!(exe_path_from_cmd(""), None);
+    }
+
+    /// Cria um atalho de verdade na pasta Iniciar, confere o alvo e apaga.
+    /// `cargo test -- --ignored --nocapture atalho`
+    #[test]
+    #[ignore]
+    fn atalho_na_pasta_iniciar_ida_e_volta() {
+        let win = std::env::var("WINDIR").unwrap();
+        let exe = format!(r"{win}\System32\notepad.exe");
+        let label = "RamDogTesteAtalho";
+        let name = create_startup_lnk(&exe, label).expect("criar atalho");
+        let file = PathBuf::from(std::env::var("APPDATA").unwrap())
+            .join(r"Microsoft\Windows\Start Menu\Programs\Startup")
+            .join(format!("{name}.lnk"));
+        assert!(file.exists(), "atalho não apareceu em {}", file.display());
+        let alvo = resolve_lnk(&file).expect("ler alvo do atalho");
+        println!("atalho {} -> {alvo}", file.display());
+        assert!(alvo.to_lowercase().contains("notepad.exe"), "alvo errado: {alvo}");
+        // Duas vezes o mesmo nome tem de falhar, não sobrescrever atalho do usuário.
+        assert!(create_startup_lnk(&exe, label).is_err());
+        std::fs::remove_file(&file).expect("limpar atalho de teste");
+        assert!(!file.exists());
+    }
+
+    fn ent(id: &str, enabled: bool, can_toggle: bool) -> Entry {
+        Entry {
+            id: id.into(),
+            name: id.into(),
+            command: String::new(),
+            kind: Kind::Run,
+            machine: false,
+            enabled,
+            missing: false,
+            can_toggle,
+            can_remove: false,
+            microsoft: false,
+            origin: String::new(),
+            target: Target::ReadOnly,
+            running_hint: false,
+        }
+    }
+
+    #[test]
+    fn preset_so_lista_o_que_precisa_mudar() {
+        let entries = vec![
+            ent("igual-ligada", true, true),
+            ent("precisa-desligar", true, true),
+            ent("precisa-ligar", false, true),
+            ent("travada", false, false),
+            ent("fora-do-preset", false, true),
+        ];
+        let want: std::collections::BTreeMap<String, bool> = [
+            ("igual-ligada", true),
+            ("precisa-desligar", false),
+            ("precisa-ligar", true),
+            // Entrada que não dá para alternar não pode entrar no diff nem que o preset peça.
+            ("travada", true),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+
+        let d = preset_diff(&entries, &want);
+        let mut got: Vec<(String, bool)> = d.iter().map(|(e, w)| (e.id.clone(), *w)).collect();
+        got.sort();
+        assert_eq!(got, vec![("precisa-desligar".to_string(), false), ("precisa-ligar".to_string(), true)]);
+
+        // Preset igual à partida atual: nada a fazer — é o caso do aviso "já está assim".
+        let mesmo: std::collections::BTreeMap<String, bool> =
+            entries.iter().filter(|e| e.can_toggle).map(|e| (e.id.clone(), e.enabled)).collect();
+        assert!(preset_diff(&entries, &mesmo).is_empty());
+    }
+
+    /// Contra a partida real desta máquina: tira um retrato, vira uma entrada de verdade
+    /// no retrato e confere que o diff aponta exatamente ela.
+    /// `cargo test -- --ignored --nocapture preset_real`
+    #[test]
+    #[ignore]
+    fn preset_real_desta_maquina() {
+        let entries = collect();
+        let mut snap: std::collections::BTreeMap<String, bool> =
+            entries.iter().filter(|e| e.can_toggle).map(|e| (e.id.clone(), e.enabled)).collect();
+        println!("{} entradas, {} alternáveis", entries.len(), snap.len());
+        assert!(snap.len() > 5, "partida real veio vazia demais para o teste valer");
+        assert!(preset_diff(&entries, &snap).is_empty(), "retrato do agora tem de dar diff zero");
+
+        let alvo = entries.iter().find(|e| e.can_toggle).unwrap().id.clone();
+        let atual = snap[&alvo];
+        snap.insert(alvo.clone(), !atual);
+        let d = preset_diff(&entries, &snap);
+        assert_eq!(d.len(), 1, "diff devia ter só a entrada virada");
+        assert_eq!(d[0].0.id, alvo);
+        assert_eq!(d[0].1, !atual);
+        println!("diff = {} -> {}", d[0].0.name, if d[0].1 { "ligar" } else { "desligar" });
     }
 }

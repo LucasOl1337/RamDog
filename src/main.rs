@@ -22,6 +22,7 @@ mod sampler;
 mod signature;
 #[cfg(windows)]
 mod sys;
+mod usage;
 
 fn main() -> eframe::Result<()> {
     procs::enable_debug_privilege();

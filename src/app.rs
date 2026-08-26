@@ -17,6 +17,7 @@ use crate::metrics::SysSample;
 use crate::procs::{self, KernelMem, MemStatus, ProcInfo};
 use crate::sampler::{self, SamplerHandle};
 use crate::signature::{self, SigInfo};
+use crate::usage;
 
 const MB: u64 = 1024 * 1024;
 const GB: u64 = 1024 * 1024 * 1024;
@@ -196,6 +197,8 @@ pub struct App {
     hwtemp: HwTemp,
 
     icons: HashMap<String, Option<TextureHandle>>,
+    /// Quanto tempo cada exe fica aberto. Alimenta o Scan da Partida.
+    usage: usage::Tracker,
 
     search: String,
     sort: SortKey,
@@ -266,6 +269,7 @@ impl App {
             gpu_per_proc: true,
             hwtemp: HwTemp::default(),
             icons: HashMap::new(),
+            usage: usage::Tracker::load(),
             search: String::new(),
             sort: SortKey::Ram,
             sort_desc: true,
@@ -322,6 +326,8 @@ impl App {
         }
         self.gpu_per_proc = snap.gpu_per_proc;
         self.hwtemp = snap.hwtemp;
+        self.usage.tick(&self.procs);
+        self.usage.save_if_due();
         // Nome de cada PID guardado enquanto ele existe: é o que permite dizer
         // "smss.exe (1208), já encerrado" em vez do número solto quando o pai morre.
         for p in &self.procs {
@@ -3114,11 +3120,12 @@ impl eframe::App for App {
                     let is_admin = self.is_admin;
                     let search = self.search.clone();
                     let procs = std::mem::take(&mut self.procs);
-                    let evs = self.boot.ui(ui, &procs, &search, is_admin);
+                    let evs = self.boot.ui(ui, &procs, &search, is_admin, &mut self.cfg, &self.usage);
                     self.procs = procs;
                     for ev in evs {
                         match ev {
                             BootOut::Toast(m, err) => self.toast(m, err),
+                            BootOut::SaveCfg => self.cfg_dirty = true,
                             BootOut::Kill(pids) => {
                                 let list: Vec<(u32, String, u64)> = pids
                                     .iter()
