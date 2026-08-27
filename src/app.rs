@@ -1786,73 +1786,57 @@ impl App {
     /// processos": cada um ocupa a tela inteira, tem vocabulário próprio e ignora a busca
     /// e os filtros do topo. Misturados às abas eles roubavam largura de quem usa o
     /// RamDog para o que ele é — RAM e CPU. Aqui ficam à mão sem disputar esse espaço.
+    /// Faixa de addons colada na borda esquerda, por fora do quadro do conteúdo.
+    ///
+    /// Só ícone. Com rótulo a faixa precisaria da largura de "Desperdício" e voltaria a
+    /// ser uma coluna do layout — que é justamente o que ela deixou de ser. O nome e a
+    /// explicação vivem no tooltip, e clicar no addon aberto volta para os processos.
     fn ui_addon_rail(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(6.0);
         let mut go: Option<ViewMode> = None;
-        ui.vertical_centered_justified(|ui| {
-            ui.label(RichText::new("ADDONS").size(9.0).color(MUTED.gamma_multiply(0.75)));
-            ui.add_space(6.0);
-            // Padding horizontal mínimo e quebra amarrada na largura do botão: o rótulo
-            // mais longo ("Desperdício") não tem como vazar por fora da borda, seja qual
-            // for a métrica da fonte que o Windows entregar.
-            ui.spacing_mut().button_padding.x = 3.0;
-            let text_w = (ui.available_width() - 10.0).max(40.0);
+        // Botão em repouso invisível: o fundo só aparece no hover e no addon ativo. Sem
+        // isto cada ícone ganha o retângulo cinza padrão e a faixa vira uma pilha de caixas.
+        ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+        ui.vertical_centered(|ui| {
+            ui.add_space(RAIL_W * 0.25);
             for v in ViewMode::ADDONS {
                 let on = self.cfg.view == v;
                 let fg = if on { Color32::WHITE } else { MUTED };
-                // Sem `job.halign`: o próprio botão já centraliza o galley. Definir os dois
-                // centraliza duas vezes e o rótulo sai deslocado meia palavra para a esquerda.
-                let mut job = egui::text::LayoutJob::default();
-                job.wrap.max_width = text_w;
-                job.append(
-                    v.icon(),
-                    0.0,
-                    egui::TextFormat {
-                        font_id: egui::FontId::proportional(16.0),
-                        color: fg,
-                        ..Default::default()
-                    },
-                );
-                job.append(
-                    &format!("
-{}", v.label()),
-                    0.0,
-                    egui::TextFormat {
-                        font_id: egui::FontId::proportional(10.0),
-                        color: fg,
-                        ..Default::default()
-                    },
-                );
-                let b = if on {
-                    egui::Button::new(job)
-                        .fill(ACCENT_BG)
-                        .stroke(Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.7)))
-                } else {
-                    egui::Button::new(job).stroke(Stroke::NONE)
+                let mut b = egui::Button::new(RichText::new(v.icon()).size(15.0).color(fg))
+                    .stroke(Stroke::NONE)
+                    .corner_radius(5.0)
+                    .min_size(Vec2::splat(RAIL_W - 8.0));
+                if on {
+                    b = b.fill(ACCENT_BG);
                 }
-                .corner_radius(6.0)
-                .min_size(Vec2::new(0.0, 44.0));
                 let tip = if on {
                     format!("{}
 
-Clique de novo para voltar aos processos.", v.tip())
+{}
+
+Clique de novo para voltar aos processos.", v.label(), v.tip())
                 } else {
-                    v.tip().to_string()
+                    format!("{}
+
+{}", v.label(), v.tip())
                 };
-                if ui.add(b).on_hover_text(tip).clicked() {
+                let resp = ui.add(b).on_hover_text(tip);
+                // Barra de acento encostada na borda da janela: é o que diz qual addon
+                // está aberto quando a faixa é fina demais para caber um rótulo.
+                if on {
+                    let r = resp.rect;
+                    ui.painter().rect_filled(
+                        Rect::from_min_max(
+                            egui::pos2(ui.max_rect().left() - 4.0, r.top() + 3.0),
+                            egui::pos2(ui.max_rect().left() - 1.0, r.bottom() - 3.0),
+                        ),
+                        1.0,
+                        ACCENT,
+                    );
+                }
+                if resp.clicked() {
                     go = Some(if on { self.last_core } else { v });
                 }
-                ui.add_space(3.0);
-            }
-            if self.cfg.view.is_addon() {
-                ui.add_space(6.0);
-                if ui
-                    .add(egui::Button::new(RichText::new("◀ voltar").size(10.0).color(MUTED)).stroke(Stroke::NONE))
-                    .on_hover_text("Volta para a lista de processos")
-                    .clicked()
-                {
-                    go = Some(self.last_core);
-                }
+                ui.add_space(4.0);
             }
         });
         if let Some(v) = go {
@@ -3527,6 +3511,19 @@ impl eframe::App for App {
             }
         }
 
+        // Antes de tudo: assim a faixa vai da barra de título até a borda de baixo, colada
+        // na lateral da janela, e o quadro do conteúdo (medidores, tabela, status) começa
+        // depois dela. Como painel comum ela era mais uma coluna do layout.
+        egui::SidePanel::left("addons")
+            .exact_width(RAIL_W)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(BG)
+                    .inner_margin(egui::Margin { left: 4, right: 0, top: 0, bottom: 0 }),
+            )
+            .show(ctx, |ui| self.ui_addon_rail(ui));
         egui::TopBottomPanel::top("top").show(ctx, |ui| self.ui_top(ui));
         if !self.cfg.view.is_addon() {
             egui::TopBottomPanel::bottom("details")
@@ -3557,15 +3554,6 @@ impl eframe::App for App {
                 });
             });
         });
-        egui::SidePanel::left("addons")
-            .exact_width(100.0)
-            .resizable(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(PANEL)
-                    .inner_margin(egui::Margin::symmetric(6, 4)),
-            )
-            .show(ctx, |ui| self.ui_addon_rail(ui));
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(6, 2)))
             .show(ctx, |ui| {
@@ -3665,6 +3653,9 @@ fn setup_fonts(ctx: &egui::Context) {
 /// Paleta: cinza-azulado tintado (nunca preto puro), um acento frio para seleção/estado ativo;
 /// as cores de categoria e o "calor" da RAM são semânticas e ficam de fora do acento.
 pub const BG: Color32 = Color32::from_rgb(17, 19, 24);
+/// Largura da faixa de addons. Cabe o glifo e a folga, e nada mais — ela é moldura,
+/// não coluna.
+pub const RAIL_W: f32 = 34.0;
 pub const PANEL: Color32 = Color32::from_rgb(21, 24, 30);
 pub const SURFACE: Color32 = Color32::from_rgb(28, 32, 39);
 pub const SURFACE_HI: Color32 = Color32::from_rgb(36, 41, 50);

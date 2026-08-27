@@ -15,7 +15,7 @@
   <img alt="MIT" src="https://img.shields.io/badge/license-MIT-69F0AE">
 </p>
 
-<img src="docs/screenshot-main.png" alt="Janela do RamDog em visão Lista: medidores de CPU, RAM, GPU e Disco no topo, chips de categoria (IA/Agentes, Dev, Navegador, Jogos, Pessoal, Sistema, Outros), barra de addons à esquerda (Partida, Desperdício, Térmico, Telas) e a tabela agrupada por app — node.exe com 55 processos recolhido, brave.exe com 28 aberto, somando RAM, CPU e disco no cabeçalho de cada grupo." width="100%">
+<img src="docs/screenshot-main.png" alt="Janela do RamDog em visão Lista: medidores de CPU, RAM, GPU e Disco no topo, chips de categoria (IA/Agentes, Dev, Navegador, Jogos, Pessoal, Sistema, Outros), faixa de addons colada na borda esquerda (Partida, Desperdício, Térmico, Telas) e a tabela agrupada por app — brave.exe com 28 processos numa linha só, somando RAM, CPU, GPU e disco no cabeçalho do grupo." width="100%">
 
 ## Por que existe
 
@@ -28,7 +28,7 @@ Este app existe por isso.
 - **Origem / lançado por.** Coluna Origem = primeiro ancestral vivo que não seja host genérico (`cmd`, `bash`, `node`…). Quando a cadeia de pais morreu, o RamDog lê o ambiente herdado e mostra em roxo o agente (Claude Code + sessão + PID, Codex, Cursor Agent, Gemini CLI…) e o host (Maestri, VS Code, Cursor, Windows Terminal…), além de `npm run <script>` no projeto.
 - **Categorias.** IA / Agentes, Dev, Navegador, Jogos, Pessoal, Sistema, Outros — regra automática, com override manual por processo.
 - **Kill, árvore e lock.** Finaliza o processo ou a árvore (processo + filhos). Lock impede que o RamDog encerre o protegido. Processos críticos do SO (`System`/`csrss`/`dwm` no Windows; `kernel_task`/`launchd`/`WindowServer` no macOS) são sempre protegidos.
-- **Visões.** Lista (plana), Árvore (pai → filhos, RAM da subárvore), Categorias (agrupado). Os addons ficam na barra vertical à esquerda — **Partida**, **Desperdício**, **Térmico** e **Telas**, só no Windows.
+- **Visões.** Lista (plana), Árvore (pai → filhos, RAM da subárvore), Categorias (agrupado). Os addons saem das abas e viram uma faixa de ícones colada na borda esquerda da janela — **Partida**, **Desperdício**, **Térmico** e **Telas**, só no Windows.
 - **Agrupar por app.** Na visão Lista, processos do mesmo executável viram uma linha só — `chrome.exe (37)` — somando RAM, CPU, GPU e disco no cabeçalho, com **✖** que encerra o app inteiro. A chave é o caminho do executável, não o nome: dois `svchost.exe` de pastas diferentes nunca caem no mesmo grupo. App com um processo só não agrupa.
 - **Coluna CPU que dá para ler.** A repartição é por `CycleTime` (contado a cada troca de contexto), não pelo tempo de kernel/usuário — que o Windows só cobra em fatias de 15,625 ms e joga inteira em quem estava rodando no tique, fazendo processo de rajada piscar entre 0% e 15%. O total repartido vem de `GetSystemTimes`, então a máquina afogada não dilui o culpado. Por cima, média móvel de τ = 1 s amarrada ao tempo, não à contagem de amostras: o topo da lista para quieto o tempo de você ler. O valor cru do último intervalo continua visível no tooltip.
 - **Medidores.** CPU e RAM no topo nos dois SOs. GPU NVIDIA (NVML) e % de disco estilo Task Manager só no Windows.
@@ -83,7 +83,7 @@ dotnet publish hwtemp -c Release -o target/release --no-self-contained
 | Finalizar árvore (processo + filhos) | `Shift+Del`, `Shift`+✖, botão direito → Finalizar árvore, ou painel inferior |
 | Proteger / desproteger | 🔒/🔓 na linha, botão direito, ou painel inferior. Protegidos nunca são finalizados pelo RamDog |
 | Categoria manual | botão direito → Categoria, ou combo no painel inferior (`auto` volta à regra automática) |
-| Visões | **Lista**, **Árvore**, **Categorias** nas abas de cima; **Partida**, **Desperdício**, **Térmico** e **Telas** na barra de addons à esquerda (só no Windows), com **◀ voltar** para a visão anterior |
+| Visões | **Lista**, **Árvore**, **Categorias** nas abas de cima; **Partida**, **Desperdício**, **Térmico** e **Telas** na faixa de ícones colada na borda esquerda (só no Windows) — o nome de cada um está no tooltip, e clicar no addon aberto volta para a visão de processo anterior |
 | Agrupar por app | caixa **Agrupar por app** na visão Lista; ▶/▼ recolhe e abre um grupo, **Expandir tudo** / **Recolher tudo** valem para a lista inteira; **✖** no cabeçalho encerra todos os processos daquele app |
 | Filtro | busca por nome / PID / comando; chips de categoria (clique alterna, duplo clique isola); `min. MB` |
 | Origem | coluna *Origem* = primeiro ancestral vivo que não seja host genérico (cmd, bash, node...); cadeia completa clicável no painel inferior (`Ir para o pai`) |
