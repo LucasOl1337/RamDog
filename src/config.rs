@@ -19,6 +19,11 @@ pub struct Config {
     /// Ocultar processos com menos que X MB (na métrica escolhida em `mem_metric`).
     pub min_mb: u32,
     pub view: ViewMode,
+    /// Addons com janela aberta, na ordem de abertura. Fecha o RamDog com Telas aberto e
+    /// ele volta com Telas aberto — janela dedicada que some no fim do dia não é área de
+    /// trabalho, é aba com outro nome.
+    #[serde(default)]
+    pub open_addons: Vec<ViewMode>,
     pub show_system: bool,
     /// Qual número a coluna RAM mostra. Ver `MemMetric`.
     pub mem_metric: MemMetric,
@@ -142,8 +147,8 @@ impl MemMetric {
 /// `CORE` é o que o RamDog é — processo, RAM e CPU — e mora nas abas do topo, junto da
 /// busca e dos filtros que só fazem sentido ali. `ADDONS` são assuntos vizinhos (o que sobe
 /// no boot, o que o Windows gasta sozinho, temperatura, organização de telas): cada um tem
-/// sua própria tela inteira e nada a ver com a busca de processo, então vive num rail
-/// lateral em vez de disputar espaço com as abas.
+/// sua própria janela e nada a ver com a busca de processo, e são abertos por um grupo de
+/// ícones ao lado das abas — clicar ali abre uma janela, não troca a visão desta.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub enum ViewMode {
     List,
@@ -176,7 +181,17 @@ impl ViewMode {
         }
     }
 
-    /// Glifo do rail. Só BMP — o fallback é a Segoe UI Symbol, que cobre estes quatro.
+    /// Tamanho inicial da janela do addon. Telas precisa de largura para o mapa dos
+    /// monitores caber em escala; Térmico é uma lista curta de sensores e ficaria oco.
+    pub fn window_size(self) -> [f32; 2] {
+        match self {
+            ViewMode::Screens => [1080.0, 760.0],
+            ViewMode::Thermal => [620.0, 620.0],
+            _ => [960.0, 700.0],
+        }
+    }
+
+    /// Glifo do addon. Só BMP — o fallback é a Segoe UI Symbol, que cobre estes quatro.
     pub fn icon(self) -> &'static str {
         match self {
             ViewMode::Boot => "⚡",
@@ -218,6 +233,7 @@ impl Default for Config {
             confirm_kill: true,
             min_mb: 0,
             view: ViewMode::List,
+            open_addons: Vec::new(),
             show_system: true,
             mem_metric: MemMetric::WorkingSet,
             show_kernel_rows: true,

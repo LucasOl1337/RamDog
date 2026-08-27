@@ -233,6 +233,9 @@ pub struct App {
     usage: usage::Tracker,
 
     search: String,
+    /// Busca da janela do Partida. Separada da de cima porque as duas janelas filtram
+    /// listas diferentes e ficam visíveis ao mesmo tempo.
+    addon_search: String,
     sort: SortKey,
     sort_desc: bool,
     cat_enabled: HashSet<Category>,
@@ -258,9 +261,9 @@ pub struct App {
     drains: Drains,
     boot: Boot,
     screens: Screens,
-    /// Última visão de processo escolhida. Clicar de novo no addon aberto volta pra ela —
-    /// sem isso o rail seria um caminho de mão única e o usuário teria que caçar as abas.
-    last_core: ViewMode,
+    /// Onde cada janela de addon nasceu. Fixado na abertura: recalcular todo frame faria
+    /// o eframe reposicionar a janela e arrastar o RamDog levaria os addons junto.
+    addon_pos: Vec<(ViewMode, egui::Pos2)>,
     /// Visão Térmico: valor local de slider por fan + quando o usuário mexeu pela última vez.
     /// Por ~2.5s depois de mexer, o slider mostra o valor local em vez do reportado pelo
     /// helper — sem isso o slider "volta" enquanto o helper ainda não aplicou/reportou.
@@ -280,9 +283,13 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         setup_style(&cc.egui_ctx);
-        let cfg = Config::load();
+        let mut cfg = Config::load();
         let mini = cfg.mini;
-        let cfg_view = cfg.view;
+        // Config gravada por versão antiga pode trazer um addon aqui. Addon agora é janela,
+        // não visão: sem esta correção a janela principal abriria sem tabela nenhuma.
+        if cfg.view.is_addon() {
+            cfg.view = ViewMode::List;
+        }
         let is_admin = procs::is_admin();
         let sampler = sampler::spawn(cc.egui_ctx.clone(), cfg.refresh_ms);
         let (sig_tx, sig_rx) = std::sync::mpsc::channel();
@@ -314,6 +321,7 @@ impl App {
             icons: HashMap::new(),
             usage: usage::Tracker::load(),
             search: String::new(),
+            addon_search: String::new(),
             sort: SortKey::Ram,
             sort_desc: true,
             cat_enabled: Category::ALL.iter().copied().collect(),
@@ -335,7 +343,7 @@ impl App {
             drains: Drains::new(),
             boot: Boot::new(),
             screens: Screens::new(),
-            last_core: if cfg_view.is_addon() { ViewMode::List } else { cfg_view },
+            addon_pos: Vec::new(),
             thermal_edit: HashMap::new(),
             stab_pending: None,
             // `main` já abriu a janela no modo lido da config — nada a aplicar no 1º frame.
@@ -1780,68 +1788,180 @@ impl App {
         }
     }
 
-    /// Rail da esquerda: os addons.
+    /// Os quatro addons, como grupo de ícones ao lado das abas.
     ///
     /// Partida, Desperdício, Térmico e Telas não são "mais uma visão da lista de
-    /// processos": cada um ocupa a tela inteira, tem vocabulário próprio e ignora a busca
-    /// e os filtros do topo. Misturados às abas eles roubavam largura de quem usa o
-    /// RamDog para o que ele é — RAM e CPU. Aqui ficam à mão sem disputar esse espaço.
-    /// Faixa de addons colada na borda esquerda, por fora do quadro do conteúdo.
+    /// processos": cada um tem vocabulário próprio e ignora a busca e os filtros do topo.
+    /// Por isso não são abas — clicar aqui abre **janela própria**, e o quadro do RamDog
+    /// continua sendo só RAM e processo. O divisor à esquerda é o que separa "trocar a
+    /// visão desta janela" de "abrir outra janela".
     ///
-    /// Só ícone. Com rótulo a faixa precisaria da largura de "Desperdício" e voltaria a
-    /// ser uma coluna do layout — que é justamente o que ela deixou de ser. O nome e a
-    /// explicação vivem no tooltip, e clicar no addon aberto volta para os processos.
-    fn ui_addon_rail(&mut self, ui: &mut egui::Ui) {
+    /// Só ícone: com rótulo o grupo precisaria da largura de "Desperdício" e comeria a
+    /// fileira inteira. Nome e explicação vivem no tooltip.
+    fn ui_addon_buttons(&mut self, ui: &mut egui::Ui) {
         let mut go: Option<ViewMode> = None;
-        // Botão em repouso invisível: o fundo só aparece no hover e no addon ativo. Sem
-        // isto cada ícone ganha o retângulo cinza padrão e a faixa vira uma pilha de caixas.
+        ui.add_space(2.0);
+        ui.separator();
+        ui.add_space(2.0);
+        // Botão em repouso invisível: o fundo só aparece no hover e no addon aberto. Sem
+        // isto cada ícone ganha o retângulo cinza padrão e o grupo vira uma fila de caixas.
         ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-        ui.vertical_centered(|ui| {
-            ui.add_space(RAIL_W * 0.25);
-            for v in ViewMode::ADDONS {
-                let on = self.cfg.view == v;
-                let fg = if on { Color32::WHITE } else { MUTED };
-                let mut b = egui::Button::new(RichText::new(v.icon()).size(15.0).color(fg))
-                    .stroke(Stroke::NONE)
-                    .corner_radius(5.0)
-                    .min_size(Vec2::splat(RAIL_W - 8.0));
-                if on {
-                    b = b.fill(ACCENT_BG);
-                }
-                let tip = if on {
-                    format!("{}
-
-{}
-
-Clique de novo para voltar aos processos.", v.label(), v.tip())
-                } else {
-                    format!("{}
-
-{}", v.label(), v.tip())
-                };
-                let resp = ui.add(b).on_hover_text(tip);
-                // Barra de acento encostada na borda da janela: é o que diz qual addon
-                // está aberto quando a faixa é fina demais para caber um rótulo.
-                if on {
-                    let r = resp.rect;
-                    ui.painter().rect_filled(
-                        Rect::from_min_max(
-                            egui::pos2(ui.max_rect().left() - 4.0, r.top() + 3.0),
-                            egui::pos2(ui.max_rect().left() - 1.0, r.bottom() - 3.0),
-                        ),
-                        1.0,
-                        ACCENT,
-                    );
-                }
-                if resp.clicked() {
-                    go = Some(if on { self.last_core } else { v });
-                }
-                ui.add_space(4.0);
+        // Só entre os ícones: sem devolver o valor depois, o "Agrupar por app" e o combo de
+        // RAM que vêm em seguida herdam esse aperto e grudam no grupo.
+        let gap = std::mem::replace(&mut ui.spacing_mut().item_spacing.x, 2.0);
+        for v in ViewMode::ADDONS {
+            let on = self.cfg.open_addons.contains(&v);
+            let fg = if on { Color32::WHITE } else { MUTED };
+            let mut b = egui::Button::new(RichText::new(v.icon()).size(14.0).color(fg))
+                .stroke(Stroke::NONE)
+                .corner_radius(4.0)
+                .min_size(Vec2::splat(CTRL_H - 4.0));
+            if on {
+                b = b.fill(ACCENT_BG);
             }
-        });
-        if let Some(v) = go {
-            self.cfg.view = v;
+            let tip = if on {
+                format!("{}\n\n{}\n\nJanela aberta. Clique para fechar.", v.label(), v.tip())
+            } else {
+                format!("{}\n\n{}\n\nAbre em janela própria.", v.label(), v.tip())
+            };
+            if ui.add(b).on_hover_text(tip).clicked() {
+                go = Some(v);
+            }
+        }
+        ui.spacing_mut().item_spacing.x = gap;
+        ui.add_space(2.0);
+        let Some(v) = go else { return };
+        if let Some(i) = self.cfg.open_addons.iter().position(|&x| x == v) {
+            self.cfg.open_addons.remove(i);
+        } else {
+            // Cascata a partir da janela principal, fixada agora: duas janelas abertas
+            // juntas não nascem uma exatamente em cima da outra, e arrastar o RamDog
+            // depois não arrasta as janelas de addon junto.
+            let off = 28.0 * self.cfg.open_addons.len() as f32;
+            let base = ui
+                .ctx()
+                .input(|i| i.viewport().outer_rect)
+                .map_or(egui::pos2(140.0, 140.0), |m| egui::pos2(m.left() + 48.0, m.top() + 48.0));
+            self.addon_pos.retain(|(a, _)| *a != v);
+            self.addon_pos.push((v, base + Vec2::splat(off)));
+            self.cfg.open_addons.push(v);
+        }
+        self.cfg_dirty = true;
+    }
+
+    /// Uma janela nativa por addon aberto, com moldura e botão de fechar do sistema.
+    ///
+    /// `show_viewport_immediate` (e não `_deferred`) porque o corpo do addon precisa de
+    /// `&mut self` — o callback do deferred exige `Send + Sync`.
+    fn ui_addon_windows(&mut self, ctx: &egui::Context) {
+        let mut close: Vec<ViewMode> = Vec::new();
+        for (i, v) in self.cfg.open_addons.clone().into_iter().enumerate() {
+            let id = egui::ViewportId::from_hash_of(("ramdog-addon", v.label()));
+            // Posição só na abertura. Se ela fosse recalculada a cada frame, o eframe veria
+            // um builder diferente e arrastar a janela principal teleportaria os addons.
+            let mut builder = egui::ViewportBuilder::default()
+                .with_title(format!("RamDog — {}", v.label()))
+                .with_inner_size(v.window_size());
+            // Sessão anterior: a config lembra qual addon ficou aberto, não onde ele estava.
+            if !self.addon_pos.iter().any(|(a, _)| *a == v) {
+                let off = 28.0 * i as f32;
+                self.addon_pos.push((v, egui::pos2(140.0 + off, 140.0 + off)));
+            }
+            if let Some((_, p)) = self.addon_pos.iter().find(|(a, _)| *a == v) {
+                builder = builder.with_position(*p);
+            }
+            ctx.show_viewport_immediate(id, builder, |c, _class| {
+                egui::CentralPanel::default()
+                    .frame(
+                        egui::Frame::central_panel(&c.style())
+                            .inner_margin(egui::Margin::symmetric(8, 6)),
+                    )
+                    .show(c, |ui| self.ui_addon_body(ui, v));
+                if c.input(|inp| inp.viewport().close_requested()) {
+                    close.push(v);
+                }
+            });
+        }
+        if !close.is_empty() {
+            self.cfg.open_addons.retain(|v| !close.contains(v));
+            self.addon_pos.retain(|(v, _)| !close.contains(v));
             self.cfg_dirty = true;
+        }
+    }
+
+    /// Conteúdo de um addon e o que ele devolve (avisos, pedidos de matar, gravar config).
+    fn ui_addon_body(&mut self, ui: &mut egui::Ui, v: ViewMode) {
+        match v {
+            ViewMode::Drains => {
+                let is_admin = self.is_admin;
+                let procs = std::mem::take(&mut self.procs);
+                let evs = self.drains.ui(ui, &procs, is_admin);
+                self.procs = procs;
+                for ev in evs {
+                    match ev {
+                        DrainOut::Toast(m, err) => self.toast(m, err),
+                        DrainOut::Kill(pids) => self.request_kill_many(&pids),
+                    }
+                }
+            }
+            ViewMode::Boot => {
+                // Busca própria: a caixa do topo filtra a tabela de processos, que agora
+                // está noutra janela — digitar lá e ver Partida mudar aqui seria mágica.
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.addon_search)
+                            .hint_text("Buscar nome, comando ou origem…")
+                            .desired_width(260.0),
+                    );
+                    if !self.addon_search.is_empty() && ui.button("✖").clicked() {
+                        self.addon_search.clear();
+                    }
+                });
+                ui.add_space(4.0);
+                let is_admin = self.is_admin;
+                let search = self.addon_search.clone();
+                let procs = std::mem::take(&mut self.procs);
+                let evs = self.boot.ui(ui, &procs, &search, is_admin, &mut self.cfg, &self.usage);
+                self.procs = procs;
+                for ev in evs {
+                    match ev {
+                        BootOut::Toast(m, err) => self.toast(m, err),
+                        BootOut::SaveCfg => self.cfg_dirty = true,
+                        BootOut::Kill(pids) => self.request_kill_many(&pids),
+                    }
+                }
+            }
+            ViewMode::Screens => {
+                let procs = std::mem::take(&mut self.procs);
+                let evs = self.screens.ui(ui, &procs, &mut self.cfg);
+                self.procs = procs;
+                for ev in evs {
+                    match ev {
+                        ScreenOut::Toast(m, err) => self.toast(m, err),
+                        ScreenOut::SaveCfg => self.cfg_dirty = true,
+                    }
+                }
+            }
+            ViewMode::Thermal => self.ui_thermal(ui),
+            _ => {}
+        }
+    }
+
+    /// Confirmação de finalizar uma lista de PIDs vinda de um addon.
+    fn request_kill_many(&mut self, pids: &[u32]) {
+        let list: Vec<(u32, String, u64)> = pids
+            .iter()
+            .filter_map(|pid| self.proc(*pid).map(|p| (p.pid, p.name.clone(), self.mem_of(p))))
+            .collect();
+        if list.is_empty() {
+            return;
+        }
+        let title = format!("Finalizar {} processo(s)?", list.len());
+        let req = KillReq { pids: list, title, tree: false };
+        if self.cfg.confirm_kill {
+            self.pending = Some(req);
+        } else {
+            self.execute_kill(req);
         }
     }
 
@@ -1856,11 +1976,7 @@ Clique de novo para voltar aos processos.", v.label(), v.tip())
             ui.spacing_mut().interact_size.y = CTRL_H;
             ui.spacing_mut().button_padding = Vec2::new(9.0, 2.0);
             let te = egui::TextEdit::singleline(&mut self.search)
-                .hint_text(if self.cfg.view == ViewMode::Boot {
-                    "Buscar nome, comando ou origem…"
-                } else {
-                    "Buscar nome, PID, caminho ou comando…"
-                })
+                .hint_text("Buscar nome, PID, caminho ou comando…")
                 .desired_width(240.0);
             let resp = ui.add(te);
             if resp.changed() {
@@ -1882,9 +1998,9 @@ Clique de novo para voltar aos processos.", v.label(), v.tip())
                     // 20 + 2 de margem em cima e embaixo = CTRL_H: o grupo de abas fecha
                     // exatamente na mesma altura da busca e do combo ao lado.
                     ui.spacing_mut().interact_size.y = CTRL_H - 4.0;
-                    // Só as visões de processo. Partida, Desperdício, Térmico e Telas são
-                    // telas inteiras com assunto próprio e vivem no rail da esquerda —
-                    // aqui elas só roubavam largura da busca e dos filtros.
+                    // Só as visões de processo. Partida, Desperdício, Térmico e Telas têm
+                    // assunto próprio e abrem em janela separada, no grupo de ícones logo
+                    // à direita — como abas elas só roubavam largura da busca e dos filtros.
                     for v in ViewMode::CORE {
                         let on = view == v;
                         let t = RichText::new(v.label())
@@ -1903,9 +2019,9 @@ Clique de novo para voltar aos processos.", v.label(), v.tip())
                 });
             if view != self.cfg.view {
                 self.cfg.view = view;
-                self.last_core = view;
                 self.cfg_dirty = true;
             }
+            self.ui_addon_buttons(ui);
             if self.cfg.view == ViewMode::Tree {
                 if ui.button("Expandir tudo").clicked() {
                     self.expanded = self.children.keys().copied().collect();
@@ -3511,27 +3627,12 @@ impl eframe::App for App {
             }
         }
 
-        // Antes de tudo: assim a faixa vai da barra de título até a borda de baixo, colada
-        // na lateral da janela, e o quadro do conteúdo (medidores, tabela, status) começa
-        // depois dela. Como painel comum ela era mais uma coluna do layout.
-        egui::SidePanel::left("addons")
-            .exact_width(RAIL_W)
-            .resizable(false)
-            .show_separator_line(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(BG)
-                    .inner_margin(egui::Margin { left: 4, right: 0, top: 0, bottom: 0 }),
-            )
-            .show(ctx, |ui| self.ui_addon_rail(ui));
         egui::TopBottomPanel::top("top").show(ctx, |ui| self.ui_top(ui));
-        if !self.cfg.view.is_addon() {
-            egui::TopBottomPanel::bottom("details")
-                .resizable(true)
-                .default_height(150.0)
-                .min_height(40.0)
-                .show(ctx, |ui| self.ui_details(ui));
-        }
+        egui::TopBottomPanel::bottom("details")
+            .resizable(true)
+            .default_height(150.0)
+            .min_height(40.0)
+            .show(ctx, |ui| self.ui_details(ui));
         egui::TopBottomPanel::bottom("statusbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let shown = self.procs.iter().filter(|p| self.passes(p, &self.search.trim().to_lowercase())).count();
@@ -3556,67 +3657,11 @@ impl eframe::App for App {
         });
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(6, 2)))
-            .show(ctx, |ui| {
-                if self.cfg.view == ViewMode::Drains {
-                    let is_admin = self.is_admin;
-                    let procs = std::mem::take(&mut self.procs);
-                    let evs = self.drains.ui(ui, &procs, is_admin);
-                    self.procs = procs;
-                    for ev in evs {
-                        match ev {
-                            DrainOut::Toast(m, err) => self.toast(m, err),
-                            DrainOut::Kill(pids) => {
-                                let list: Vec<(u32, String, u64)> = pids
-                                    .iter()
-                                    .filter_map(|pid| self.proc(*pid).map(|p| (p.pid, p.name.clone(), self.mem_of(p))))
-                                    .collect();
-                                if !list.is_empty() {
-                                    let title = format!("Finalizar {} processo(s)?", list.len());
-                                    let req = KillReq { pids: list, title, tree: false };
-                                    if self.cfg.confirm_kill { self.pending = Some(req); } else { self.execute_kill(req); }
-                                }
-                            }
-                        }
-                    }
-                } else if self.cfg.view == ViewMode::Boot {
-                    let is_admin = self.is_admin;
-                    let search = self.search.clone();
-                    let procs = std::mem::take(&mut self.procs);
-                    let evs = self.boot.ui(ui, &procs, &search, is_admin, &mut self.cfg, &self.usage);
-                    self.procs = procs;
-                    for ev in evs {
-                        match ev {
-                            BootOut::Toast(m, err) => self.toast(m, err),
-                            BootOut::SaveCfg => self.cfg_dirty = true,
-                            BootOut::Kill(pids) => {
-                                let list: Vec<(u32, String, u64)> = pids
-                                    .iter()
-                                    .filter_map(|pid| self.proc(*pid).map(|p| (p.pid, p.name.clone(), self.mem_of(p))))
-                                    .collect();
-                                if !list.is_empty() {
-                                    let title = format!("Finalizar {} processo(s)?", list.len());
-                                    let req = KillReq { pids: list, title, tree: false };
-                                    if self.cfg.confirm_kill { self.pending = Some(req); } else { self.execute_kill(req); }
-                                }
-                            }
-                        }
-                    }
-                } else if self.cfg.view == ViewMode::Screens {
-                    let procs = std::mem::take(&mut self.procs);
-                    let evs = self.screens.ui(ui, &procs, &mut self.cfg);
-                    self.procs = procs;
-                    for ev in evs {
-                        match ev {
-                            ScreenOut::Toast(m, err) => self.toast(m, err),
-                            ScreenOut::SaveCfg => self.cfg_dirty = true,
-                        }
-                    }
-                } else if self.cfg.view == ViewMode::Thermal {
-                    self.ui_thermal(ui);
-                } else {
-                    self.ui_table(ui);
-                }
-            });
+            .show(ctx, |ui| self.ui_table(ui));
+
+        // Depois dos painéis: as janelas de addon são desenhadas dentro deste mesmo frame e
+        // podem mexer em `self` (fechar, pedir kill, sujar a config).
+        self.ui_addon_windows(ctx);
 
         self.ui_modal(ctx);
         self.ui_status(ctx);
@@ -3653,9 +3698,6 @@ fn setup_fonts(ctx: &egui::Context) {
 /// Paleta: cinza-azulado tintado (nunca preto puro), um acento frio para seleção/estado ativo;
 /// as cores de categoria e o "calor" da RAM são semânticas e ficam de fora do acento.
 pub const BG: Color32 = Color32::from_rgb(17, 19, 24);
-/// Largura da faixa de addons. Cabe o glifo e a folga, e nada mais — ela é moldura,
-/// não coluna.
-pub const RAIL_W: f32 = 34.0;
 pub const PANEL: Color32 = Color32::from_rgb(21, 24, 30);
 pub const SURFACE: Color32 = Color32::from_rgb(28, 32, 39);
 pub const SURFACE_HI: Color32 = Color32::from_rgb(36, 41, 50);
