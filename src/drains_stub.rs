@@ -1,4 +1,4 @@
-//! Ralos são Windows (Defender, SCM, Appx). No macOS a aba existe e explica.
+//! Desperdício é Windows (Defender, SCM, Appx). No macOS a aba existe e explica.
 
 use crate::procs::ProcInfo;
 
@@ -16,7 +16,7 @@ impl Drains {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, _procs: &[ProcInfo], _is_admin: bool) -> Vec<DrainOut> {
         ui.add_space(16.0);
-        ui.label("Ralos (Defender, serviços, Appx) são específicos do Windows.");
+        ui.label("Desperdício (Defender, serviços, Appx) é específico do Windows.");
         ui.add_space(8.0);
         ui.label("No macOS o RamDog lista, categoriza e finaliza processos — essa aba não tem equivalente.");
         Vec::new()

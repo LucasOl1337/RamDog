@@ -16,6 +16,7 @@ use crate::knowledge;
 use crate::metrics::SysSample;
 use crate::procs::{self, KernelMem, MemStatus, ProcInfo};
 use crate::sampler::{self, SamplerHandle};
+use crate::screens::{ScreenOut, Screens};
 use crate::signature::{self, SigInfo};
 use crate::usage;
 
@@ -85,12 +86,41 @@ enum Row {
         total: u64,
         collapsed: bool,
     },
+    /// Cabeçalho de um app: índice em `App::groups`. O conteúdo não fica aqui de
+    /// propósito — as somas são recalculadas a cada quadro, inclusive quando a ordem
+    /// está congelada porque o mouse está em cima da tabela.
+    AppHeader {
+        gi: usize,
+    },
     /// Linha sintética: memória em uso que não pertence a processo nenhum.
     /// Sem PID, sem kill — existe para a soma da lista bater com o "em uso" do topo.
     System {
         kind: SysRow,
         bytes: u64,
     },
+}
+
+/// Um app na visão Lista: todos os processos do mesmo executável somados numa linha.
+///
+/// É a diferença que fazia o Gerenciador de Tarefas parecer melhor: lá o Chrome com 30
+/// renderizadores é uma linha de 90%, aqui eram 30 linhas de 3% que não chegavam nem
+/// perto do topo da lista ordenada por CPU. O maior consumidor da máquina ficava
+/// invisível por estar picado.
+struct AppGroup {
+    /// Caminho do exe em minúsculo — ou o nome, quando não houve acesso ao caminho.
+    key: String,
+    name: String,
+    name_lower: String,
+    cat: Category,
+    /// Ordenados pelo critério da tabela; o primeiro é o que o clique seleciona.
+    pids: Vec<u32>,
+    ram: u64,
+    cpu: f32,
+    gpu: f32,
+    disk: f64,
+    /// FILETIME do processo mais antigo do grupo — é a idade do app, não a do último
+    /// aba/renderizador que abriu.
+    oldest: i64,
 }
 
 /// As parcelas do "em uso" que nunca aparecem numa lista de processos.
@@ -192,6 +222,8 @@ pub struct App {
     sig_rx: std::sync::mpsc::Receiver<(String, SigInfo)>,
     last_sample: Option<Instant>,
     sample_ms: f32,
+    /// Núcleos lógicos — só para explicar na interface o que "100%" quer dizer.
+    ncpu: usize,
     sys: SysSample,
     gpu_per_proc: bool,
     hwtemp: HwTemp,
@@ -208,6 +240,11 @@ pub struct App {
     selected_keep: Option<(ProcInfo, Category)>,
     expanded: HashSet<u32>,
     collapsed_cats: HashSet<Category>,
+    /// Grupos da visão Lista, reconstruídos junto com as linhas. `Row::AppHeader` guarda
+    /// só o índice aqui dentro.
+    groups: Vec<AppGroup>,
+    /// Apps recolhidos, por chave de `AppGroup`.
+    collapsed_apps: HashSet<String>,
     pending: Option<KillReq>,
     status: Option<(Instant, String, bool)>,
     is_admin: bool,
@@ -220,6 +257,10 @@ pub struct App {
     order_frozen: bool,
     drains: Drains,
     boot: Boot,
+    screens: Screens,
+    /// Última visão de processo escolhida. Clicar de novo no addon aberto volta pra ela —
+    /// sem isso o rail seria um caminho de mão única e o usuário teria que caçar as abas.
+    last_core: ViewMode,
     /// Visão Térmico: valor local de slider por fan + quando o usuário mexeu pela última vez.
     /// Por ~2.5s depois de mexer, o slider mostra o valor local em vez do reportado pelo
     /// helper — sem isso o slider "volta" enquanto o helper ainda não aplicou/reportou.
@@ -241,6 +282,7 @@ impl App {
         setup_style(&cc.egui_ctx);
         let cfg = Config::load();
         let mini = cfg.mini;
+        let cfg_view = cfg.view;
         let is_admin = procs::is_admin();
         let sampler = sampler::spawn(cc.egui_ctx.clone(), cfg.refresh_ms);
         let (sig_tx, sig_rx) = std::sync::mpsc::channel();
@@ -265,6 +307,7 @@ impl App {
             sig_rx,
             last_sample: None,
             sample_ms: 0.0,
+            ncpu: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
             sys: SysSample::default(),
             gpu_per_proc: true,
             hwtemp: HwTemp::default(),
@@ -278,6 +321,8 @@ impl App {
             selected_keep: None,
             expanded: HashSet::new(),
             collapsed_cats: HashSet::new(),
+            groups: Vec::new(),
+            collapsed_apps: HashSet::new(),
             pending: None,
             status: None,
             is_admin,
@@ -289,6 +334,8 @@ impl App {
             order_frozen: false,
             drains: Drains::new(),
             boot: Boot::new(),
+            screens: Screens::new(),
+            last_core: if cfg_view.is_addon() { ViewMode::List } else { cfg_view },
             thermal_edit: HashMap::new(),
             stab_pending: None,
             // `main` já abriu a janela no modo lido da config — nada a aplicar no 1º frame.
@@ -625,7 +672,11 @@ impl App {
                     na.cmp(nb).then(self.mem_of(pb).cmp(&self.mem_of(pa)))
                 }
             };
-            if desc { ord.reverse() } else { ord }
+            // Desempate por PID depois da inversão. Sem ele, as dezenas de processos
+            // empatados em "–" na coluna CPU trocavam de lugar a cada amostra e a lista
+            // inteira piscava embaixo do que você estava tentando ler.
+            let ord = if desc { ord.reverse() } else { ord };
+            ord.then(pa.pid.cmp(&pb.pid))
         });
     }
 
@@ -654,18 +705,25 @@ impl App {
         out.into_iter().map(|(kind, bytes)| Row::System { kind, bytes }).collect()
     }
 
-    fn build_rows(&self) -> Vec<Row> {
+    fn build_rows(&mut self) -> Vec<Row> {
         let search = self.search.trim().to_lowercase();
         let hits: Vec<u32> = self.procs.iter().filter(|p| self.passes(p, &search)).map(|p| p.pid).collect();
         let sys_rows = self.system_rows(&search);
         match self.cfg.view {
-            // Thermal não tem tabela de processos — o braço só existe pra exaustividade.
-            ViewMode::List | ViewMode::Drains | ViewMode::Thermal | ViewMode::Boot => {
+            // Térmico, Partida e Telas não desenham tabela de processos — o braço só
+            // existe pra exaustividade.
+            ViewMode::List | ViewMode::Drains | ViewMode::Thermal | ViewMode::Boot | ViewMode::Screens => {
+                let list = self.cfg.view == ViewMode::List;
+                // Os addons não desenham esta tabela; nas outras as linhas de sistema
+                // ficam no topo, onde o usuário procura "quem está comendo a RAM".
+                let mut rows = if list { sys_rows } else { Vec::new() };
+                if list && self.cfg.group_apps {
+                    rows.extend(self.build_app_rows(hits));
+                    return rows;
+                }
+                self.groups.clear();
                 let mut pids = hits;
                 self.sort_pids(&mut pids, false);
-                // Ralos e Térmico não desenham esta tabela; nas outras as linhas de sistema
-                // ficam no topo, onde o usuário procura "quem está comendo a RAM".
-                let mut rows = if self.cfg.view == ViewMode::List { sys_rows } else { Vec::new() };
                 rows.extend(
                     pids.into_iter()
                         .map(|pid| Row::Proc { pid, depth: 0, has_children: false, expanded: false, dim: false }),
@@ -744,6 +802,115 @@ impl App {
         }
     }
 
+    /// Linhas da visão Lista agrupadas por executável.
+    ///
+    /// App de um processo só não ganha cabeçalho: uma linha "▶ Bloco de Notas (1)" que
+    /// abre em uma linha idêntica é ruído. O agrupamento existe para o caso do Chrome,
+    /// não para enfeitar o resto da lista.
+    fn build_app_rows(&mut self, hits: Vec<u32>) -> Vec<Row> {
+        // A chave é o caminho do exe, não o nome: dois `svchost.exe` de pastas diferentes
+        // (ou um impostor) não podem cair no mesmo grupo. Sem acesso ao caminho sobra o
+        // nome, que é o que a lista tem para mostrar de qualquer jeito.
+        let mut by_key: HashMap<String, Vec<u32>> = HashMap::new();
+        for pid in hits {
+            let Some(p) = self.proc(pid) else { continue };
+            let key = if p.exe_path.is_empty() { p.name_lower.clone() } else { p.exe_path.to_lowercase() };
+            by_key.entry(key).or_default().push(pid);
+        }
+        let mut groups: Vec<AppGroup> = Vec::with_capacity(by_key.len());
+        for (key, mut pids) in by_key {
+            self.sort_pids(&mut pids, false);
+            let Some(p) = pids.first().and_then(|pid| self.proc(*pid)) else { continue };
+            let mut g = AppGroup {
+                key,
+                name: p.name.clone(),
+                name_lower: p.name_lower.clone(),
+                cat: self.cat(pids[0]),
+                pids,
+                ram: 0,
+                cpu: 0.0,
+                gpu: 0.0,
+                disk: 0.0,
+                oldest: 0,
+            };
+            self.fill_group(&mut g);
+            groups.push(g);
+        }
+
+        let (sort, desc) = (self.sort, self.sort_desc);
+        let mut order: Vec<usize> = (0..groups.len()).collect();
+        order.sort_by(|&a, &b| {
+            let (ga, gb) = (&groups[a], &groups[b]);
+            let ord = match sort {
+                SortKey::Name => ga.name_lower.cmp(&gb.name_lower),
+                SortKey::Ram => ga.ram.cmp(&gb.ram),
+                SortKey::Cpu => ga.cpu.partial_cmp(&gb.cpu).unwrap_or(std::cmp::Ordering::Equal),
+                SortKey::Gpu => ga.gpu.partial_cmp(&gb.gpu).unwrap_or(std::cmp::Ordering::Equal),
+                SortKey::Disk => ga.disk.partial_cmp(&gb.disk).unwrap_or(std::cmp::Ordering::Equal),
+                SortKey::Cat => ga.cat.cmp(&gb.cat).then(gb.ram.cmp(&ga.ram)),
+                SortKey::Pid => ga.pids.iter().min().cmp(&gb.pids.iter().min()),
+                SortKey::Age => gb.oldest.cmp(&ga.oldest),
+                // "Origem" é uma relação entre processos; no nível do app ela não
+                // significa nada, então cai no nome em vez de inventar uma ordem.
+                SortKey::Parent => ga.name_lower.cmp(&gb.name_lower),
+            };
+            let ord = if desc { ord.reverse() } else { ord };
+            ord.then(ga.key.cmp(&gb.key))
+        });
+
+        self.groups = groups;
+        let mut rows: Vec<Row> = Vec::with_capacity(self.groups.len() + 8);
+        for gi in order {
+            let g = &self.groups[gi];
+            if g.pids.len() < 2 {
+                rows.push(Row::Proc { pid: g.pids[0], depth: 0, has_children: false, expanded: false, dim: false });
+                continue;
+            }
+            rows.push(Row::AppHeader { gi });
+            if !self.collapsed_apps.contains(&g.key) {
+                for &pid in &g.pids {
+                    rows.push(Row::Proc { pid, depth: 1, has_children: false, expanded: false, dim: false });
+                }
+            }
+        }
+        rows
+    }
+
+    /// Refaz as somas de um grupo a partir do estado atual dos processos.
+    fn fill_group(&self, g: &mut AppGroup) {
+        let (mut ram, mut cpu, mut gpu, mut disk, mut oldest) = (0u64, 0.0f32, 0.0f32, 0.0f64, 0i64);
+        for &pid in &g.pids {
+            let Some(p) = self.proc(pid) else { continue };
+            ram += self.mem_of(p);
+            cpu += p.cpu_pct;
+            gpu += p.gpu_pct;
+            disk += p.disk_bps;
+            if oldest == 0 || p.create_time < oldest {
+                oldest = p.create_time;
+            }
+        }
+        g.ram = ram;
+        g.cpu = cpu;
+        g.gpu = gpu;
+        g.disk = disk;
+        g.oldest = oldest;
+    }
+
+    /// Atualiza as somas dos grupos sem mexer na ordem — é o que roda enquanto a tabela
+    /// está congelada porque o mouse está em cima dela. Congelar a ordem é proposital;
+    /// congelar os números junto não seria.
+    fn refresh_groups(&mut self) {
+        if self.groups.is_empty() {
+            return;
+        }
+        let mut gs = std::mem::take(&mut self.groups);
+        for g in gs.iter_mut() {
+            g.pids.retain(|pid| self.proc(*pid).is_some());
+            self.fill_group(g);
+        }
+        self.groups = gs;
+    }
+
     /// Chave do estado que define a ordenação; se mudar, a ordem é recalculada mesmo congelada.
     fn rows_key(&self) -> u64 {
         use std::hash::{Hash, Hasher};
@@ -762,6 +929,10 @@ impl App {
         let mut cc: Vec<u8> = self.collapsed_cats.iter().map(|c| *c as u8).collect();
         cc.sort_unstable();
         cc.hash(&mut h);
+        self.cfg.group_apps.hash(&mut h);
+        let mut ca: Vec<&String> = self.collapsed_apps.iter().collect();
+        ca.sort_unstable();
+        ca.hash(&mut h);
         h.finish()
     }
 
@@ -785,13 +956,19 @@ impl App {
                         }
                     }
                 }
-                let rows = self.cached_rows.as_mut().unwrap();
+                // Os grupos são refeitos aqui: a ordem fica congelada, os números não.
+                self.refresh_groups();
+                let mut rows = self.cached_rows.take().unwrap();
                 rows.retain(|r| match r {
                     Row::Proc { pid, .. } => keep.contains(pid),
+                    // Grupo que ficou com um processo só perde o cabeçalho — a linha do
+                    // processo que sobrou continua ali.
+                    Row::AppHeader { gi } => self.groups.get(*gi).is_some_and(|g| g.pids.len() > 1),
                     Row::CatHeader { .. } | Row::System { .. } => true,
                 });
                 self.order_frozen = true;
-                return rows.clone();
+                self.cached_rows = Some(rows.clone());
+                return rows;
             }
         }
         let rows = self.build_rows();
@@ -838,6 +1015,43 @@ impl App {
             format!("Finalizar {} (PID {}, {})?", p.name, p.pid, fmt_bytes(self.mem_of(&p)))
         };
         let req = KillReq { pids, title, tree };
+        if self.cfg.confirm_kill {
+            self.pending = Some(req);
+        } else {
+            self.execute_kill(req);
+        }
+    }
+
+    /// Encerra todos os processos de um app agrupado.
+    ///
+    /// Ao contrário do "finalizar árvore", aqui não há relação de parentesco: são os
+    /// processos que compartilham o executável, que é o que a linha mostra somado. Um
+    /// processo protegido (lock) não entra na lista e nem impede o resto — mas se *todos*
+    /// forem protegidos a ação vira um aviso, não um kill silenciosamente vazio.
+    fn request_kill_app(&mut self, gi: usize) {
+        let Some(g) = self.groups.get(gi) else { return };
+        let (name, count) = (g.name.clone(), g.pids.len());
+        let mut pids = Vec::new();
+        let mut skipped = 0;
+        for &pid in &g.pids {
+            match self.proc(pid) {
+                Some(p) if self.is_locked(p) => skipped += 1,
+                Some(p) => pids.push((p.pid, p.name.clone(), self.mem_of(p))),
+                None => {}
+            }
+        }
+        if pids.is_empty() {
+            self.toast(format!("{name}: todos os {count} processos estão protegidos (lock)"), true);
+            return;
+        }
+        let total: u64 = pids.iter().map(|x| x.2).sum();
+        let title = format!(
+            "Finalizar {name}: {} processo(s), {}{}",
+            pids.len(),
+            fmt_bytes(total),
+            if skipped > 0 { format!(" — {skipped} protegido(s) serão poupados") } else { String::new() }
+        );
+        let req = KillReq { pids, title, tree: false };
         if self.cfg.confirm_kill {
             self.pending = Some(req);
         } else {
@@ -1566,6 +1780,87 @@ impl App {
         }
     }
 
+    /// Rail da esquerda: os addons.
+    ///
+    /// Partida, Desperdício, Térmico e Telas não são "mais uma visão da lista de
+    /// processos": cada um ocupa a tela inteira, tem vocabulário próprio e ignora a busca
+    /// e os filtros do topo. Misturados às abas eles roubavam largura de quem usa o
+    /// RamDog para o que ele é — RAM e CPU. Aqui ficam à mão sem disputar esse espaço.
+    fn ui_addon_rail(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        let mut go: Option<ViewMode> = None;
+        ui.vertical_centered_justified(|ui| {
+            ui.label(RichText::new("ADDONS").size(9.0).color(MUTED.gamma_multiply(0.75)));
+            ui.add_space(6.0);
+            // Padding horizontal mínimo e quebra amarrada na largura do botão: o rótulo
+            // mais longo ("Desperdício") não tem como vazar por fora da borda, seja qual
+            // for a métrica da fonte que o Windows entregar.
+            ui.spacing_mut().button_padding.x = 3.0;
+            let text_w = (ui.available_width() - 10.0).max(40.0);
+            for v in ViewMode::ADDONS {
+                let on = self.cfg.view == v;
+                let fg = if on { Color32::WHITE } else { MUTED };
+                // Sem `job.halign`: o próprio botão já centraliza o galley. Definir os dois
+                // centraliza duas vezes e o rótulo sai deslocado meia palavra para a esquerda.
+                let mut job = egui::text::LayoutJob::default();
+                job.wrap.max_width = text_w;
+                job.append(
+                    v.icon(),
+                    0.0,
+                    egui::TextFormat {
+                        font_id: egui::FontId::proportional(16.0),
+                        color: fg,
+                        ..Default::default()
+                    },
+                );
+                job.append(
+                    &format!("
+{}", v.label()),
+                    0.0,
+                    egui::TextFormat {
+                        font_id: egui::FontId::proportional(10.0),
+                        color: fg,
+                        ..Default::default()
+                    },
+                );
+                let b = if on {
+                    egui::Button::new(job)
+                        .fill(ACCENT_BG)
+                        .stroke(Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.7)))
+                } else {
+                    egui::Button::new(job).stroke(Stroke::NONE)
+                }
+                .corner_radius(6.0)
+                .min_size(Vec2::new(0.0, 44.0));
+                let tip = if on {
+                    format!("{}
+
+Clique de novo para voltar aos processos.", v.tip())
+                } else {
+                    v.tip().to_string()
+                };
+                if ui.add(b).on_hover_text(tip).clicked() {
+                    go = Some(if on { self.last_core } else { v });
+                }
+                ui.add_space(3.0);
+            }
+            if self.cfg.view.is_addon() {
+                ui.add_space(6.0);
+                if ui
+                    .add(egui::Button::new(RichText::new("◀ voltar").size(10.0).color(MUTED)).stroke(Stroke::NONE))
+                    .on_hover_text("Volta para a lista de processos")
+                    .clicked()
+                {
+                    go = Some(self.last_core);
+                }
+            }
+        });
+        if let Some(v) = go {
+            self.cfg.view = v;
+            self.cfg_dirty = true;
+        }
+    }
+
     /// Linha 2 do topo: busca, seletor de visão, chips de categoria e métrica de RAM.
     fn ui_filters(&mut self, ui: &mut egui::Ui) {
         let totals = self.cat_totals();
@@ -1603,16 +1898,12 @@ impl App {
                     // 20 + 2 de margem em cima e embaixo = CTRL_H: o grupo de abas fecha
                     // exatamente na mesma altura da busca e do combo ao lado.
                     ui.spacing_mut().interact_size.y = CTRL_H - 4.0;
-                    for (v, label, tip) in [
-                        (ViewMode::List, "Lista", "Todos os processos, um por linha"),
-                        (ViewMode::Tree, "Árvore", "Pai → filhos, com a RAM da subárvore"),
-                        (ViewMode::Category, "Categorias", "Agrupado por categoria"),
-                        (ViewMode::Boot, "Partida", "Tudo que sobe com o PC — registro, pasta Iniciar, tarefas, serviços. Sem o recorte do Gerenciador de Tarefas"),
-                        (ViewMode::Drains, "Ralos", "Defender, serviços dispensáveis e apps de sistema"),
-                        (ViewMode::Thermal, "Térmico", "Sensores, controle de fans e ESTABILIZAR — o TempHUD dentro do RamDog"),
-                    ] {
+                    // Só as visões de processo. Partida, Desperdício, Térmico e Telas são
+                    // telas inteiras com assunto próprio e vivem no rail da esquerda —
+                    // aqui elas só roubavam largura da busca e dos filtros.
+                    for v in ViewMode::CORE {
                         let on = view == v;
-                        let t = RichText::new(label)
+                        let t = RichText::new(v.label())
                             .size(12.5)
                             .color(if on { Color32::WHITE } else { MUTED });
                         let b = if on {
@@ -1621,13 +1912,14 @@ impl App {
                             egui::Button::new(t).stroke(Stroke::NONE)
                         }
                         .corner_radius(4.0);
-                        if ui.add(b).on_hover_text(tip).clicked() {
+                        if ui.add(b).on_hover_text(v.tip()).clicked() {
                             view = v;
                         }
                     }
                 });
             if view != self.cfg.view {
                 self.cfg.view = view;
+                self.last_core = view;
                 self.cfg_dirty = true;
             }
             if self.cfg.view == ViewMode::Tree {
@@ -1636,6 +1928,27 @@ impl App {
                 }
                 if ui.button("Recolher").clicked() {
                     self.expanded.clear();
+                }
+            }
+            if self.cfg.view == ViewMode::List {
+                let mut on = self.cfg.group_apps;
+                if ui
+                    .checkbox(&mut on, RichText::new("Agrupar por app").size(12.5))
+                    .on_hover_text(
+                        "Junta os processos do mesmo executável numa linha que abre.\n\n\
+                         Desligado, o Chrome com 30 renderizadores vira 30 linhas de 3% e \
+                         nunca aparece no topo da ordenação por CPU, mesmo sendo o maior \
+                         consumidor da máquina.",
+                    )
+                    .changed()
+                {
+                    self.cfg.group_apps = on;
+                    self.cfg_dirty = true;
+                    self.rows_dirty = true;
+                }
+                if on && !self.collapsed_apps.is_empty() && ui.button("Expandir tudo").clicked() {
+                    self.collapsed_apps.clear();
+                    self.rows_dirty = true;
                 }
             }
             ui.add_space(8.0);
@@ -1774,9 +2087,15 @@ impl App {
         let n = rows.len();
         let now_ft = procs::now_filetime();
         let tree = self.cfg.view == ViewMode::Tree;
+        // Com grupos, toda linha de processo cede a mesma goteira que a seta do cabeçalho
+        // ocupa. Sem isso o filho fica desenhado à esquerda do nome do app e a hierarquia
+        // aparece invertida.
+        let group_gutter = self.cfg.view == ViewMode::List && self.cfg.group_apps;
         let mut click_select: Option<u32> = None;
         let mut toggle_expand: Option<u32> = None;
         let mut toggle_cat: Option<Category> = None;
+        let mut toggle_app: Option<String> = None;
+        let mut kill_group: Option<usize> = None;
         let mut kill: Option<(u32, bool)> = None;
         let mut lock: Option<String> = None;
         let mut copy: Option<String> = None;
@@ -1794,6 +2113,7 @@ impl App {
                         self.proc(*pid).map(|p| self.mem_of(p))
                     }
                 }
+                Row::AppHeader { gi } => self.groups.get(*gi).map(|g| g.ram),
                 _ => None,
             })
             .max()
@@ -1807,11 +2127,19 @@ impl App {
         // Maior GPU%/disco visível — escala das barras de magnitude dessas colunas.
         let max_gpu: f32 = rows
             .iter()
-            .filter_map(|r| match r { Row::Proc { pid, .. } => self.proc(*pid).map(|p| p.gpu_pct), _ => None })
+            .filter_map(|r| match r {
+                Row::Proc { pid, .. } => self.proc(*pid).map(|p| p.gpu_pct),
+                Row::AppHeader { gi } => self.groups.get(*gi).map(|g| g.gpu),
+                _ => None,
+            })
             .fold(1.0_f32, f32::max);
         let max_disk: f64 = rows
             .iter()
-            .filter_map(|r| match r { Row::Proc { pid, .. } => self.proc(*pid).map(|p| p.disk_bps), _ => None })
+            .filter_map(|r| match r {
+                Row::Proc { pid, .. } => self.proc(*pid).map(|p| p.disk_bps),
+                Row::AppHeader { gi } => self.groups.get(*gi).map(|g| g.disk),
+                _ => None,
+            })
             .fold(1.0_f64, f64::max);
 
         let mut table = TableBuilder::new(ui)
@@ -1940,6 +2268,122 @@ impl App {
                                 toggle_cat = Some(cat);
                             }
                         }
+                        Row::AppHeader { gi } => {
+                            let gi = *gi;
+                            let Some(g) = self.groups.get(gi) else {
+                                for _ in 0..11 {
+                                    row.col(|_ui| {});
+                                }
+                                return;
+                            };
+                            let (key, name, cat) = (g.key.clone(), g.name.clone(), g.cat);
+                            let (ram, cpu, gpu, disk, oldest) = (g.ram, g.cpu, g.gpu, g.disk, g.oldest);
+                            let count = g.pids.len();
+                            let collapsed = self.collapsed_apps.contains(&key);
+                            row.col(|ui| {
+                                ui.add_space(2.0);
+                                let arrow = if collapsed { "▶" } else { "▼" };
+                                let b = egui::Button::new(RichText::new(arrow).weak().small())
+                                    .frame(false)
+                                    .min_size(Vec2::new(16.0, ROW_H - 2.0));
+                                if ui.add(b).clicked() {
+                                    toggle_app = Some(key.clone());
+                                }
+                                match self.icons.get(&key) {
+                                    Some(Some(tex)) => {
+                                        ui.add(egui::Image::new((tex.id(), Vec2::splat(ICON))));
+                                    }
+                                    _ => {
+                                        let (r, _) = ui.allocate_exact_size(Vec2::splat(ICON), egui::Sense::hover());
+                                        ui.painter().circle_filled(r.center(), 4.0, cat.color().gamma_multiply(0.6));
+                                    }
+                                }
+                                ui.add(egui::Label::new(RichText::new(&name).strong()).truncate());
+                                ui.label(RichText::new(format!("({count})")).color(cat.color()).small());
+                            });
+                            row.col(|ui| {
+                                let cell = ui.max_rect();
+                                let frac = (ram as f32 / max_ram as f32).clamp(0.0, 1.0).sqrt();
+                                if frac > 0.01 {
+                                    let bar = Rect::from_min_size(
+                                        egui::pos2(cell.left(), cell.top()),
+                                        Vec2::new(cell.width() * frac, cell.height()),
+                                    );
+                                    ui.painter().rect_filled(bar, 0.0, ram_color(ram, MUTED).gamma_multiply(0.2));
+                                }
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    ui.add_space(2.0);
+                                    ui.label(num(fmt_bytes(ram)).color(ram_color(ram, ui_text_color(ui_dark()))).strong())
+                                        .on_hover_text(
+                                            "Soma dos processos do app. Páginas compartilhadas entre eles \
+                                             entram mais de uma vez — é o mesmo exagero da coluna do \
+                                             Gerenciador de Tarefas, e some ao trocar a métrica para privada.",
+                                        );
+                                });
+                            });
+                            row.col(|ui| {
+                                let c = if cpu >= 25.0 {
+                                    Color32::from_rgb(255, 150, 90)
+                                } else if cpu >= 5.0 {
+                                    Color32::from_rgb(230, 210, 120)
+                                } else {
+                                    ui_text_color(ui_dark())
+                                };
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    ui.label(num(if cpu < 0.05 { "–".to_string() } else { format!("{cpu:.1}%") }).color(c).strong());
+                                });
+                            });
+                            row.col(|ui| {
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    ui.add_space(2.0);
+                                    if !self.gpu_per_proc || gpu < 0.05 {
+                                        ui.label(num("–").color(MUTED));
+                                    } else {
+                                        ui.label(num(format!("{gpu:.0}%")).color(ui_text_color(ui_dark())).strong());
+                                    }
+                                });
+                            });
+                            row.col(|ui| {
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    ui.add_space(2.0);
+                                    if disk < 1024.0 {
+                                        ui.label(num("–").color(MUTED));
+                                    } else {
+                                        ui.label(num(fmt_bps(disk)).color(ui_text_color(ui_dark())).strong());
+                                    }
+                                });
+                            });
+                            row.col(|ui| {
+                                ui.label(RichText::new(cat.short()).color(cat.color()).size(11.5));
+                            });
+                            row.col(|ui| {
+                                ui.label(RichText::new("—").color(MUTED));
+                            });
+                            row.col(|ui| {
+                                let secs = ((now_ft - oldest).max(0) / 10_000_000) as u64;
+                                ui.label(RichText::new(fmt_age(secs)).color(MUTED))
+                                    .on_hover_text("Idade do processo mais antigo do app");
+                            });
+                            row.col(|_ui| {});
+                            row.col(|ui| {
+                                ui.label(RichText::new(format!("{count} processos")).weak().size(11.5));
+                            });
+                            row.col(|ui| {
+                                let cell = ui.max_rect();
+                                let row_rect = Rect::from_x_y_ranges(row_x.unwrap_or(cell.x_range()), cell.y_range());
+                                let hot = ui.rect_contains_pointer(row_rect);
+                                let kc = if hot { Color32::from_rgb(235, 90, 90) } else { Color32::from_gray(76) };
+                                let b = egui::Button::new(RichText::new("✖").color(kc))
+                                    .frame(false)
+                                    .min_size(Vec2::new(22.0, ROW_H - 4.0));
+                                if ui.add(b).on_hover_text(format!("Finalizar os {count} processos de {name}")).clicked() {
+                                    kill_group = Some(gi);
+                                }
+                            });
+                            if row.response().clicked() {
+                                toggle_app = Some(key.clone());
+                            }
+                        }
                         Row::Proc { pid, depth, has_children, expanded, dim } => {
                             let (pid, depth, has_children, expanded, dim) = (*pid, *depth, *has_children, *expanded, *dim);
                             let Some(p) = self.proc(pid).cloned() else {
@@ -1956,6 +2400,9 @@ impl App {
                             let text_color = if dim { Color32::from_gray(120) } else { ui_text_color(ui_dark()) };
                             // Nome
                             row.col(|ui| {
+                                if group_gutter {
+                                    ui.add_space(18.0);
+                                }
                                 ui.add_space(depth as f32 * 14.0);
                                 if tree {
                                     if has_children {
@@ -2042,7 +2489,15 @@ impl App {
                                     text_color
                                 };
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    ui.label(num(if p.cpu_pct < 0.05 { "–".to_string() } else { format!("{:.1}%", p.cpu_pct) }).color(c));
+                                    let r = ui.label(num(if p.cpu_pct < 0.05 { "–".to_string() } else { format!("{:.1}%", p.cpu_pct) }).color(c));
+                                    // A coluna mostra a média — quem está caçando um pico
+                                    // precisa do valor cru do último intervalo também.
+                                    if p.cpu_pct >= 0.05 || p.cpu_raw_pct >= 0.05 {
+                                        r.on_hover_text(format!(
+                                            "média: {:.1}%\núltimo intervalo: {:.1}%\n\n100% = a máquina inteira ({} núcleos).",
+                                            p.cpu_pct, p.cpu_raw_pct, self.ncpu
+                                        ));
+                                    }
                                 });
                             });
                             // GPU
@@ -2280,6 +2735,15 @@ impl App {
             if !self.collapsed_cats.remove(&c) {
                 self.collapsed_cats.insert(c);
             }
+        }
+        if let Some(k) = toggle_app {
+            if !self.collapsed_apps.remove(&k) {
+                self.collapsed_apps.insert(k);
+            }
+            self.rows_dirty = true;
+        }
+        if let Some(gi) = kill_group {
+            self.request_kill_app(gi);
         }
         if let Some((pid, tree)) = kill {
             self.request_kill(pid, tree);
@@ -2854,9 +3318,10 @@ impl App {
 
                 ui.label(RichText::new("Execução").weak());
                 ui.label(format!(
-                    "iniciado há {}   ·   CPU {:.1}%   ·   {} threads   ·   {} handles   ·   sessão {}",
+                    "iniciado há {}   ·   CPU {:.1}% (último intervalo {:.1}%)   ·   {} threads   ·   {} handles   ·   sessão {}",
                     fmt_age(secs),
                     p.cpu_pct,
+                    p.cpu_raw_pct,
                     p.threads,
                     p.handles,
                     p.session
@@ -3063,7 +3528,7 @@ impl eframe::App for App {
         }
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| self.ui_top(ui));
-        if self.cfg.view != ViewMode::Drains && self.cfg.view != ViewMode::Thermal && self.cfg.view != ViewMode::Boot {
+        if !self.cfg.view.is_addon() {
             egui::TopBottomPanel::bottom("details")
                 .resizable(true)
                 .default_height(150.0)
@@ -3092,6 +3557,15 @@ impl eframe::App for App {
                 });
             });
         });
+        egui::SidePanel::left("addons")
+            .exact_width(100.0)
+            .resizable(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .inner_margin(egui::Margin::symmetric(6, 4)),
+            )
+            .show(ctx, |ui| self.ui_addon_rail(ui));
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(6, 2)))
             .show(ctx, |ui| {
@@ -3137,6 +3611,16 @@ impl eframe::App for App {
                                     if self.cfg.confirm_kill { self.pending = Some(req); } else { self.execute_kill(req); }
                                 }
                             }
+                        }
+                    }
+                } else if self.cfg.view == ViewMode::Screens {
+                    let procs = std::mem::take(&mut self.procs);
+                    let evs = self.screens.ui(ui, &procs, &mut self.cfg);
+                    self.procs = procs;
+                    for ev in evs {
+                        match ev {
+                            ScreenOut::Toast(m, err) => self.toast(m, err),
+                            ScreenOut::SaveCfg => self.cfg_dirty = true,
                         }
                     }
                 } else if self.cfg.view == ViewMode::Thermal {

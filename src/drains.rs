@@ -1,4 +1,4 @@
-//! Visão "Ralos": Defender, serviços dispensáveis e apps de sistema.
+//! Visão "Desperdício": Defender, serviços dispensáveis e apps de sistema.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -228,7 +228,7 @@ impl Drains {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Ralos do Windows").strong().size(16.0));
+                ui.label(RichText::new("Desperdício do Windows").strong().size(16.0));
                 ui.label(RichText::new("— o que consome RAM/CPU sem você pedir, e o que dá para fazer a respeito").color(muted));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("Atualizar").clicked() {

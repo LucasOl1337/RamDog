@@ -28,9 +28,12 @@ use windows::Win32::System::ProcessStatus::{GetPerformanceInfo, PERFORMANCE_INFO
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, TerminateProcess,
-    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, PROCESS_VM_READ,
+    GetCurrentProcess, GetSystemTimes, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW,
+    TerminateProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    PROCESS_VM_READ,
 };
+#[cfg(windows)]
+use windows::Win32::Foundation::FILETIME;
 #[cfg(windows)]
 use windows::Win32::UI::Shell::IsUserAnAdmin;
 
@@ -138,7 +141,12 @@ pub struct ProcInfo {
     pub session: u32,
     /// FILETIME (100 ns desde 1601)
     pub create_time: i64,
+    /// % de CPU (todos os núcleos = 100%) já suavizada — é o que a coluna mostra e o que
+    /// a ordenação usa. Ver `CPU_EMA_TAU`.
     pub cpu_pct: f32,
+    /// A mesma medida sem suavização, do último intervalo. Só aparece no detalhe/tooltip:
+    /// serve para conferir um pico que a média ainda está subindo para alcançar.
+    pub cpu_raw_pct: f32,
     /// Bytes/s de disco (leitura + escrita), delta entre amostras.
     pub disk_bps: f64,
     /// % de uso de GPU somado entre engines (preenchido por `gpu::Gpu`).
@@ -231,11 +239,26 @@ struct StaticInfo {
     launcher: Launcher,
 }
 
+/// Constante de tempo da média móvel da coluna CPU, em segundos.
+///
+/// O valor cru de um intervalo de 1 s é honesto e ilegível: qualquer processo real
+/// alterna entre rajada e espera, então a coluna piscava 0 → 14 → 2 → 9 e a lista se
+/// reordenava inteira a cada amostra — dava para ver que *alguém* estava comendo CPU,
+/// nunca *quem*. Com τ = 1 s a média chega a ~63% do valor novo na primeira amostra e a
+/// ~95% na terceira: rápido o bastante para um pico aparecer, lento o bastante para o
+/// topo da lista parar quieto o tempo de você ler.
+#[cfg(windows)]
+const CPU_EMA_TAU: f64 = 1.0;
+
 #[cfg(windows)]
 #[derive(Clone, Copy)]
 struct CpuSample {
     total_100ns: i64,
+    /// Ciclos de CPU realmente gastos pelo processo (`CycleTime` do kernel).
+    cycles: u64,
     io_bytes: u64,
+    /// Última média móvel, para o próximo passo do EMA.
+    ema: f32,
     at: Instant,
 }
 
@@ -243,8 +266,17 @@ struct CpuSample {
 pub struct Sampler {
     statics: HashMap<(u32, i64), StaticInfo>,
     cpu_prev: HashMap<(u32, i64), CpuSample>,
+    /// `kernel + user` da última leitura de `GetSystemTimes` — a capacidade total de CPU
+    /// contabilizada pelo kernel, que é o denominador de todo o cálculo abaixo.
+    sys_prev: Option<u64>,
+    last_at: Option<Instant>,
     ncpu: f64,
     buf: Vec<u8>,
+}
+
+#[cfg(windows)]
+fn ft(f: FILETIME) -> u64 {
+    ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64
 }
 
 #[cfg(windows)]
@@ -256,18 +288,42 @@ impl Sampler {
         Self {
             statics: HashMap::new(),
             cpu_prev: HashMap::new(),
+            sys_prev: None,
+            last_at: None,
             ncpu,
             buf: vec![0u8; 512 * 1024],
+        }
+    }
+
+    /// Quanto tempo-de-CPU o kernel contabilizou desde a amostra anterior, em unidades de
+    /// 100 ns somadas sobre todos os núcleos (o `kernel` de `GetSystemTimes` já inclui o
+    /// ocioso, então `kernel + user` é a capacidade total, não a ocupada).
+    ///
+    /// Serve de denominador no lugar de `núcleos × relógio de parede`. A diferença
+    /// aparece justo na hora que importa: quando a máquina está afogada a nossa thread
+    /// acorda atrasada, o relógio de parede conta esse atraso e o denominador incha,
+    /// diluindo o culpado exatamente quando você foi olhar quem era.
+    fn capacity_delta(&mut self) -> Option<u64> {
+        unsafe {
+            let (mut idle, mut kern, mut user) =
+                (FILETIME::default(), FILETIME::default(), FILETIME::default());
+            if GetSystemTimes(Some(&mut idle), Some(&mut kern), Some(&mut user)).is_err() {
+                return None;
+            }
+            let total = ft(kern) + ft(user);
+            let prev = self.sys_prev.replace(total);
+            prev.and_then(|p| total.checked_sub(p)).filter(|d| *d > 0)
         }
     }
 
     pub fn sample(&mut self) -> Vec<ProcInfo> {
         let now = Instant::now();
         let raw = self.query_raw();
+        let cpu = self.cpu_shares(&raw, now);
         let mut out: Vec<ProcInfo> = Vec::with_capacity(raw.len());
         let mut seen: HashMap<(u32, i64), ()> = HashMap::with_capacity(raw.len());
 
-        for r in &raw {
+        for (i, r) in raw.iter().enumerate() {
             let key = (r.pid, r.create_time);
             seen.insert(key, ());
             let st = match self.statics.get(&key) {
@@ -279,20 +335,28 @@ impl Sampler {
                 }
             };
             let total = r.user_time + r.kernel_time;
-            let (cpu_pct, disk_bps) = match self.cpu_prev.get(&key) {
+            let (cpu_raw_pct, cpu_pct) = cpu[i];
+            let disk_bps = match self.cpu_prev.get(&key) {
                 Some(prev) => {
                     let dt = now.duration_since(prev.at).as_secs_f64();
                     if dt > 0.0 {
-                        let d = (total - prev.total_100ns).max(0) as f64 / 1e7;
-                        let io = r.io_bytes.saturating_sub(prev.io_bytes) as f64 / dt;
-                        (((d / dt) / self.ncpu * 100.0) as f32, io)
+                        r.io_bytes.saturating_sub(prev.io_bytes) as f64 / dt
                     } else {
-                        (0.0, 0.0)
+                        0.0
                     }
                 }
-                None => (0.0, 0.0),
+                None => 0.0,
             };
-            self.cpu_prev.insert(key, CpuSample { total_100ns: total, io_bytes: r.io_bytes, at: now });
+            self.cpu_prev.insert(
+                key,
+                CpuSample {
+                    total_100ns: total,
+                    cycles: r.cycle_time,
+                    io_bytes: r.io_bytes,
+                    ema: cpu_pct,
+                    at: now,
+                },
+            );
 
             let name = if r.name.is_empty() {
                 if r.pid == 4 { "System".into() } else { format!("[pid {}]", r.pid) }
@@ -315,6 +379,7 @@ impl Sampler {
                 session: r.session,
                 create_time: r.create_time,
                 cpu_pct,
+                cpu_raw_pct,
                 disk_bps,
                 gpu_pct: 0.0,
                 launcher: st.launcher,
@@ -335,6 +400,83 @@ impl Sampler {
             }
         }
         out
+    }
+
+    /// `(cru, suavizado)` de CPU para cada entrada de `raw`, na mesma ordem.
+    ///
+    /// Duas decisões que separam este número do delta de `KernelTime + UserTime` que
+    /// estava aqui antes:
+    ///
+    /// 1. **A repartição é por ciclos, não por tempo.** O kernel só sabe cobrar tempo em
+    ///    fatias inteiras de 15,625 ms, e cobra a fatia toda de quem estava rodando no
+    ///    instante do tique. Quem acorda em rajadas de 1 ms leva 0 numa amostra e 15 ms na
+    ///    seguinte — é dessa loteria que vinha o número dançando. `CycleTime` é contado a
+    ///    cada troca de contexto e já vinha de graça no mesmo buffer, apenas descartado.
+    /// 2. **O total repartido é o tempo medido, não os ciclos.** Ciclo não converte para
+    ///    porcentagem: o mesmo ciclo vale menos num E-core e menos ainda com o clock
+    ///    baixo. Então a soma a distribuir vem do relógio (`Σ tempo / capacidade`) e os
+    ///    ciclos só dizem *como* dividir essa soma entre os processos.
+    ///
+    /// O que morreu entre as duas amostras fica de fora dos dois lados da conta, e por
+    /// isso não é redistribuído: se um `cl.exe` queimou 30% e saiu, ninguém herda esses
+    /// 30% — eles somem da lista, como devem, e a diferença para o medidor do topo
+    /// continua sendo o que a lista honestamente não sabe explicar.
+    fn cpu_shares(&mut self, raw: &[RawProc], now: Instant) -> Vec<(f32, f32)> {
+        let capacity = self.capacity_delta().map(|d| d as f64).unwrap_or_else(|| {
+            // `GetSystemTimes` falhou: cai no relógio de parede × núcleos.
+            let dt = self.last_at.map(|t| now.duration_since(t).as_secs_f64()).unwrap_or(0.0);
+            dt * self.ncpu * 1e7
+        });
+        let dt_wall = self.last_at.map(|t| now.duration_since(t).as_secs_f64()).unwrap_or(0.0);
+        self.last_at = Some(now);
+
+        // Deltas de quem existe nas duas amostras. Processo novo entra com zero: sem o
+        // instante anterior não há taxa nenhuma para medir.
+        let mut d_time: Vec<i64> = Vec::with_capacity(raw.len());
+        let mut d_cycles: Vec<u64> = Vec::with_capacity(raw.len());
+        let mut sum_time: i64 = 0;
+        let mut sum_cycles: u128 = 0;
+        for r in raw {
+            let (dt, dc) = match self.cpu_prev.get(&(r.pid, r.create_time)) {
+                Some(prev) => (
+                    (r.user_time + r.kernel_time - prev.total_100ns).max(0),
+                    r.cycle_time.saturating_sub(prev.cycles),
+                ),
+                None => (0, 0),
+            };
+            sum_time += dt;
+            sum_cycles += dc as u128;
+            d_time.push(dt);
+            d_cycles.push(dc);
+        }
+
+        if capacity <= 0.0 {
+            return vec![(0.0, 0.0); raw.len()];
+        }
+        // O quanto da máquina os processos vivos nas duas pontas consumiram, somados.
+        let matched_pct = (sum_time as f64 / capacity * 100.0).clamp(0.0, 100.0);
+        // Passo do EMA para este intervalo. Amarrado ao tempo, não à contagem de amostras:
+        // trocar o intervalo de 0,5 s para 5 s não pode mudar o quanto a coluna alisa.
+        let alpha = if dt_wall > 0.0 { 1.0 - (-dt_wall / CPU_EMA_TAU).exp() } else { 1.0 };
+
+        (0..raw.len())
+            .map(|i| {
+                let pct = if sum_cycles > 0 {
+                    (d_cycles[i] as f64 / sum_cycles as f64 * matched_pct) as f32
+                } else {
+                    // Sem `CycleTime` (Windows antigo ou máquina virtual que zera o campo):
+                    // o tempo cru ainda dá a resposta certa, só mais granulada.
+                    (d_time[i] as f64 / capacity * 100.0) as f32
+                };
+                let ema = match self.cpu_prev.get(&(raw[i].pid, raw[i].create_time)) {
+                    // Processo já conhecido: continua a média de onde ela estava.
+                    Some(prev) => prev.ema + (pct - prev.ema) * alpha as f32,
+                    // Primeira vez que o vemos: `pct` é 0 e a média nasce aí mesmo.
+                    None => pct,
+                };
+                (pct, ema)
+            })
+            .collect()
     }
 
     fn query_raw(&mut self) -> Vec<RawProc> {
@@ -385,6 +527,7 @@ impl Sampler {
                         create_time: e.create_time,
                         user_time: e.user_time,
                         kernel_time: e.kernel_time,
+                        cycle_time: e.cycle_time,
                         io_bytes: (e.read_transfer_count.max(0) + e.write_transfer_count.max(0)) as u64,
                     });
                 }
@@ -412,6 +555,9 @@ struct RawProc {
     create_time: i64,
     user_time: i64,
     kernel_time: i64,
+    /// Ciclos de CPU do processo. Contado a cada troca de contexto, sem a granularidade
+    /// de 15,625 ms do tempo de kernel/usuário.
+    cycle_time: u64,
     io_bytes: u64,
 }
 

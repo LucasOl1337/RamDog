@@ -83,6 +83,9 @@ impl Sampler {
                 session: 0,
                 create_time,
                 cpu_pct,
+                // O `sysinfo` já entrega uma taxa por intervalo, não um contador cru; sem
+                // um segundo número para comparar, cru e suavizado são o mesmo aqui.
+                cpu_raw_pct: cpu_pct,
                 disk_bps,
                 gpu_pct: 0.0,
                 launcher,

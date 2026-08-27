@@ -24,6 +24,10 @@ pub struct Config {
     pub mem_metric: MemMetric,
     /// Mostrar as linhas sintéticas de kernel/compartilhado no topo da lista.
     pub show_kernel_rows: bool,
+    /// Na visão Lista, juntar os processos do mesmo executável numa linha só, que abre.
+    /// Sem isto o Chrome com 30 renderizadores fica 30 linhas de 3% e some do topo,
+    /// mesmo sendo o maior consumidor da máquina.
+    pub group_apps: bool,
     /// Modo mini: HUD compacto, sem decoração de janela, só os medidores do topo.
     /// Persistido para o app reabrir no modo em que foi fechado.
     pub mini: bool,
@@ -32,6 +36,46 @@ pub struct Config {
     /// Presets da Partida: nome do preset → (id da entrada → deve estar ativa).
     /// Só entradas que dão para alternar entram; o resto não teria como ser restaurado.
     pub boot_presets: BTreeMap<String, BTreeMap<String, bool>>,
+    /// Cenários da aba Telas: nome → janelas com monitor e retângulo alvo.
+    pub screen_presets: BTreeMap<String, ScreenPreset>,
+    /// Última grade escolhida na aba Telas (id em `screens::GRIDS`).
+    pub screen_grid: String,
+    /// Arrastar uma janela no mapa encaixa na zona da grade em vez de mover livre.
+    pub screen_snap: bool,
+}
+
+/// Um cenário de trabalho: as janelas que ele quer na tela e onde cada uma fica.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ScreenPreset {
+    pub slots: Vec<ScreenSlot>,
+}
+
+/// Uma janela dentro de um cenário.
+///
+/// A posição é guardada em fração da área útil do monitor (0..1), não em pixel: assim o
+/// cenário sobrevive a trocar de resolução, a plugar o notebook numa TV e a mudar a escala
+/// do Windows. O monitor é índice na ordem estável por posição, da esquerda para a direita.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ScreenSlot {
+    /// Caminho completo do executável. É o que abre quando a janela não existe.
+    pub exe: String,
+    /// Argumentos da abertura (uma linha, com aspas se precisar).
+    pub args: String,
+    /// Rótulo na lista. Vazio = nome do arquivo do exe.
+    pub label: String,
+    pub monitor: usize,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// Trecho do título, para escolher entre várias janelas do mesmo programa.
+    /// Vazio = a primeira janela livre daquele exe serve.
+    pub title_match: String,
+    /// Abrir o programa se não houver janela. Desligado = o cenário só reposiciona
+    /// o que já estiver aberto.
+    pub launch: bool,
 }
 
 /// Qual das três medidas de memória a coluna RAM exibe.
@@ -93,6 +137,13 @@ impl MemMetric {
     }
 }
 
+/// As visões do app, em dois grupos.
+///
+/// `CORE` é o que o RamDog é — processo, RAM e CPU — e mora nas abas do topo, junto da
+/// busca e dos filtros que só fazem sentido ali. `ADDONS` são assuntos vizinhos (o que sobe
+/// no boot, o que o Windows gasta sozinho, temperatura, organização de telas): cada um tem
+/// sua própria tela inteira e nada a ver com a busca de processo, então vive num rail
+/// lateral em vez de disputar espaço com as abas.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub enum ViewMode {
     List,
@@ -101,6 +152,61 @@ pub enum ViewMode {
     Boot,
     Drains,
     Thermal,
+    Screens,
+}
+
+impl ViewMode {
+    pub const CORE: [ViewMode; 3] = [ViewMode::List, ViewMode::Tree, ViewMode::Category];
+    pub const ADDONS: [ViewMode; 4] =
+        [ViewMode::Boot, ViewMode::Drains, ViewMode::Thermal, ViewMode::Screens];
+
+    pub fn is_addon(self) -> bool {
+        matches!(self, ViewMode::Boot | ViewMode::Drains | ViewMode::Thermal | ViewMode::Screens)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ViewMode::List => "Lista",
+            ViewMode::Tree => "Árvore",
+            ViewMode::Category => "Categorias",
+            ViewMode::Boot => "Partida",
+            ViewMode::Drains => "Desperdício",
+            ViewMode::Thermal => "Térmico",
+            ViewMode::Screens => "Telas",
+        }
+    }
+
+    /// Glifo do rail. Só BMP — o fallback é a Segoe UI Symbol, que cobre estes quatro.
+    pub fn icon(self) -> &'static str {
+        match self {
+            ViewMode::Boot => "⚡",
+            ViewMode::Drains => "⚠",
+            ViewMode::Thermal => "♨",
+            ViewMode::Screens => "▦",
+            _ => "",
+        }
+    }
+
+    pub fn tip(self) -> &'static str {
+        match self {
+            ViewMode::List => "Todos os processos, um por linha",
+            ViewMode::Tree => "Pai → filhos, com a RAM da subárvore",
+            ViewMode::Category => "Agrupado por categoria",
+            ViewMode::Boot => concat!(
+                "Tudo que sobe com o PC — registro, pasta Iniciar, tarefas, serviços. ",
+                "Sem o recorte do Gerenciador de Tarefas"
+            ),
+            ViewMode::Drains => concat!(
+                "O que o Windows gasta sem você pedir: Defender, serviços dispensáveis ",
+                "e apps de sistema"
+            ),
+            ViewMode::Thermal => "Sensores, controle de fans e ESTABILIZAR — o TempHUD dentro do RamDog",
+            ViewMode::Screens => concat!(
+                "Monitores, janelas e cenários: arraste janelas no mapa, encaixe na grade ",
+                "e abra vários apps já posicionados"
+            ),
+        }
+    }
 }
 
 impl Default for Config {
@@ -115,9 +221,13 @@ impl Default for Config {
             show_system: true,
             mem_metric: MemMetric::WorkingSet,
             show_kernel_rows: true,
+            group_apps: true,
             mini: false,
             mini_on_top: true,
             boot_presets: BTreeMap::new(),
+            screen_presets: BTreeMap::new(),
+            screen_grid: String::new(),
+            screen_snap: true,
         }
     }
 }

@@ -1,4 +1,4 @@
-//! "Ralos do Windows": serviços dispensáveis, Defender, apps de inicialização e apps de sistema.
+//! Desperdício do Windows: serviços dispensáveis, Defender, apps de inicialização e apps de sistema.
 //! Leituras são diretas (SCM / registro); ações que exigem admin rodam via PowerShell elevado
 //! (UAC) numa thread, devolvendo o resultado por canal.
 

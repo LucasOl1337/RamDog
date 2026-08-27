@@ -19,6 +19,11 @@ mod knowledge;
 mod metrics;
 mod procs;
 mod sampler;
+#[cfg(windows)]
+mod screens;
+#[cfg(not(windows))]
+#[path = "screens_stub.rs"]
+mod screens;
 mod signature;
 #[cfg(windows)]
 mod sys;
