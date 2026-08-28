@@ -15,15 +15,9 @@ pub struct Config {
     /// Override manual de categoria por nome de executável (minúsculo, com .exe).
     pub overrides: BTreeMap<String, Category>,
     pub refresh_ms: u64,
-    pub confirm_kill: bool,
     /// Ocultar processos com menos que X MB (na métrica escolhida em `mem_metric`).
     pub min_mb: u32,
     pub view: ViewMode,
-    /// Addons com janela aberta, na ordem de abertura. Fecha o RamDog com Telas aberto e
-    /// ele volta com Telas aberto — janela dedicada que some no fim do dia não é área de
-    /// trabalho, é aba com outro nome.
-    #[serde(default)]
-    pub open_addons: Vec<ViewMode>,
     pub show_system: bool,
     /// Qual número a coluna RAM mostra. Ver `MemMetric`.
     pub mem_metric: MemMetric,
@@ -147,8 +141,8 @@ impl MemMetric {
 /// `CORE` é o que o RamDog é — processo, RAM e CPU — e mora nas abas do topo, junto da
 /// busca e dos filtros que só fazem sentido ali. `ADDONS` são assuntos vizinhos (o que sobe
 /// no boot, o que o Windows gasta sozinho, temperatura, organização de telas): cada um tem
-/// sua própria janela e nada a ver com a busca de processo, e são abertos por um grupo de
-/// ícones ao lado das abas — clicar ali abre uma janela, não troca a visão desta.
+/// sua própria tela inteira e nada a ver com a busca de processo, então são botões com nome
+/// no bloco de cima, longe das abas de processo, em vez de disputarem espaço com elas.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub enum ViewMode {
     List,
@@ -181,17 +175,8 @@ impl ViewMode {
         }
     }
 
-    /// Tamanho inicial da janela do addon. Telas precisa de largura para o mapa dos
-    /// monitores caber em escala; Térmico é uma lista curta de sensores e ficaria oco.
-    pub fn window_size(self) -> [f32; 2] {
-        match self {
-            ViewMode::Screens => [1080.0, 760.0],
-            ViewMode::Thermal => [620.0, 620.0],
-            _ => [960.0, 700.0],
-        }
-    }
-
-    /// Glifo do addon. Só BMP — o fallback é a Segoe UI Symbol, que cobre estes quatro.
+    /// Glifo do addon, desenhado antes do nome no botão. Só BMP — o fallback é a
+    /// Segoe UI Symbol, que cobre estes quatro.
     pub fn icon(self) -> &'static str {
         match self {
             ViewMode::Boot => "⚡",
@@ -230,10 +215,8 @@ impl Default for Config {
             locked: BTreeSet::new(),
             overrides: BTreeMap::new(),
             refresh_ms: 1000,
-            confirm_kill: true,
             min_mb: 0,
             view: ViewMode::List,
-            open_addons: Vec::new(),
             show_system: true,
             mem_metric: MemMetric::WorkingSet,
             show_kernel_rows: true,

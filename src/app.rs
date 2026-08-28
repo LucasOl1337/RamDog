@@ -187,12 +187,6 @@ struct MemBreakdown {
     kernel_ok: bool,
 }
 
-struct KillReq {
-    pids: Vec<(u32, String, u64)>,
-    title: String,
-    tree: bool,
-}
-
 pub struct App {
     cfg: Config,
     cfg_dirty: bool,
@@ -233,9 +227,6 @@ pub struct App {
     usage: usage::Tracker,
 
     search: String,
-    /// Busca da janela do Partida. Separada da de cima porque as duas janelas filtram
-    /// listas diferentes e ficam visíveis ao mesmo tempo.
-    addon_search: String,
     sort: SortKey,
     sort_desc: bool,
     cat_enabled: HashSet<Category>,
@@ -248,7 +239,6 @@ pub struct App {
     groups: Vec<AppGroup>,
     /// Apps recolhidos, por chave de `AppGroup`.
     collapsed_apps: HashSet<String>,
-    pending: Option<KillReq>,
     status: Option<(Instant, String, bool)>,
     is_admin: bool,
     scroll_to_selected: bool,
@@ -261,9 +251,9 @@ pub struct App {
     drains: Drains,
     boot: Boot,
     screens: Screens,
-    /// Onde cada janela de addon nasceu. Fixado na abertura: recalcular todo frame faria
-    /// o eframe reposicionar a janela e arrastar o RamDog levaria os addons junto.
-    addon_pos: Vec<(ViewMode, egui::Pos2)>,
+    /// Última visão de processo (Lista/Árvore/Categorias) antes de entrar num addon.
+    /// Clicar de novo no addon aceso volta para ela, em vez de cair sempre em Lista.
+    last_core: ViewMode,
     /// Visão Térmico: valor local de slider por fan + quando o usuário mexeu pela última vez.
     /// Por ~2.5s depois de mexer, o slider mostra o valor local em vez do reportado pelo
     /// helper — sem isso o slider "volta" enquanto o helper ainda não aplicou/reportou.
@@ -283,13 +273,11 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         setup_style(&cc.egui_ctx);
-        let mut cfg = Config::load();
+        let cfg = Config::load();
         let mini = cfg.mini;
-        // Config gravada por versão antiga pode trazer um addon aqui. Addon agora é janela,
-        // não visão: sem esta correção a janela principal abriria sem tabela nenhuma.
-        if cfg.view.is_addon() {
-            cfg.view = ViewMode::List;
-        }
+        // Abrir direto num addon é legítimo (foi assim que fechou), mas o botão de voltar
+        // precisa de um destino desde o primeiro frame.
+        let last_core = if cfg.view.is_addon() { ViewMode::List } else { cfg.view };
         let is_admin = procs::is_admin();
         let sampler = sampler::spawn(cc.egui_ctx.clone(), cfg.refresh_ms);
         let (sig_tx, sig_rx) = std::sync::mpsc::channel();
@@ -321,7 +309,6 @@ impl App {
             icons: HashMap::new(),
             usage: usage::Tracker::load(),
             search: String::new(),
-            addon_search: String::new(),
             sort: SortKey::Ram,
             sort_desc: true,
             cat_enabled: Category::ALL.iter().copied().collect(),
@@ -331,7 +318,6 @@ impl App {
             collapsed_cats: HashSet::new(),
             groups: Vec::new(),
             collapsed_apps: HashSet::new(),
-            pending: None,
             status: None,
             is_admin,
             scroll_to_selected: false,
@@ -343,7 +329,7 @@ impl App {
             drains: Drains::new(),
             boot: Boot::new(),
             screens: Screens::new(),
-            addon_pos: Vec::new(),
+            last_core,
             thermal_edit: HashMap::new(),
             stab_pending: None,
             // `main` já abriu a janela no modo lido da config — nada a aplicar no 1º frame.
@@ -950,7 +936,7 @@ impl App {
             _ => false,
         };
         let key = self.rows_key();
-        let can_freeze = hovering && !self.rows_dirty && key == self.cached_key && self.pending.is_none();
+        let can_freeze = hovering && !self.rows_dirty && key == self.cached_key;
         if can_freeze {
             if self.cached_rows.is_some() {
                 // mantém a ordem; remove só o que morreu ou deixou de passar no filtro
@@ -989,6 +975,11 @@ impl App {
 
     // ---------- ações ----------
 
+    /// Encerra um processo (e, com `tree`, os descendentes dele) na hora.
+    ///
+    /// Não há caixa de confirmação: o RamDog mostra quanto cada linha come antes do clique,
+    /// e um diálogo que se responde no automático não protege ninguém — só atrasa. O lock
+    /// é a proteção de verdade, e ele é verificado aqui.
     fn request_kill(&mut self, pid: u32, tree: bool) {
         let Some(p) = self.proc(pid).cloned() else { return };
         let mut pids = vec![];
@@ -1009,25 +1000,7 @@ impl App {
                 }
             }
         }
-        let total: u64 = pids.iter().map(|x| x.2).sum();
-        let title = if tree {
-            format!(
-                "Finalizar árvore de {} (PID {}): {} processo(s), {}{}",
-                p.name,
-                p.pid,
-                pids.len(),
-                fmt_bytes(total),
-                if skipped_locked > 0 { format!(" — {skipped_locked} protegido(s) serão poupados") } else { String::new() }
-            )
-        } else {
-            format!("Finalizar {} (PID {}, {})?", p.name, p.pid, fmt_bytes(self.mem_of(&p)))
-        };
-        let req = KillReq { pids, title, tree };
-        if self.cfg.confirm_kill {
-            self.pending = Some(req);
-        } else {
-            self.execute_kill(req);
-        }
+        self.execute_kill(pids, skipped_locked);
     }
 
     /// Encerra todos os processos de um app agrupado.
@@ -1052,26 +1025,16 @@ impl App {
             self.toast(format!("{name}: todos os {count} processos estão protegidos (lock)"), true);
             return;
         }
-        let total: u64 = pids.iter().map(|x| x.2).sum();
-        let title = format!(
-            "Finalizar {name}: {} processo(s), {}{}",
-            pids.len(),
-            fmt_bytes(total),
-            if skipped > 0 { format!(" — {skipped} protegido(s) serão poupados") } else { String::new() }
-        );
-        let req = KillReq { pids, title, tree: false };
-        if self.cfg.confirm_kill {
-            self.pending = Some(req);
-        } else {
-            self.execute_kill(req);
-        }
+        self.execute_kill(pids, skipped);
     }
 
-    fn execute_kill(&mut self, req: KillReq) {
+    /// Mata a lista e resume o estrago na barra de status. `skipped_locked` são os que o
+    /// lock poupou pelo caminho — dizer só "3 finalizados" quando eram 5 esconde o motivo.
+    fn execute_kill(&mut self, pids: Vec<(u32, String, u64)>, skipped_locked: usize) {
         let mut ok = 0;
         let mut freed = 0u64;
         let mut errs: Vec<String> = Vec::new();
-        for (pid, name, ram) in &req.pids {
+        for (pid, name, ram) in &pids {
             match procs::kill(*pid) {
                 Ok(()) => {
                     ok += 1;
@@ -1081,9 +1044,14 @@ impl App {
             }
         }
         self.sampler.force.store(true, Ordering::Relaxed);
+        let poupados = if skipped_locked > 0 {
+            format!(", {skipped_locked} protegido(s) poupado(s)")
+        } else {
+            String::new()
+        };
         if errs.is_empty() {
             self.toast(
-                format!("{} processo(s) finalizado(s), ~{} liberados", ok, fmt_bytes(freed)),
+                format!("{ok} processo(s) finalizado(s), ~{} liberados{poupados}", fmt_bytes(freed)),
                 false,
             );
         } else {
@@ -1091,9 +1059,9 @@ impl App {
             if errs.len() > 1 {
                 msg.push_str(&format!(" (+{})", errs.len() - 1));
             }
+            msg.push_str(&poupados);
             self.toast(msg, true);
         }
-        let _ = req.tree;
     }
 
     fn toggle_lock(&mut self, name_lower: &str) {
@@ -1695,7 +1663,7 @@ impl App {
             // Só desenha os controles aqui se couberem de verdade: o layout right_to_left
             // não clipa, e o que não cabe transborda por cima do medidor de disco.
             let space = ui.available_width();
-            if space >= self.top_controls_w() {
+            if space >= self.top_controls_w(ui) {
                 ui.allocate_ui_with_layout(Vec2::new(space, TILE_H), Layout::right_to_left(Align::Center), |ui| {
                     self.top_controls(ui);
                 });
@@ -1714,17 +1682,34 @@ impl App {
         self.ui_filters(ui);
     }
 
-    /// Largura mínima do bloco de controles do topo. Muda com o botão de elevação.
-    fn top_controls_w(&self) -> f32 {
-        if self.is_admin {
-            410.0
+    /// Largura mínima do bloco de controles do topo, medida de verdade.
+    ///
+    /// Os rótulos dos addons mudam de largura com a fonte e com a escala do Windows, e um
+    /// número chutado aqui é exatamente o que faz o bloco transbordar por cima do medidor
+    /// de disco (o layout `right_to_left` não clipa).
+    fn top_controls_w(&self, ui: &egui::Ui) -> f32 {
+        let font = egui::FontId::proportional(12.5);
+        let text_w = |s: String| {
+            ui.fonts(|f| f.layout_no_wrap(s, font.clone(), Color32::WHITE).size().x)
+        };
+        // Botão = texto + os 9 px de `button_padding` de cada lado + o espaço até o vizinho.
+        let btn = |s: String| text_w(s) + 18.0 + 6.0;
+        let addons: f32 = ViewMode::ADDONS
+            .iter()
+            .map(|v| btn(format!("{} {}", v.icon(), v.label())))
+            .sum();
+        let admin = if self.is_admin {
+            text_w("ADMIN".into()) + 6.0
         } else {
-            440.0
-        }
+            btn("⬆ Admin".into())
+        };
+        // 56 = largura fixa do combo de intervalo; 12 por divisor (6 dele + 6 até o vizinho).
+        addons + btn("⏸ Pausar".into()) + 56.0 + admin + btn("◱ Mini".into()) + 3.0 * 12.0
     }
 
     /// Controles do topo, desenhados da direita para a esquerda: o Mini fica na quina, que
-    /// é onde se procura um controle de janela.
+    /// é onde se procura um controle de janela, e os addons ficam na ponta esquerda do
+    /// bloco, que é a que sobra grudada nos medidores e é lida primeiro.
     fn top_controls(&mut self, ui: &mut egui::Ui) {
         ui.spacing_mut().interact_size.y = CTRL_H;
         ui.spacing_mut().button_padding = Vec2::new(9.0, 2.0);
@@ -1754,15 +1739,6 @@ impl App {
             self.relaunch_as_admin();
         }
         ui.separator();
-        let mut confirm = self.cfg.confirm_kill;
-        if ui
-            .checkbox(&mut confirm, RichText::new("Confirmar kill").size(12.5))
-            .on_hover_text("Pedir confirmação antes de encerrar")
-            .changed()
-        {
-            self.cfg.confirm_kill = confirm;
-            self.cfg_dirty = true;
-        }
         let mut iv = self.cfg.refresh_ms;
         egui::ComboBox::from_id_salt("refresh")
             .selected_text(RichText::new(format!("{:.1}s", iv as f32 / 1000.0)).size(12.5))
@@ -1786,107 +1762,58 @@ impl App {
             paused = !paused;
             self.sampler.paused.store(paused, Ordering::Relaxed);
         }
+        ui.separator();
+        self.ui_addon_buttons(ui);
     }
 
-    /// Os quatro addons, como grupo de ícones ao lado das abas.
+    /// Os quatro addons, com nome escrito, no bloco de controles do topo.
     ///
     /// Partida, Desperdício, Térmico e Telas não são "mais uma visão da lista de
-    /// processos": cada um tem vocabulário próprio e ignora a busca e os filtros do topo.
-    /// Por isso não são abas — clicar aqui abre **janela própria**, e o quadro do RamDog
-    /// continua sendo só RAM e processo. O divisor à esquerda é o que separa "trocar a
-    /// visão desta janela" de "abrir outra janela".
+    /// processos": cada um tem vocabulário próprio e ignora a busca e os filtros. Por isso
+    /// não são abas ao lado de Lista/Árvore/Categorias — ficam aqui em cima, longe delas,
+    /// e clicar troca o conteúdo da janela inteira. Clicar no que já está aberto volta para
+    /// a última visão de processo.
     ///
-    /// Só ícone: com rótulo o grupo precisaria da largura de "Desperdício" e comeria a
-    /// fileira inteira. Nome e explicação vivem no tooltip.
+    /// O nome vem escrito, não só o ícone: quatro glifos que ninguém conhece obrigam a
+    /// passar o mouse em cada um para descobrir o que fazem.
     fn ui_addon_buttons(&mut self, ui: &mut egui::Ui) {
         let mut go: Option<ViewMode> = None;
-        ui.add_space(2.0);
-        ui.separator();
-        ui.add_space(2.0);
         // Botão em repouso invisível: o fundo só aparece no hover e no addon aberto. Sem
-        // isto cada ícone ganha o retângulo cinza padrão e o grupo vira uma fila de caixas.
+        // isto cada um ganha o retângulo cinza padrão e o grupo vira uma fila de caixas.
         ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-        // Só entre os ícones: sem devolver o valor depois, o "Agrupar por app" e o combo de
-        // RAM que vêm em seguida herdam esse aperto e grudam no grupo.
-        let gap = std::mem::replace(&mut ui.spacing_mut().item_spacing.x, 2.0);
-        for v in ViewMode::ADDONS {
-            let on = self.cfg.open_addons.contains(&v);
+        // `right_to_left`: o primeiro desenhado fica mais à direita. Invertido aqui para
+        // que a leitura na tela seja Partida → Desperdício → Térmico → Telas.
+        for v in ViewMode::ADDONS.iter().rev() {
+            let v = *v;
+            let on = self.cfg.view == v;
             let fg = if on { Color32::WHITE } else { MUTED };
-            let mut b = egui::Button::new(RichText::new(v.icon()).size(14.0).color(fg))
-                .stroke(Stroke::NONE)
-                .corner_radius(4.0)
-                .min_size(Vec2::splat(CTRL_H - 4.0));
+            let mut b = egui::Button::new(
+                RichText::new(format!("{} {}", v.icon(), v.label())).size(12.5).color(fg),
+            )
+            .stroke(Stroke::NONE)
+            .corner_radius(4.0);
             if on {
-                b = b.fill(ACCENT_BG);
+                b = b.fill(ACCENT_BG).stroke(Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.7)));
             }
             let tip = if on {
-                format!("{}\n\n{}\n\nJanela aberta. Clique para fechar.", v.label(), v.tip())
+                format!("{}\n\n{}\n\nClique para voltar a {}.", v.label(), v.tip(), self.last_core.label())
             } else {
-                format!("{}\n\n{}\n\nAbre em janela própria.", v.label(), v.tip())
+                format!("{}\n\n{}", v.label(), v.tip())
             };
             if ui.add(b).on_hover_text(tip).clicked() {
                 go = Some(v);
             }
         }
-        ui.spacing_mut().item_spacing.x = gap;
-        ui.add_space(2.0);
         let Some(v) = go else { return };
-        if let Some(i) = self.cfg.open_addons.iter().position(|&x| x == v) {
-            self.cfg.open_addons.remove(i);
+        if self.cfg.view == v {
+            self.cfg.view = self.last_core;
         } else {
-            // Cascata a partir da janela principal, fixada agora: duas janelas abertas
-            // juntas não nascem uma exatamente em cima da outra, e arrastar o RamDog
-            // depois não arrasta as janelas de addon junto.
-            let off = 28.0 * self.cfg.open_addons.len() as f32;
-            let base = ui
-                .ctx()
-                .input(|i| i.viewport().outer_rect)
-                .map_or(egui::pos2(140.0, 140.0), |m| egui::pos2(m.left() + 48.0, m.top() + 48.0));
-            self.addon_pos.retain(|(a, _)| *a != v);
-            self.addon_pos.push((v, base + Vec2::splat(off)));
-            self.cfg.open_addons.push(v);
+            if !self.cfg.view.is_addon() {
+                self.last_core = self.cfg.view;
+            }
+            self.cfg.view = v;
         }
         self.cfg_dirty = true;
-    }
-
-    /// Uma janela nativa por addon aberto, com moldura e botão de fechar do sistema.
-    ///
-    /// `show_viewport_immediate` (e não `_deferred`) porque o corpo do addon precisa de
-    /// `&mut self` — o callback do deferred exige `Send + Sync`.
-    fn ui_addon_windows(&mut self, ctx: &egui::Context) {
-        let mut close: Vec<ViewMode> = Vec::new();
-        for (i, v) in self.cfg.open_addons.clone().into_iter().enumerate() {
-            let id = egui::ViewportId::from_hash_of(("ramdog-addon", v.label()));
-            // Posição só na abertura. Se ela fosse recalculada a cada frame, o eframe veria
-            // um builder diferente e arrastar a janela principal teleportaria os addons.
-            let mut builder = egui::ViewportBuilder::default()
-                .with_title(format!("RamDog — {}", v.label()))
-                .with_inner_size(v.window_size());
-            // Sessão anterior: a config lembra qual addon ficou aberto, não onde ele estava.
-            if !self.addon_pos.iter().any(|(a, _)| *a == v) {
-                let off = 28.0 * i as f32;
-                self.addon_pos.push((v, egui::pos2(140.0 + off, 140.0 + off)));
-            }
-            if let Some((_, p)) = self.addon_pos.iter().find(|(a, _)| *a == v) {
-                builder = builder.with_position(*p);
-            }
-            ctx.show_viewport_immediate(id, builder, |c, _class| {
-                egui::CentralPanel::default()
-                    .frame(
-                        egui::Frame::central_panel(&c.style())
-                            .inner_margin(egui::Margin::symmetric(8, 6)),
-                    )
-                    .show(c, |ui| self.ui_addon_body(ui, v));
-                if c.input(|inp| inp.viewport().close_requested()) {
-                    close.push(v);
-                }
-            });
-        }
-        if !close.is_empty() {
-            self.cfg.open_addons.retain(|v| !close.contains(v));
-            self.addon_pos.retain(|(v, _)| !close.contains(v));
-            self.cfg_dirty = true;
-        }
     }
 
     /// Conteúdo de um addon e o que ele devolve (avisos, pedidos de matar, gravar config).
@@ -1905,21 +1832,22 @@ impl App {
                 }
             }
             ViewMode::Boot => {
-                // Busca própria: a caixa do topo filtra a tabela de processos, que agora
-                // está noutra janela — digitar lá e ver Partida mudar aqui seria mágica.
+                // A fileira de filtros some enquanto um addon está na tela, então o Partida
+                // traz a própria busca — sem ela não há como achar uma entrada numa lista
+                // que tem tudo que sobe com o PC.
                 ui.horizontal(|ui| {
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.addon_search)
+                        egui::TextEdit::singleline(&mut self.search)
                             .hint_text("Buscar nome, comando ou origem…")
                             .desired_width(260.0),
                     );
-                    if !self.addon_search.is_empty() && ui.button("✖").clicked() {
-                        self.addon_search.clear();
+                    if !self.search.is_empty() && ui.button("✖").clicked() {
+                        self.search.clear();
                     }
                 });
                 ui.add_space(4.0);
                 let is_admin = self.is_admin;
-                let search = self.addon_search.clone();
+                let search = self.search.clone();
                 let procs = std::mem::take(&mut self.procs);
                 let evs = self.boot.ui(ui, &procs, &search, is_admin, &mut self.cfg, &self.usage);
                 self.procs = procs;
@@ -1947,7 +1875,7 @@ impl App {
         }
     }
 
-    /// Confirmação de finalizar uma lista de PIDs vinda de um addon.
+    /// Finaliza uma lista de PIDs vinda de um addon.
     fn request_kill_many(&mut self, pids: &[u32]) {
         let list: Vec<(u32, String, u64)> = pids
             .iter()
@@ -1956,18 +1884,67 @@ impl App {
         if list.is_empty() {
             return;
         }
-        let title = format!("Finalizar {} processo(s)?", list.len());
-        let req = KillReq { pids: list, title, tree: false };
-        if self.cfg.confirm_kill {
-            self.pending = Some(req);
-        } else {
-            self.execute_kill(req);
+        self.execute_kill(list, 0);
+    }
+
+    /// Largura do par de controles da coluna RAM, para decidir se ele cabe na fileira.
+    fn mem_controls_w(&self, ui: &egui::Ui) -> f32 {
+        let font = egui::FontId::proportional(12.0);
+        let text_w = |s: &str| {
+            ui.fonts(|f| f.layout_no_wrap(s.to_owned(), font.clone(), Color32::WHITE).size().x)
+        };
+        // 104 = largura fixa do combo; 74 = o DragValue com "4096 MB"; 10 = o vão do meio.
+        text_w("coluna RAM mostra") + 104.0 + 10.0 + text_w("ocultar abaixo de") + 74.0 + 4.0 * 6.0
+    }
+
+    /// O que a coluna RAM mostra e a partir de quanto a linha aparece.
+    ///
+    /// Desenhado da direita para a esquerda, encostado na quina: soltos no meio da fileira,
+    /// "RAM:" e "mín." pareciam mais dois medidores que caíram ali por engano. Cada um vem
+    /// apresentado pelo que faz, não pela unidade que usa.
+    fn ui_mem_controls(&mut self, ui: &mut egui::Ui) {
+        let mut min_mb = self.cfg.min_mb;
+        if ui
+            .add(egui::DragValue::new(&mut min_mb).range(0..=4096).speed(5).suffix(" MB"))
+            .on_hover_text("Arraste ou digite. 0 mostra tudo.")
+            .changed()
+        {
+            self.cfg.min_mb = min_mb;
+            self.cfg_dirty = true;
         }
+        ui.label(RichText::new("ocultar abaixo de").color(MUTED).size(12.0))
+            .on_hover_text("Esconde os processos menores que isto, na medida escolhida ao lado");
+        ui.add_space(10.0);
+        // O default é working set: o privado (padrão do Gerenciador de Tarefas) esconde tudo
+        // que é compartilhado e faz a lista somar menos de um terço do "em uso" do topo.
+        let mut metric = self.cfg.mem_metric;
+        egui::ComboBox::from_id_salt("mem_metric")
+            .selected_text(metric.label())
+            .width(104.0)
+            .show_ui(ui, |ui| {
+                for m in MemMetric::ALL {
+                    ui.selectable_value(&mut metric, m, m.label()).on_hover_text(m.tip());
+                }
+            });
+        if metric != self.cfg.mem_metric {
+            self.cfg.mem_metric = metric;
+            self.cfg_dirty = true;
+            self.rows_dirty = true;
+        }
+        ui.label(RichText::new("coluna RAM mostra").color(MUTED).size(12.0))
+            .on_hover_text("Qual das três medidas de memória vai na coluna RAM da tabela");
     }
 
     /// Linha 2 do topo: busca, seletor de visão, chips de categoria e métrica de RAM.
     fn ui_filters(&mut self, ui: &mut egui::Ui) {
+        // Busca, abas e chips de categoria filtram a tabela de processos. Num addon não há
+        // tabela: deixar a fileira ali seria controle que não controla nada, roubando as
+        // duas fileiras de altura que o addon usa para mostrar o conteúdo dele.
+        if self.cfg.view.is_addon() {
+            return;
+        }
         let totals = self.cat_totals();
+        let mut mem_wrapped = false;
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             // Altura única para tudo nesta fileira. Sem isto a busca (TextEdit), as abas
@@ -1999,8 +1976,8 @@ impl App {
                     // exatamente na mesma altura da busca e do combo ao lado.
                     ui.spacing_mut().interact_size.y = CTRL_H - 4.0;
                     // Só as visões de processo. Partida, Desperdício, Térmico e Telas têm
-                    // assunto próprio e abrem em janela separada, no grupo de ícones logo
-                    // à direita — como abas elas só roubavam largura da busca e dos filtros.
+                    // assunto próprio e vivem nos botões do bloco de cima — como abas elas
+                    // só roubavam largura da busca e dos filtros que nem valem para elas.
                     for v in ViewMode::CORE {
                         let on = view == v;
                         let t = RichText::new(v.label())
@@ -2021,7 +1998,6 @@ impl App {
                 self.cfg.view = view;
                 self.cfg_dirty = true;
             }
-            self.ui_addon_buttons(ui);
             if self.cfg.view == ViewMode::Tree {
                 if ui.button("Expandir tudo").clicked() {
                     self.expanded = self.children.keys().copied().collect();
@@ -2051,37 +2027,26 @@ impl App {
                     self.rows_dirty = true;
                 }
             }
-            ui.add_space(8.0);
-            // Qual número a coluna RAM mostra. O default é working set: o privado (padrão do
-            // Gerenciador de Tarefas) esconde tudo que é compartilhado e faz a lista somar
-            // menos de um terço do "em uso" do topo.
-            let mut metric = self.cfg.mem_metric;
-            ui.label(RichText::new("RAM:").color(MUTED).size(12.0));
-            egui::ComboBox::from_id_salt("mem_metric")
-                .selected_text(metric.label())
-                .width(104.0)
-                .show_ui(ui, |ui| {
-                    for m in MemMetric::ALL {
-                        ui.selectable_value(&mut metric, m, m.label()).on_hover_text(m.tip());
-                    }
-                });
-            if metric != self.cfg.mem_metric {
-                self.cfg.mem_metric = metric;
-                self.cfg_dirty = true;
-                self.rows_dirty = true;
-            }
-            ui.add_space(4.0);
-            ui.label(RichText::new("mín.").color(MUTED).size(12.0));
-            let mut min_mb = self.cfg.min_mb;
-            if ui
-                .add(egui::DragValue::new(&mut min_mb).range(0..=4096).speed(5).suffix(" MB"))
-                .on_hover_text("Ocultar processos com menos RAM que isto, na métrica escolhida ao lado")
-                .changed()
-            {
-                self.cfg.min_mb = min_mb;
-                self.cfg_dirty = true;
+            // Igual ao bloco de cima: `right_to_left` não clipa, e o que não couber vaza por
+            // cima do "Agrupar por app" em vez de sumir. Só desenha aqui se couber mesmo.
+            if ui.available_width() >= self.mem_controls_w(ui) {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| self.ui_mem_controls(ui));
+            } else {
+                mem_wrapped = true;
             }
         });
+        if mem_wrapped {
+            ui.add_space(4.0);
+            ui.allocate_ui_with_layout(
+                Vec2::new(ui.available_width(), CTRL_H),
+                Layout::right_to_left(Align::Center),
+                |ui| {
+                    ui.spacing_mut().interact_size.y = CTRL_H;
+                    ui.spacing_mut().button_padding = Vec2::new(9.0, 2.0);
+                    self.ui_mem_controls(ui);
+                },
+            );
+        }
         // Chips em linha própria: antes eles vazavam para uma terceira linha e sobrava
         // "Sistema / Outros" órfãos embaixo.
         ui.add_space(6.0);
@@ -3446,58 +3411,6 @@ impl App {
         }
     }
 
-    fn ui_modal(&mut self, ctx: &egui::Context) {
-        let Some(req) = self.pending.as_ref() else { return };
-        let title = req.title.clone();
-        let list: Vec<String> = req.pids.iter().take(12).map(|(pid, name, ram)| format!("{name}  ({pid})  {}", fmt_bytes(*ram))).collect();
-        let more = req.pids.len().saturating_sub(12);
-        let mut confirm = false;
-        let mut cancel = false;
-        let modal = egui::Modal::new(egui::Id::new("kill_modal")).show(ctx, |ui| {
-            ui.set_width(440.0);
-            ui.heading("Confirmar encerramento");
-            ui.add_space(6.0);
-            ui.label(&title);
-            if list.len() > 1 {
-                ui.add_space(4.0);
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    for l in &list {
-                        ui.label(RichText::new(l).monospace().small());
-                    }
-                    if more > 0 {
-                        ui.label(RichText::new(format!("… e mais {more}")).weak());
-                    }
-                });
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.add(egui::Button::new(RichText::new("Finalizar").color(Color32::WHITE)).fill(Color32::from_rgb(170, 50, 50))).clicked() {
-                    confirm = true;
-                }
-                if ui.button("Cancelar").clicked() {
-                    cancel = true;
-                }
-                ui.label(RichText::new("Enter confirma · Esc cancela").weak().small());
-            });
-        });
-        if modal.should_close() {
-            cancel = true;
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
-            confirm = true;
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            cancel = true;
-        }
-        if confirm {
-            if let Some(req) = self.pending.take() {
-                self.execute_kill(req);
-            }
-        } else if cancel {
-            self.pending = None;
-        }
-    }
-
     /// Conferência: quanto do "em uso" o app consegue atribuir a alguma coisa.
     ///
     /// Existe porque a pergunta natural diante de qualquer monitor de memória é "a lista não
@@ -3605,34 +3518,36 @@ impl eframe::App for App {
         }
 
         // atalhos
-        if self.pending.is_none() {
-            let (del, shift, f5, esc) = ctx.input(|i| {
-                (
-                    i.key_pressed(egui::Key::Delete),
-                    i.modifiers.shift,
-                    i.key_pressed(egui::Key::F5),
-                    i.key_pressed(egui::Key::Escape),
-                )
-            });
-            if del && !ctx.wants_keyboard_input() {
-                if let Some(pid) = self.selected {
-                    self.request_kill(pid, shift);
-                }
+        let (del, shift, f5, esc) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::Delete),
+                i.modifiers.shift,
+                i.key_pressed(egui::Key::F5),
+                i.key_pressed(egui::Key::Escape),
+            )
+        });
+        if del && !ctx.wants_keyboard_input() {
+            if let Some(pid) = self.selected {
+                self.request_kill(pid, shift);
             }
-            if f5 {
-                self.sampler.force.store(true, Ordering::Relaxed);
-            }
-            if esc && !ctx.wants_keyboard_input() {
-                self.selected = None;
-            }
+        }
+        if f5 {
+            self.sampler.force.store(true, Ordering::Relaxed);
+        }
+        if esc && !ctx.wants_keyboard_input() {
+            self.selected = None;
         }
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| self.ui_top(ui));
-        egui::TopBottomPanel::bottom("details")
-            .resizable(true)
-            .default_height(150.0)
-            .min_height(40.0)
-            .show(ctx, |ui| self.ui_details(ui));
+        // O painel de detalhes descreve a linha selecionada da tabela. Num addon não há
+        // tabela nem seleção — ele ficaria como 150 px de espaço vazio.
+        if !self.cfg.view.is_addon() {
+            egui::TopBottomPanel::bottom("details")
+                .resizable(true)
+                .default_height(150.0)
+                .min_height(40.0)
+                .show(ctx, |ui| self.ui_details(ui));
+        }
         egui::TopBottomPanel::bottom("statusbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let shown = self.procs.iter().filter(|p| self.passes(p, &self.search.trim().to_lowercase())).count();
@@ -3651,19 +3566,25 @@ impl eframe::App for App {
                         .on_hover_text("Enquanto o mouse está sobre a tabela a ordem das linhas não muda, para você não clicar no processo errado. Valores continuam atualizando.");
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new("Del: finalizar · Shift+Del: árvore · F5: atualizar · botão direito: menu").weak().small());
+                    // Os atalhos agem sobre a linha selecionada da tabela. Anunciá-los
+                    // dentro de um addon é prometer uma tecla que não faz nada ali.
+                    if !self.cfg.view.is_addon() {
+                        ui.label(RichText::new("Del: finalizar · Shift+Del: árvore · F5: atualizar · botão direito: menu").weak().small());
+                    }
                 });
             });
         });
+        let view = self.cfg.view;
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(6, 2)))
-            .show(ctx, |ui| self.ui_table(ui));
+            .show(ctx, |ui| {
+                if view.is_addon() {
+                    self.ui_addon_body(ui, view);
+                } else {
+                    self.ui_table(ui);
+                }
+            });
 
-        // Depois dos painéis: as janelas de addon são desenhadas dentro deste mesmo frame e
-        // podem mexer em `self` (fechar, pedir kill, sujar a config).
-        self.ui_addon_windows(ctx);
-
-        self.ui_modal(ctx);
         self.ui_status(ctx);
         self.save_cfg_if_dirty();
     }
