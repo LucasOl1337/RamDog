@@ -47,7 +47,9 @@ Este app existe por isso.
 irm https://raw.githubusercontent.com/LucasOl1337/RamDog/main/install.ps1 | iex
 ```
 
-Depois: `ramdog` no terminal, ou o atalho **RamDog** na área de trabalho (UAC = temperatura da CPU).
+Depois: `ramdog` no terminal, ou o atalho **RamDog** na área de trabalho.
+
+O RamDog **pede elevação ao abrir** (um prompt de UAC, por qualquer caminho: atalho, PATH ou clique no exe). É o que destrava a temperatura de CPU/RAM, encerrar serviço e processo de outro usuário, e as ações do Partida e do Desperdício sem um UAC por clique. Quem não tem direito de elevar não fica de fora: o RamDog abre limitado em vez de recusar a subir (`highestAvailable`, não `requireAdministrator`).
 
 **macOS** (Apple Silicon ou Intel):
 
@@ -68,6 +70,11 @@ git clone https://github.com/LucasOl1337/RamDog.git
 cd RamDog
 cargo build --release
 ```
+
+No Windows, o manifesto de elevação só entra no perfil `release` — ele vale para todos os
+alvos do crate, e no binário de teste faria `cargo test` morrer com "a operação solicitada
+requer elevação" antes de rodar um teste. `cargo test` (debug) roda normal; `cargo test
+--release` precisa de sessão elevada.
 
 Windows, helper de temperatura (opcional, [SDK .NET 8](https://dotnet.microsoft.com/download/dotnet/8.0)):
 
@@ -122,7 +129,7 @@ Os slots guardam posição em fração da **área de trabalho** do monitor, nunc
 
 **Os dois SOs**
 
-- Processos de outros usuários: no Windows, **Reabrir como admin**; no macOS, `sudo ramdog` se precisar. A UI nunca inventa número — GPU/temp/disco ausentes aparecem "–".
+- Processos de outros usuários: no Windows já vem resolvido pela elevação de abertura (o botão **Reabrir como admin** só aparece quando ela foi recusada ou o usuário não pode elevar); no macOS, `sudo ramdog` se precisar. A UI nunca inventa número — GPU/temp/disco ausentes aparecem "–".
 - Configuração: Windows `%APPDATA%\RamDog\config.json`; macOS `~/Library/Application Support/RamDog/config.json`.
 
 **Só Windows**

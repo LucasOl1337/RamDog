@@ -79,7 +79,7 @@ if ($env:Path -notlike "*$dest*") {
 
 Write-Host ""
 Write-Host "Instalado em $dest  ($($release.tag_name))"
-Write-Host "Abrir:  ramdog    ou o atalho RamDog no Desktop (UAC = temp da CPU)"
+Write-Host "Abrir:  ramdog    ou o atalho RamDog no Desktop (o RamDog pede elevacao ao abrir)"
 Write-Host ""
 
 $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
