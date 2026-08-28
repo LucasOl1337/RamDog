@@ -1,6 +1,6 @@
 [package]
 name = "ramdog"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "RamDog — gerenciador de processos para Windows e macOS: origem, árvore, categorias, kill e lock"
 
