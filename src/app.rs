@@ -30,7 +30,11 @@ const TOP_BAR_H: f32 = 8.0;
 /// Régua dos medidores do topo, usada igual nos dois modos: um bloco é rótulo +
 /// temperatura, número grande + detalhe, barra. Quatro blocos idênticos alinham sozinhos —
 /// larguras diferentes por medidor eram a origem do topo desalinhado.
-const TILE_W: f32 = 160.0;
+/// Os medidores dividem entre si toda a largura que os controles do topo não usam, dentro
+/// destes limites. Largura fixa deixava uma faixa morta entre o medidor de disco e os
+/// controles — quanto mais larga a janela, maior o buraco.
+const TILE_MIN: f32 = 132.0;
+const TILE_MAX: f32 = 230.0;
 const TILE_GAP: f32 = 14.0;
 const TILE_H: f32 = 47.0;
 /// Altura única de todo controle das duas fileiras do topo (botão, combo, busca, chip).
@@ -1588,12 +1592,25 @@ impl App {
     /// mesma fileira, centrados contra ela.
     fn ui_top(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
-        let mut wrapped = false;
+        // Os medidores tomam toda a largura que sobra depois dos controles, em partes iguais.
+        // Com largura fixa, janela larga virava uma faixa morta entre o disco e os controles;
+        // e quando os controles não cabiam eles desciam para uma fileira quase vazia.
+        let ctrl_w = self.top_controls_w(ui);
+        let free = ui.available_width();
+        let share = (free - ctrl_w - 4.0 * TILE_GAP) / 4.0;
+        let wrapped = share < TILE_MIN;
+        // Na fileira própria os medidores esticam para ocupar a largura inteira: o buraco
+        // que sobrava à direita deles era exatamente o que a quebra ia evitar.
+        let tile_w = if wrapped {
+            ((free - 3.0 * TILE_GAP) / 4.0).clamp(TILE_MIN, TILE_MAX)
+        } else {
+            share.min(TILE_MAX)
+        };
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = TILE_GAP;
 
             let cpu_pct = self.sys.cpu_pct;
-            Self::meter_tile(ui, TILE_W, "CPU", cpu_pct, self.cpu_temp(), "", |ui, w| {
+            Self::meter_tile(ui, tile_w, "CPU", cpu_pct, self.cpu_temp(), "", |ui, w| {
                 Self::meter_bar(ui, w, cpu_pct, "Uso de CPU (todos os núcleos)");
             });
 
@@ -1602,7 +1619,7 @@ impl App {
             let ram_sub = format!("{} / {}", fmt_gb(used), fmt_gb(total));
             Self::meter_tile(
                 ui,
-                TILE_W,
+                tile_w,
                 "RAM",
                 Some(used as f32 / total as f32 * 100.0),
                 self.ram_temp(),
@@ -1638,7 +1655,7 @@ impl App {
                     "Sem GPU NVIDIA detectada (nvml.dll não carregou) — sem essa leitura em placas AMD/Intel aqui ainda.".to_string(),
                 ),
             };
-            Self::meter_tile(ui, TILE_W, "GPU", gpu_pct, gpu_temp, &gpu_sub, |ui, w| {
+            Self::meter_tile(ui, tile_w, "GPU", gpu_pct, gpu_temp, &gpu_sub, |ui, w| {
                 Self::meter_bar(ui, w, gpu_pct, gpu_tip);
             });
 
@@ -1656,19 +1673,15 @@ impl App {
             } else {
                 "Contador de disco indisponível neste host."
             };
-            Self::meter_tile(ui, TILE_W, "DISCO", disk_pct, Temp::None, &disk_sub, |ui, w| {
+            Self::meter_tile(ui, tile_w, "DISCO", disk_pct, Temp::None, &disk_sub, |ui, w| {
                 Self::meter_bar(ui, w, disk_pct, disk_tip);
             });
 
-            // Só desenha os controles aqui se couberem de verdade: o layout right_to_left
-            // não clipa, e o que não cabe transborda por cima do medidor de disco.
-            let space = ui.available_width();
-            if space >= self.top_controls_w(ui) {
+            if !wrapped {
+                let space = ui.available_width();
                 ui.allocate_ui_with_layout(Vec2::new(space, TILE_H), Layout::right_to_left(Align::Center), |ui| {
                     self.top_controls(ui);
                 });
-            } else {
-                wrapped = true;
             }
         });
         // Janela estreita: os controles descem para uma fileira própria em vez de invadir
@@ -1703,8 +1716,8 @@ impl App {
         } else {
             btn("⬆ Admin".into())
         };
-        // 56 = largura fixa do combo de intervalo; 12 por divisor (6 dele + 6 até o vizinho).
-        addons + btn("⏸ Pausar".into()) + 56.0 + admin + btn("◱ Mini".into()) + 3.0 * 12.0
+        // 12 por divisor (6 dele + 6 até o vizinho).
+        addons + admin + btn("◱ Mini".into()) + 2.0 * 12.0
     }
 
     /// Controles do topo, desenhados da direita para a esquerda: o Mini fica na quina, que
@@ -1739,13 +1752,33 @@ impl App {
             self.relaunch_as_admin();
         }
         ui.separator();
+        self.ui_addon_buttons(ui);
+    }
+
+    /// Ritmo da amostragem, no rodapé — ao lado do "amostra 7 ms", que é o resultado dele.
+    ///
+    /// Estava no bloco do topo, e era o que fazia os quatro addons não caberem na fileira
+    /// dos medidores: os controles desciam para uma segunda fileira quase vazia e sobrava
+    /// uma faixa morta à direita dos medidores.
+    fn ui_sampling_controls(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().interact_size.y = 17.0;
+        ui.spacing_mut().button_padding = Vec2::new(6.0, 0.0);
+        let mut paused = self.sampler.paused.load(Ordering::Relaxed);
+        if ui
+            .selectable_label(paused, RichText::new(if paused { "▶ retomar" } else { "⏸ pausar" }).small())
+            .on_hover_text("Congela a amostragem — os números param no último valor lido")
+            .clicked()
+        {
+            paused = !paused;
+            self.sampler.paused.store(paused, Ordering::Relaxed);
+        }
         let mut iv = self.cfg.refresh_ms;
         egui::ComboBox::from_id_salt("refresh")
-            .selected_text(RichText::new(format!("{:.1}s", iv as f32 / 1000.0)).size(12.5))
-            .width(56.0)
+            .selected_text(RichText::new(format!("a cada {:.1}s", iv as f32 / 1000.0)).small())
+            .width(74.0)
             .show_ui(ui, |ui| {
                 for v in [500u64, 1000, 2000, 5000] {
-                    ui.selectable_value(&mut iv, v, format!("{:.1}s", v as f32 / 1000.0));
+                    ui.selectable_value(&mut iv, v, format!("a cada {:.1}s", v as f32 / 1000.0));
                 }
             });
         if iv != self.cfg.refresh_ms {
@@ -1753,17 +1786,6 @@ impl App {
             self.sampler.interval_ms.store(iv, Ordering::Relaxed);
             self.cfg_dirty = true;
         }
-        let mut paused = self.sampler.paused.load(Ordering::Relaxed);
-        if ui
-            .selectable_label(paused, RichText::new(if paused { "▶ Retomar" } else { "⏸ Pausar" }).size(12.5))
-            .on_hover_text("Congela a amostragem — os números param no último valor lido")
-            .clicked()
-        {
-            paused = !paused;
-            self.sampler.paused.store(paused, Ordering::Relaxed);
-        }
-        ui.separator();
-        self.ui_addon_buttons(ui);
     }
 
     /// Os quatro addons, com nome escrito, no bloco de controles do topo.
@@ -3558,6 +3580,7 @@ impl eframe::App for App {
                     .on_hover_text(self.cfg.locked.iter().cloned().collect::<Vec<_>>().join("\n"));
                 ui.separator();
                 ui.label(RichText::new(format!("amostra {:.0} ms", self.sample_ms)).weak().small());
+                self.ui_sampling_controls(ui);
                 ui.separator();
                 self.ui_accounting(ui);
                 if self.order_frozen {

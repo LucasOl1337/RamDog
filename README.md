@@ -15,7 +15,7 @@
   <img alt="MIT" src="https://img.shields.io/badge/license-MIT-69F0AE">
 </p>
 
-<img src="docs/screenshot-main.png" alt="Janela do RamDog em visão Lista: medidores de CPU, RAM, GPU e Disco no topo e, ao lado deles, os botões Partida, Desperdício, Térmico e Telas com o nome escrito, seguidos de Pausar, intervalo, Admin e Mini. Abaixo, a busca, as abas Lista/Árvore/Categorias, e no canto direito coluna RAM mostra Working set e ocultar abaixo de 250 MB. Depois os chips de categoria (IA/Agentes, Dev, Navegador, Jogos, Pessoal, Sistema, Outros) e a tabela agrupada por app, com brave.exe, claude.exe e Spotify.exe somando RAM, CPU, GPU e disco no cabeçalho de cada grupo." width="100%">
+<img src="docs/screenshot-main.png" alt="Janela do RamDog em visão Lista: medidores de CPU, RAM, GPU e Disco esticados por toda a largura do topo e, na mesma fileira, os botões Partida, Desperdício, Térmico e Telas com o nome escrito, seguidos de Admin e Mini. Abaixo, a busca, as abas Lista/Árvore/Categorias, e no canto direito coluna RAM mostra Working set e ocultar abaixo de 250 MB. Depois os chips de categoria (IA/Agentes, Dev, Navegador, Jogos, Pessoal, Sistema, Outros) e a tabela agrupada por app, com brave.exe, ChatGPT.exe, claude.exe e Spotify.exe somando RAM, CPU, GPU e disco no cabeçalho de cada grupo. No rodapé, amostra 7 ms com os controles pausar e a cada 1,0s ao lado." width="100%">
 
 ## Por que existe
 
@@ -88,7 +88,7 @@ dotnet publish hwtemp -c Release -o target/release --no-self-contained
 | Filtro | busca por nome / PID / comando; chips de categoria (clique alterna, duplo clique isola); `ocultar abaixo de N MB`, no canto direito da fileira junto de `coluna RAM mostra` |
 | Origem | coluna *Origem* = primeiro ancestral vivo que não seja host genérico (cmd, bash, node...); cadeia completa clicável no painel inferior (`Ir para o pai`) |
 | Lançado por | quando a cadeia de pais morreu (ou só tem hosts genéricos), o RamDog lê as variáveis de ambiente herdadas do processo e mostra em roxo quem o originou: agente (Claude Code + sessão + PID, Codex, Cursor Agent, Gemini CLI...) e host (Maestri, VS Code, Cursor, Windows Terminal...), além de `npm run <script>` em `<projeto>` |
-| Atualização | 0,5–5 s, **Pausar**, `F5` força |
+| Atualização | `⏸ pausar` e `a cada 0,5–5 s` no rodapé, ao lado do `amostra X ms` que eles produzem; `F5` força uma leitura |
 | Modo mini | **◱ Mini** no canto superior direito. No HUD: `topo` alterna o sempre-por-cima, `–` minimiza, `⤢` (ou duplo clique no fundo) volta ao app inteiro, `✕` fecha; o botão de intervalo cicla 0,5 / 1 / 2 / 5 s; arrasta pelo fundo |
 
 Encerrar é imediato: não há caixa de confirmação. Quem protege é o **lock** (🔒 no menu de contexto) — um processo travado não morre nem no `Del`, nem no ✖, nem no "finalizar árvore". E enquanto o mouse está sobre a tabela a ordem das linhas fica **congelada** (status "ordem congelada"), para o clique em ✖ nunca cair numa linha que acabou de trocar de lugar.
