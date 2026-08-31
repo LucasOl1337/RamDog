@@ -35,12 +35,61 @@ pub struct Config {
     /// Presets da Partida: nome do preset → (id da entrada → deve estar ativa).
     /// Só entradas que dão para alternar entram; o resto não teria como ser restaurado.
     pub boot_presets: BTreeMap<String, BTreeMap<String, bool>>,
+    /// Como a lista da Partida se divide em grupos.
+    pub boot_group: BootGroup,
     /// Cenários da aba Telas: nome → janelas com monitor e retângulo alvo.
     pub screen_presets: BTreeMap<String, ScreenPreset>,
     /// Última grade escolhida na aba Telas (id em `screens::GRIDS`).
     pub screen_grid: String,
     /// Arrastar uma janela no mapa encaixa na zona da grade em vez de mover livre.
     pub screen_snap: bool,
+}
+
+/// Em que fatias a lista da Partida se quebra.
+///
+/// A pergunta que o addon responde é "isto sobe com o PC?", então o corte de fora é sempre
+/// esse — o de dentro escolhe entre *quando* dispara (fase de arranque) e *de onde* vem
+/// (registro, pasta Iniciar, tarefa, serviço…).
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub enum BootGroup {
+    StatusPhase,
+    StatusKind,
+    Phase,
+    Kind,
+    Flat,
+}
+
+impl BootGroup {
+    pub const ALL: [BootGroup; 5] = [
+        BootGroup::StatusPhase,
+        BootGroup::StatusKind,
+        BootGroup::Phase,
+        BootGroup::Kind,
+        BootGroup::Flat,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BootGroup::StatusPhase => "Sobe / não sobe → fase",
+            BootGroup::StatusKind => "Sobe / não sobe → tipo",
+            BootGroup::Phase => "Fase do arranque",
+            BootGroup::Kind => "Tipo de origem",
+            BootGroup::Flat => "Lista plana",
+        }
+    }
+
+    pub fn tip(self) -> &'static str {
+        match self {
+            BootGroup::StatusPhase => concat!(
+                "Primeiro separa o que sobe com o PC do que não sobe; dentro de cada bloco, ",
+                "por momento do arranque (kernel → serviços → logon → seus programas)"
+            ),
+            BootGroup::StatusKind => "Sobe / não sobe e, dentro, por origem: registro, pasta Iniciar, tarefa, serviço…",
+            BootGroup::Phase => "Só por momento do arranque, misturando ativas e desativadas",
+            BootGroup::Kind => "Só por origem, misturando ativas e desativadas",
+            BootGroup::Flat => "Tudo numa lista só, ordenada pela coluna escolhida",
+        }
+    }
 }
 
 /// Um cenário de trabalho: as janelas que ele quer na tela e onde cada uma fica.
@@ -224,6 +273,7 @@ impl Default for Config {
             mini: false,
             mini_on_top: true,
             boot_presets: BTreeMap::new(),
+            boot_group: BootGroup::StatusPhase,
             screen_presets: BTreeMap::new(),
             screen_grid: String::new(),
             screen_snap: true,

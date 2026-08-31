@@ -34,8 +34,8 @@ use windows::Win32::System::TaskScheduler::{
 use windows::Win32::System::Variant::{VARIANT, VT_I4};
 use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
 
-use crate::app::{ACCENT, ACCENT_BG, LINE, MUTED, SURFACE};
-use crate::config::Config;
+use crate::app::{ACCENT, ACCENT_BG, LINE, MUTED, SURFACE, SURFACE_HI};
+use crate::config::{BootGroup, Config};
 use crate::icons::IconBank;
 use crate::procs::{self, ProcInfo};
 use crate::sys::{self, SvcStart, SysResult};
@@ -112,6 +112,202 @@ impl Kind {
     }
 }
 
+/// Em que momento do arranque a entrada dispara — a hierarquia real do Windows.
+///
+/// O que está no topo sobe antes de existir tela de logon e não tem nada a ver com você;
+/// o que está embaixo só aparece depois que a área de trabalho carregou e quase sempre é
+/// escolha sua. Sem esta separação a lista mistura driver de chipset com Spotify, e a
+/// pessoa não tem como saber o que é seguro desligar.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Phase {
+    Kernel,
+    Machine,
+    Logon,
+    Desktop,
+}
+
+impl Phase {
+    /// Da superfície para o fundo: o que é escolha sua vem primeiro, o que é encanamento do
+    /// Windows vem depois. Ordenar pela sequência real do boot enterraria os seus programas
+    /// embaixo de cem serviços — justamente o que a pessoa abriu a tela para ver.
+    fn ord(self) -> u8 {
+        match self {
+            Phase::Desktop => 0,
+            Phase::Logon => 1,
+            Phase::Machine => 2,
+            Phase::Kernel => 3,
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Phase::Kernel => "Antes do Windows",
+            Phase::Machine => "Com a máquina",
+            Phase::Logon => "Ao entrar na conta",
+            Phase::Desktop => "Seus programas",
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            Phase::Kernel => "drivers e kernel: carregam antes de existir tela de logon",
+            Phase::Machine => "serviços e tarefas de boot: sobem sozinhos, mesmo sem ninguém logado",
+            Phase::Logon => "dispara no logon, antes da área de trabalho aparecer",
+            Phase::Desktop => "abre depois da área de trabalho — é aqui que mora o atraso do seu login",
+        }
+    }
+
+    fn color(self) -> Color32 {
+        match self {
+            Phase::Kernel => Color32::from_rgb(160, 170, 180),
+            Phase::Machine => Color32::from_rgb(232, 178, 92),
+            Phase::Logon => Color32::from_rgb(200, 160, 255),
+            // Azul, não o verde do "sobe com o PC": faixa de fase dentro de faixa de estado
+            // com a mesma cor viraria um bloco só.
+            Phase::Desktop => Color32::from_rgb(96, 148, 214),
+        }
+    }
+}
+
+/// A pergunta principal do addon: isto sobe com o PC?
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Status {
+    On,
+    Off,
+    Broken,
+}
+
+impl Status {
+    fn of(e: &Entry) -> Status {
+        if e.missing {
+            Status::Broken
+        } else if e.enabled {
+            Status::On
+        } else {
+            Status::Off
+        }
+    }
+
+    fn ord(self) -> u8 {
+        match self {
+            Status::On => 0,
+            Status::Off => 1,
+            Status::Broken => 2,
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Status::On => "SOBE COM O PC",
+            Status::Off => "NÃO SOBE",
+            Status::Broken => "QUEBRADAS",
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            Status::On => "dispara sozinho toda vez que o Windows liga",
+            Status::Off => "continua instalado, mas o Windows não dispara mais",
+            Status::Broken => "a partida aponta para um arquivo que não existe mais",
+        }
+    }
+
+    fn color(self) -> Color32 {
+        match self {
+            Status::On => Color32::from_rgb(120, 200, 140),
+            Status::Off => Color32::from_rgb(150, 158, 170),
+            Status::Broken => Color32::from_rgb(232, 120, 100),
+        }
+    }
+
+    fn glyph(self) -> &'static str {
+        match self {
+            Status::On => "▲",
+            Status::Off => "○",
+            Status::Broken => "⚠",
+        }
+    }
+}
+
+/// Um nível de agrupamento já resolvido: serve tanto de chave quanto de cabeçalho.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Grp {
+    St(Status),
+    Ph(Phase),
+    Kd(Kind),
+}
+
+impl Grp {
+    fn ord(self) -> u8 {
+        match self {
+            Grp::St(s) => s.ord(),
+            Grp::Ph(p) => p.ord(),
+            Grp::Kd(k) => kind_ord(k),
+        }
+    }
+
+    fn key(self) -> String {
+        match self {
+            Grp::St(s) => format!("s{}", s.ord()),
+            Grp::Ph(p) => format!("p{}", p.ord()),
+            Grp::Kd(k) => format!("k{}", kind_ord(k)),
+        }
+    }
+
+    fn title(self) -> String {
+        match self {
+            Grp::St(s) => s.title().to_string(),
+            Grp::Ph(p) => p.title().to_string(),
+            Grp::Kd(k) => k.label().to_string(),
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            Grp::St(s) => s.hint(),
+            Grp::Ph(p) => p.hint(),
+            Grp::Kd(_) => "",
+        }
+    }
+
+    fn color(self) -> Color32 {
+        match self {
+            Grp::St(s) => s.color(),
+            Grp::Ph(p) => p.color(),
+            Grp::Kd(k) => k.color(),
+        }
+    }
+}
+
+/// Os dois níveis de grupo de uma entrada, segundo o modo escolhido.
+fn grp_path(gb: BootGroup, e: &Entry) -> (Option<Grp>, Option<Grp>) {
+    match gb {
+        BootGroup::StatusPhase => (Some(Grp::St(Status::of(e))), Some(Grp::Ph(e.phase))),
+        BootGroup::StatusKind => (Some(Grp::St(Status::of(e))), Some(Grp::Kd(e.kind))),
+        BootGroup::Phase => (Some(Grp::Ph(e.phase)), None),
+        BootGroup::Kind => (Some(Grp::Kd(e.kind)), None),
+        BootGroup::Flat => (None, None),
+    }
+}
+
+/// Cabeçalho de grupo já com os números que ele mostra.
+struct Head {
+    grp: Grp,
+    depth: usize,
+    key: String,
+    total: usize,
+    running: usize,
+    /// Quantas do grupo sobem com o PC — só interessa quando o grupo não é o próprio estado.
+    on: usize,
+    collapsed: bool,
+}
+
+/// Uma linha da tabela: cabeçalho de grupo ou entrada.
+enum Line {
+    Head(usize),
+    Item(usize),
+}
+
 #[derive(Clone)]
 enum Target {
     Run { machine: bool, wow64: bool, name: String },
@@ -128,6 +324,9 @@ struct Entry {
     name: String,
     command: String,
     kind: Kind,
+    /// Momento do arranque em que dispara. Vem do coletor: só ele sabe se a tarefa tem
+    /// gatilho de boot ou de logon, e se o serviço é de kernel ou automático comum.
+    phase: Phase,
     machine: bool,
     enabled: bool,
     missing: bool,
@@ -197,8 +396,11 @@ pub struct Boot {
     last_refresh: Option<Instant>,
     kinds: HashSet<Kind>,
     hide_microsoft: bool,
-    only_enabled: bool,
+    /// Mostrar só um dos três estados. `None` = os três, cada um no seu bloco.
+    status_filter: Option<Status>,
     only_running: bool,
+    /// Chaves de grupo recolhidas — vale por sessão, não vai para o disco.
+    collapsed: HashSet<String>,
     sort: SortKey,
     sort_desc: bool,
     selected: Option<String>,
@@ -227,8 +429,9 @@ impl Boot {
             last_refresh: None,
             kinds: Kind::ALL.iter().copied().filter(|k| *k != Kind::Driver).collect(),
             hide_microsoft: false,
-            only_enabled: false,
+            status_filter: None,
             only_running: false,
+            collapsed: HashSet::new(),
             sort: SortKey::State,
             sort_desc: false,
             selected: None,
@@ -326,7 +529,7 @@ impl Boot {
             .iter()
             .filter(|e| self.kinds.contains(&e.kind))
             .filter(|e| !self.hide_microsoft || !e.microsoft)
-            .filter(|e| !self.only_enabled || e.enabled)
+            .filter(|e| self.status_filter.map(|s| Status::of(e) == s).unwrap_or(true))
             .filter(|e| {
                 if !self.only_running {
                     return true;
@@ -345,12 +548,15 @@ impl Boot {
             .cloned()
             .collect();
 
-        // Ordenação escolhida pelo usuário. O desempate é sempre o nome, para a lista não
-        // trocar de ordem sozinha entre dois refreshes.
+        // A ordem dos grupos vem primeiro e a coluna escolhida só desempata dentro deles:
+        // sem isso os membros de um grupo não ficariam contíguos e não haveria onde emitir
+        // cabeçalho. Depois disso o desempate é sempre o nome, para a lista não trocar de
+        // ordem sozinha entre dois refreshes.
+        let gb = cfg.boot_group;
         {
             let key = self.sort;
             let desc = self.sort_desc;
-            let mut with_meta: Vec<(Entry, u8, u64, String)> = filtered
+            let mut with_meta: Vec<(Entry, u8, u64, String, u8, u8)> = filtered
                 .drain(..)
                 .map(|e| {
                     let is_run = e.running_hint || exe_running(&e.command, &running);
@@ -358,7 +564,10 @@ impl Boot {
                     let exe = self.resolved.get(&e.id).and_then(|r| r.exe.clone());
                     let usage = self.usage_of(exe.as_ref()).total();
                     let name = e.name.to_lowercase();
-                    (e, st, usage, name)
+                    let (g1, g2) = grp_path(gb, &e);
+                    let o1 = g1.map(|g| g.ord()).unwrap_or(0);
+                    let o2 = g2.map(|g| g.ord()).unwrap_or(0);
+                    (e, st, usage, name, o1, o2)
                 })
                 .collect();
             with_meta.sort_by(|a, b| {
@@ -372,7 +581,11 @@ impl Boot {
                 let ord = if desc { ord.reverse() } else { ord };
                 // Dentro do mesmo grupo, o que você mais usa vem primeiro — é o que faz a
                 // lista responder "o que importa aqui" em vez de despejar a ordem alfabética.
-                ord.then_with(|| b.2.cmp(&a.2)).then_with(|| a.3.cmp(&b.3))
+                a.4.cmp(&b.4)
+                    .then_with(|| a.5.cmp(&b.5))
+                    .then(ord)
+                    .then_with(|| b.2.cmp(&a.2))
+                    .then_with(|| a.3.cmp(&b.3))
             });
             filtered = with_meta.into_iter().map(|t| t.0).collect();
         }
@@ -422,16 +635,40 @@ impl Boot {
                 }
             });
         });
-        ui.label(
-            RichText::new(format!(
-                "{} entradas · {} ativas · {} visíveis agora",
-                self.entries.len(),
-                self.entries.iter().filter(|e| e.enabled).count(),
-                filtered.len()
-            ))
-            .small()
-            .color(MUTED),
-        );
+        ui.add_space(4.0);
+
+        // A pergunta que este addon existe para responder, em três números clicáveis. Cada um
+        // filtra a lista para o seu estado; clicar de novo volta a mostrar os três blocos.
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for st in [Status::On, Status::Off, Status::Broken] {
+                let n = self.entries.iter().filter(|e| Status::of(e) == st).count();
+                let sel = self.status_filter == Some(st);
+                let c = st.color();
+                let text = RichText::new(format!("{}  {}  {n}", st.glyph(), st.title()))
+                    .size(12.0)
+                    .strong()
+                    .color(if n == 0 && !sel { MUTED.gamma_multiply(0.7) } else { c });
+                let btn = egui::Button::new(text)
+                    .fill(if sel { c.gamma_multiply(0.22) } else { SURFACE })
+                    .stroke(egui::Stroke::new(1.0_f32, if sel { c } else { LINE }));
+                if ui
+                    .add(btn)
+                    .on_hover_text(format!("{}
+
+Clique para ver só estas.", st.hint()))
+                    .clicked()
+                {
+                    self.status_filter = if sel { None } else { Some(st) };
+                }
+            }
+            let total = self.entries.len();
+            ui.label(
+                RichText::new(format!("de {total} entradas · {} visíveis agora", filtered.len()))
+                    .small()
+                    .color(MUTED),
+            );
+        });
         ui.add_space(6.0);
 
         ui.horizontal_wrapped(|ui| {
@@ -456,8 +693,47 @@ impl Boot {
             }
         });
         ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Separar por:").small().color(MUTED));
+            let cur = cfg.boot_group;
+            let mut pick: Option<BootGroup> = None;
+            egui::ComboBox::from_id_salt("boot_group")
+                .selected_text(RichText::new(cur.label()).size(12.0))
+                .width(168.0)
+                .show_ui(ui, |ui| {
+                    for g in BootGroup::ALL {
+                        if ui.selectable_label(cur == g, g.label()).on_hover_text(g.tip()).clicked() {
+                            pick = Some(g);
+                        }
+                    }
+                });
+            if let Some(g) = pick {
+                if g != cur {
+                    cfg.boot_group = g;
+                    self.collapsed.clear();
+                    out.push(BootOut::SaveCfg);
+                }
+            }
+            if cur != BootGroup::Flat {
+                if ui.small_button("⊟").on_hover_text("Recolher todos os grupos").clicked() {
+                    // Vale varrer tudo, não só o que está filtrado: chave sobrando no conjunto
+                    // não atrapalha, chave faltando deixaria um grupo aberto sem motivo.
+                    for e in &self.entries {
+                        let (a, b) = grp_path(cur, e);
+                        if let Some(a) = a {
+                            let k = a.key();
+                            if let Some(b) = b {
+                                self.collapsed.insert(format!("{k}/{}", b.key()));
+                            }
+                            self.collapsed.insert(k);
+                        }
+                    }
+                }
+                if ui.small_button("⊞").on_hover_text("Abrir todos os grupos").clicked() {
+                    self.collapsed.clear();
+                }
+            }
+            ui.separator();
             ui.checkbox(&mut self.hide_microsoft, "esconder Microsoft");
-            ui.checkbox(&mut self.only_enabled, "só ativas");
             ui.checkbox(&mut self.only_running, "só as que estão rodando");
             ui.separator();
             self.presets_bar(ui, &mut confirm, cfg, &mut out);
@@ -491,15 +767,127 @@ impl Boot {
             }
         };
 
-        let row_h = 26.0;
-        let n = filtered.len();
+        let row_running: Vec<bool> = filtered
+            .iter()
+            .map(|e| e.running_hint || exe_running(&e.command, &running))
+            .collect();
+
+        // Cabeçalhos de grupo intercalados com as entradas. `filtered` já saiu ordenado pela
+        // hierarquia, então basta emitir um cabeçalho toda vez que a chave muda.
+        let mut heads: Vec<Head> = Vec::new();
+        let mut lines: Vec<Line> = Vec::new();
+        if gb == BootGroup::Flat {
+            lines = (0..filtered.len()).map(Line::Item).collect();
+        } else {
+            let path: Vec<(Option<Grp>, Option<Grp>)> =
+                filtered.iter().map(|e| grp_path(gb, e)).collect();
+            let tally = |r: std::ops::Range<usize>| -> (usize, usize) {
+                let run = r.clone().filter(|&j| row_running[j]).count();
+                let on = r.filter(|&j| filtered[j].enabled && !filtered[j].missing).count();
+                (run, on)
+            };
+            let mut i = 0usize;
+            while i < filtered.len() {
+                let Some(g1) = path[i].0 else { break };
+                let end1 = (i..filtered.len())
+                    .find(|&j| path[j].0 != Some(g1))
+                    .unwrap_or(filtered.len());
+                let key1 = g1.key();
+                let (run1, on1) = tally(i..end1);
+                let col1 = self.collapsed.contains(&key1);
+                heads.push(Head {
+                    grp: g1,
+                    depth: 0,
+                    key: key1.clone(),
+                    total: end1 - i,
+                    running: run1,
+                    on: on1,
+                    collapsed: col1,
+                });
+                lines.push(Line::Head(heads.len() - 1));
+                if col1 {
+                    i = end1;
+                    continue;
+                }
+                let mut j = i;
+                while j < end1 {
+                    match path[j].1 {
+                        None => {
+                            lines.push(Line::Item(j));
+                            j += 1;
+                        }
+                        Some(g2) => {
+                            let end2 = (j..end1).find(|&k| path[k].1 != Some(g2)).unwrap_or(end1);
+                            let key2 = format!("{key1}/{}", g2.key());
+                            let (run2, on2) = tally(j..end2);
+                            let col2 = self.collapsed.contains(&key2);
+                            heads.push(Head {
+                                grp: g2,
+                                depth: 1,
+                                key: key2,
+                                total: end2 - j,
+                                running: run2,
+                                on: on2,
+                                collapsed: col2,
+                            });
+                            lines.push(Line::Head(heads.len() - 1));
+                            if !col2 {
+                                for k in j..end2 {
+                                    lines.push(Line::Item(k));
+                                }
+                            }
+                            j = end2;
+                        }
+                    }
+                }
+                i = end1;
+            }
+        }
+
+        // Entrada dentro de grupo anda para a direita — é o que faz a faixa parecer um título
+        // e não mais uma linha da lista.
+        let indent = match gb {
+            BootGroup::Flat => 0.0,
+            BootGroup::Phase | BootGroup::Kind => 10.0,
+            _ => 20.0,
+        };
+
+        if filtered.is_empty() {
+            ui.add_space(24.0);
+            ui.vertical_centered(|ui| {
+                ui.label(RichText::new("Nenhuma entrada bate com os filtros de agora").color(MUTED));
+                ui.label(
+                    RichText::new("Tire o filtro de estado lá em cima, ligue mais tipos ou limpe a busca.")
+                        .small()
+                        .color(MUTED),
+                );
+            });
+        } else {
+        // Onde a faixa de cabeçalho começa e termina. A faixa é pintada da última coluna,
+        // que desenha depois de todas as outras e não tem recorte próprio.
+        let band_x = ui.available_rect_before_wrap().x_range();
+        let mut toggle_group: Option<String> = None;
+        let heights: Vec<f32> = lines
+            .iter()
+            .map(|l| match l {
+                Line::Head(h) => {
+                    if heads[*h].depth == 0 {
+                        30.0
+                    } else {
+                        24.0
+                    }
+                }
+                Line::Item(_) => 26.0,
+            })
+            .collect();
+
         TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
             .sense(egui::Sense::click())
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::exact(28.0))
-            .column(Column::initial(240.0).at_least(140.0).clip(true))
+            .column(Column::exact(30.0))
+            .column(Column::initial(250.0).at_least(140.0).clip(true))
             .column(Column::initial(110.0).at_least(80.0).clip(true))
             .column(Column::initial(80.0).at_least(64.0))
             .column(Column::remainder().at_least(140.0).clip(true))
@@ -507,115 +895,225 @@ impl Boot {
             .column(Column::initial(84.0).at_least(64.0))
             .column(Column::initial(132.0).at_least(90.0))
             .header(22.0, |mut h| {
-                h.col(|_| {});
+                h.col(|ui| {
+                    ui.label(RichText::new("▲").small().strong().color(Status::On.color()))
+                        .on_hover_text("Marcado = sobe com o PC. Desmarcar tira da partida sem desinstalar nada.");
+                });
                 h.col(|ui| head(ui, "Nome", SortKey::Name, &mut sort_click));
-                h.col(|ui| head(ui, "Origem", SortKey::Kind, &mut sort_click));
+                h.col(|ui| head(ui, "Tipo", SortKey::Kind, &mut sort_click));
                 h.col(|ui| head(ui, "Escopo", SortKey::Scope, &mut sort_click));
                 h.col(|ui| { ui.label(RichText::new("Comando").small().color(MUTED).strong()); });
-                h.col(|ui| head(ui, "Estado", SortKey::State, &mut sort_click));
+                h.col(|ui| head(ui, "Agora", SortKey::State, &mut sort_click));
                 h.col(|ui| head(ui, "Uso", SortKey::Usage, &mut sort_click));
                 h.col(|ui| { ui.label(RichText::new("Ações").small().color(MUTED).strong()); });
             })
             .body(|body| {
-                body.rows(row_h, n, |mut row| {
-                    let i = row.index();
-                    let e = &filtered[i];
-                    let is_run = e.running_hint || exe_running(&e.command, &running);
-                    let selected = self.selected.as_deref() == Some(e.id.as_str());
-                    row.set_selected(selected);
-
-                    row.col(|ui| {
-                        if e.can_toggle {
-                            let mut on = e.enabled;
-                            if ui.checkbox(&mut on, "").changed() {
-                                toggle = Some((e.clone(), on));
+                body.heterogeneous_rows(heights.into_iter(), |mut row| {
+                    match lines[row.index()] {
+                        Line::Head(hi) => {
+                            let h = &heads[hi];
+                            // As sete primeiras células ficam vazias: o cabeçalho é uma faixa
+                            // só, atravessando as colunas.
+                            for _ in 0..7 {
+                                row.col(|_| {});
                             }
-                        } else {
-                            let mut dummy = e.enabled;
-                            ui.add_enabled(false, egui::Checkbox::new(&mut dummy, ""));
-                        }
-                    });
-                    row.col(|ui| {
-                        match &row_icons[i] {
-                            Some(tex) => {
-                                ui.add(egui::Image::new((tex.id(), egui::Vec2::splat(16.0))));
-                            }
-                            None => {
-                                let (r, _) = ui.allocate_exact_size(egui::Vec2::splat(16.0), egui::Sense::hover());
-                                ui.painter().circle_filled(r.center(), 4.0, e.kind.color().gamma_multiply(0.6));
-                            }
-                        }
-                        ui.add_space(4.0);
-                        let name_c = if e.missing {
-                            MUTED
-                        } else if e.enabled {
-                            Color32::from_gray(225)
-                        } else {
-                            MUTED
-                        };
-                        ui.add(egui::Label::new(RichText::new(&e.name).strong().color(name_c)).truncate());
-                    });
-                    row.col(|ui| {
-                        ui.label(RichText::new(e.kind.label()).small().color(e.kind.color()));
-                    });
-                    row.col(|ui| {
-                        ui.label(
-                            RichText::new(if e.machine { "máquina" } else { "usuário" })
-                                .small()
-                                .color(MUTED),
-                        );
-                    });
-                    row.col(|ui| {
-                        ui.add(egui::Label::new(RichText::new(&e.command).monospace().small().color(MUTED)).truncate())
-                            .on_hover_text(&e.command);
-                    });
-                    row.col(|ui| {
-                        let (txt, c) = if e.missing {
-                            ("ausente", Color32::from_rgb(232, 120, 100))
-                        } else if is_run {
-                            ("rodando", Color32::from_rgb(120, 200, 140))
-                        } else if e.enabled {
-                            ("no boot", Color32::from_rgb(232, 178, 92))
-                        } else {
-                            ("desligada", MUTED)
-                        };
-                        ui.label(RichText::new(txt).small().color(c));
-                    });
-                    row.col(|ui| {
-                        let u = row_usage[i];
-                        if u.total() == 0 {
-                            ui.label(RichText::new("—").small().color(MUTED));
-                        } else {
-                            let strong = u.total() >= 3600;
-                            let c = if strong { Color32::from_rgb(120, 200, 140) } else { MUTED };
-                            ui.label(RichText::new(usage::fmt_secs(u.total())).small().color(c)).on_hover_text(format!(
-                                "Em foco: {}\nAberto (medido pelo RamDog): {}\nÚltima vez: {}",
-                                usage::fmt_secs(u.focus),
-                                usage::fmt_secs(u.open),
-                                usage::fmt_ago(u.last)
-                            ));
-                        }
-                    });
-                    row.col(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        if is_run {
-                            if let Some(name) = exe_name_from_cmd(&e.command) {
-                                let pids: Vec<u32> = procs.iter().filter(|p| p.name_lower == name).map(|p| p.pid).collect();
-                                if !pids.is_empty() && ui.small_button("Finalizar").clicked() {
-                                    kill = Some(pids);
+                            row.col(|ui| {
+                                let sp = ui.spacing().item_spacing;
+                                let deep = h.depth == 0;
+                                let x0 = band_x.min + if deep { 0.0 } else { 14.0 };
+                                let band = egui::Rect::from_x_y_ranges(
+                                    egui::Rangef::new(x0, band_x.max),
+                                    ui.max_rect().y_range(),
+                                )
+                                .expand2(egui::Vec2::new(0.0, 0.5 * sp.y));
+                                let c = h.grp.color();
+                                let p = ui.painter();
+                                if deep {
+                                    p.rect_filled(band, 0.0, c.gamma_multiply(0.20));
+                                } else {
+                                    p.rect_filled(band, 0.0, SURFACE_HI);
+                                    p.rect_filled(band, 0.0, c.gamma_multiply(0.10));
                                 }
+                                p.rect_filled(
+                                    egui::Rect::from_min_size(band.min, egui::Vec2::new(3.0, band.height())),
+                                    0.0,
+                                    if deep { c } else { c.gamma_multiply(0.7) },
+                                );
+                                let cy = band.center().y;
+                                let x = band.left() + 12.0 + h.depth as f32 * 14.0;
+                                p.text(
+                                    egui::pos2(x, cy),
+                                    egui::Align2::LEFT_CENTER,
+                                    if h.collapsed { "▸" } else { "▾" },
+                                    egui::FontId::proportional(11.0),
+                                    c,
+                                );
+                                let t = p.text(
+                                    egui::pos2(x + 16.0, cy),
+                                    egui::Align2::LEFT_CENTER,
+                                    h.grp.title(),
+                                    egui::FontId::proportional(if deep { 13.0 } else { 12.0 }),
+                                    c,
+                                );
+                                let hint = h.grp.hint();
+                                if !hint.is_empty() {
+                                    p.text(
+                                        egui::pos2(t.right() + 10.0, cy),
+                                        egui::Align2::LEFT_CENTER,
+                                        format!("— {hint}"),
+                                        egui::FontId::proportional(10.5),
+                                        MUTED,
+                                    );
+                                }
+                                let plural = if h.total == 1 { "entrada" } else { "entradas" };
+                                let counts = if matches!(h.grp, Grp::St(_)) {
+                                    format!("{} {plural} · {} rodando agora", h.total, h.running)
+                                } else if deep {
+                                    format!("{}/{} sobem com o PC · {} rodando", h.on, h.total, h.running)
+                                } else {
+                                    // Já está dentro de um bloco de estado: repetir "23/23 sobem"
+                                    // seria dizer duas vezes a mesma coisa.
+                                    format!("{} {plural} · {} rodando", h.total, h.running)
+                                };
+                                p.text(
+                                    egui::pos2(band.right() - 10.0, cy),
+                                    egui::Align2::RIGHT_CENTER,
+                                    counts,
+                                    egui::FontId::proportional(11.0),
+                                    MUTED,
+                                );
+                            });
+                            if row.response().clicked() {
+                                toggle_group = Some(heads[hi].key.clone());
                             }
                         }
-                        if e.can_remove && ui.add(egui::Button::new(RichText::new("Remover").color(Color32::from_rgb(232, 120, 100))).small()).clicked() {
-                            remove = Some(e.clone());
-                        }
-                    });
+                        Line::Item(i) => {
+                            let e = &filtered[i];
+                            let is_run = row_running[i];
+                            let selected = self.selected.as_deref() == Some(e.id.as_str());
+                            row.set_selected(selected);
 
-                    if row.response().clicked() {
-                        select = Some(e.id.clone());
+                            row.col(|ui| {
+                                if e.can_toggle {
+                                    let mut on = e.enabled;
+                                    if ui
+                                        .checkbox(&mut on, "")
+                                        .on_hover_text(if e.enabled {
+                                            "Sobe com o PC — desmarque para tirar da partida"
+                                        } else {
+                                            "Não sobe — marque para voltar a subir com o PC"
+                                        })
+                                        .changed()
+                                    {
+                                        toggle = Some((e.clone(), on));
+                                    }
+                                } else {
+                                    let mut dummy = e.enabled;
+                                    ui.add_enabled(false, egui::Checkbox::new(&mut dummy, ""))
+                                        .on_hover_text("Esta origem não se liga nem desliga por aqui");
+                                }
+                            });
+                            row.col(|ui| {
+                                ui.add_space(indent);
+                                match &row_icons[i] {
+                                    Some(tex) => {
+                                        ui.add(egui::Image::new((tex.id(), egui::Vec2::splat(16.0))));
+                                    }
+                                    None => {
+                                        let (r, _) = ui.allocate_exact_size(egui::Vec2::splat(16.0), egui::Sense::hover());
+                                        ui.painter().circle_filled(r.center(), 4.0, e.kind.color().gamma_multiply(0.6));
+                                    }
+                                }
+                                ui.add_space(4.0);
+                                let name_c = if e.missing {
+                                    Status::Broken.color()
+                                } else if e.enabled {
+                                    Color32::from_gray(225)
+                                } else {
+                                    MUTED
+                                };
+                                ui.add(egui::Label::new(RichText::new(&e.name).strong().color(name_c)).truncate());
+                            });
+                            row.col(|ui| {
+                                ui.label(RichText::new(e.kind.label()).small().color(e.kind.color()))
+                                    .on_hover_text(&e.origin);
+                            });
+                            row.col(|ui| {
+                                ui.label(
+                                    RichText::new(if e.machine { "máquina" } else { "usuário" })
+                                        .small()
+                                        .color(MUTED),
+                                )
+                                .on_hover_text(if e.machine {
+                                    "Vale para todas as contas do PC — mexer pede admin"
+                                } else {
+                                    "Só para a sua conta"
+                                });
+                            });
+                            row.col(|ui| {
+                                ui.add(egui::Label::new(RichText::new(&e.command).monospace().small().color(MUTED)).truncate())
+                                    .on_hover_text(&e.command);
+                            });
+                            row.col(|ui| {
+                                let (txt, c) = if e.missing {
+                                    ("ausente", Status::Broken.color())
+                                } else if is_run {
+                                    ("rodando", Color32::from_rgb(120, 200, 140))
+                                } else {
+                                    ("parado", MUTED)
+                                };
+                                ui.label(RichText::new(txt).small().color(c)).on_hover_text(if e.missing {
+                                    "O arquivo apontado não existe mais"
+                                } else if is_run {
+                                    "Tem processo deste executável rodando agora"
+                                } else {
+                                    "Nenhum processo deste executável rodando agora"
+                                });
+                            });
+                            row.col(|ui| {
+                                let u = row_usage[i];
+                                if u.total() == 0 {
+                                    ui.label(RichText::new("—").small().color(MUTED));
+                                } else {
+                                    let strong = u.total() >= 3600;
+                                    let c = if strong { Color32::from_rgb(120, 200, 140) } else { MUTED };
+                                    ui.label(RichText::new(usage::fmt_secs(u.total())).small().color(c)).on_hover_text(format!(
+                                        "Em foco: {}\nAberto (medido pelo RamDog): {}\nÚltima vez: {}",
+                                        usage::fmt_secs(u.focus),
+                                        usage::fmt_secs(u.open),
+                                        usage::fmt_ago(u.last)
+                                    ));
+                                }
+                            });
+                            row.col(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                if is_run {
+                                    if let Some(name) = exe_name_from_cmd(&e.command) {
+                                        let pids: Vec<u32> = procs.iter().filter(|p| p.name_lower == name).map(|p| p.pid).collect();
+                                        if !pids.is_empty() && ui.small_button("Finalizar").clicked() {
+                                            kill = Some(pids);
+                                        }
+                                    }
+                                }
+                                if e.can_remove && ui.add(egui::Button::new(RichText::new("Remover").color(Color32::from_rgb(232, 120, 100))).small()).clicked() {
+                                    remove = Some(e.clone());
+                                }
+                            });
+
+                            if row.response().clicked() {
+                                select = Some(e.id.clone());
+                            }
+                        }
                     }
                 });
             });
+
+        if let Some(k) = toggle_group {
+            if !self.collapsed.remove(&k) {
+                self.collapsed.insert(k);
+            }
+        }
+        }
 
         if let Some(k) = sort_click {
             if self.sort == k {
@@ -693,12 +1191,33 @@ impl Boot {
                     .stroke(egui::Stroke::new(1.0_f32, LINE))
                     .inner_margin(egui::Margin::symmetric(10, 6))
                     .show(ui, |ui| {
+                        let st = Status::of(e);
                         ui.horizontal_wrapped(|ui| {
                             ui.label(RichText::new(&e.name).strong());
+                            ui.label(
+                                RichText::new(format!("{} {}", st.glyph(), st.title()))
+                                    .color(st.color())
+                                    .small()
+                                    .strong(),
+                            );
                             ui.label(RichText::new(e.kind.label()).color(e.kind.color()).small());
                             ui.label(RichText::new(&e.origin).weak().small());
                         });
+                        ui.label(
+                            RichText::new(format!("{} — {}", e.phase.title(), e.phase.hint()))
+                                .color(e.phase.color())
+                                .small(),
+                        );
                         ui.add(egui::Label::new(RichText::new(&e.command).monospace().small()).wrap());
+                        if !e.can_toggle {
+                            ui.label(
+                                RichText::new(
+                                    "Só leitura: mexer nesta origem daqui derrubaria o logon ou o boot.",
+                                )
+                                .color(MUTED)
+                                .small(),
+                            );
+                        }
                     });
             }
         }
@@ -1199,6 +1718,7 @@ fn collect_run(out: &mut Vec<Entry>) {
                 name: name.clone(),
                 command,
                 kind: Kind::Run,
+                phase: Phase::Desktop,
                 machine,
                 enabled,
                 missing: false,
@@ -1222,6 +1742,7 @@ fn collect_run(out: &mut Vec<Entry>) {
                 name: orig.clone(),
                 command: String::new(),
                 kind: Kind::Run,
+                phase: Phase::Desktop,
                 machine,
                 enabled: *enabled,
                 missing: true,
@@ -1266,6 +1787,7 @@ fn collect_one_folder(out: &mut Vec<Entry>, dir: &Path, common: bool) {
                 name: file_name.clone(),
                 command,
                 kind: Kind::Folder,
+                phase: Phase::Desktop,
                 machine: common,
                 enabled,
                 missing: false,
@@ -1287,6 +1809,7 @@ fn collect_one_folder(out: &mut Vec<Entry>, dir: &Path, common: bool) {
             name: orig.clone(),
             command: String::new(),
             kind: Kind::Folder,
+            phase: Phase::Desktop,
             machine: common,
             enabled: *enabled,
             missing: true,
@@ -1369,6 +1892,7 @@ fn task_entry(tasks: &IRegisteredTaskCollection, index: i32) -> Option<Entry> {
             name,
             command,
             kind: Kind::Task,
+            phase: if boot { Phase::Machine } else { Phase::Logon },
             machine: !path_is_user_task(&path),
             enabled,
             missing: false,
@@ -1454,6 +1978,7 @@ fn collect_scm(out: &mut Vec<Entry>, ty: windows::Win32::System::Services::ENUM_
                 name: if display.is_empty() { name.clone() } else { display },
                 command: bin.clone(),
                 kind,
+                phase: if kind == Kind::Driver { Phase::Kernel } else { Phase::Machine },
                 machine: true,
                 enabled,
                 missing: false,
@@ -1499,6 +2024,7 @@ fn collect_uwp(out: &mut Vec<Entry>) {
                 name: task.clone(),
                 command: pkg.clone(),
                 kind: Kind::Uwp,
+                phase: Phase::Desktop,
                 machine: false,
                 enabled,
                 missing: false,
@@ -1532,6 +2058,7 @@ fn collect_winlogon(out: &mut Vec<Entry>) {
                 name: name.clone(),
                 command,
                 kind: Kind::Winlogon,
+                phase: Phase::Logon,
                 machine: true,
                 enabled: true,
                 missing: false,
@@ -1564,6 +2091,7 @@ fn collect_other(out: &mut Vec<Entry>) {
                 name: "AppInit_DLLs".into(),
                 command,
                 kind: Kind::Other,
+                phase: Phase::Logon,
                 machine: true,
                 enabled: true,
                 missing: false,
@@ -1591,6 +2119,7 @@ fn collect_other(out: &mut Vec<Entry>) {
                 name: "BootExecute".into(),
                 command,
                 kind: Kind::Other,
+                phase: Phase::Kernel,
                 machine: true,
                 enabled: true,
                 missing: false,
@@ -1630,6 +2159,7 @@ fn collect_other(out: &mut Vec<Entry>) {
                 name: label,
                 command: stub,
                 kind: Kind::Other,
+                phase: Phase::Logon,
                 machine: true,
                 enabled: pending,
                 missing: false,
@@ -1943,6 +2473,7 @@ mod tests {
             name: id.into(),
             command: String::new(),
             kind: Kind::Run,
+            phase: Phase::Desktop,
             machine: false,
             enabled,
             missing: false,
