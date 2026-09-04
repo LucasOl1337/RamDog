@@ -331,6 +331,43 @@ pub fn lookup(name_lower: &str) -> Option<Known> {
             "Instalado junto com o driver de vídeo.",
             Risk::Respawns,
         ),
+
+        // ── Linux ────────────────────────────────────────────────────────────────────
+        "systemd" | "init" => k(
+            "PID 1: sobe o resto do sistema, serviços e a sessão.",
+            "Sempre aberto desde o boot. Encerrar derruba a máquina.",
+            Risk::Fatal,
+        ),
+        "kthreadd" => k(
+            "Pai de todas as kernel threads do Linux.",
+            "Não é um programa de usuário. Encerrar não é opção.",
+            Risk::Fatal,
+        ),
+        "dbus-daemon" | "dbus-broker" => k(
+            "Barramento de mensagens: apps e serviços do desktop falam por aqui.",
+            "Sem ele a sessão gráfica perde metade dos daemons.",
+            Risk::Fatal,
+        ),
+        "gnome-shell" | "kwin_wayland" | "kwin_x11" | "xorg" | "xwayland" => k(
+            "Compositor / servidor gráfico da sessão.",
+            "Encerrar fecha a sessão gráfica na hora.",
+            Risk::Fatal,
+        ),
+        "pipewire" | "pipewire-pulse" | "wireplumber" | "pulseaudio" => k(
+            "Áudio (e às vezes vídeo) da sessão.",
+            "A sessão reabre sozinha na maioria dos desktops; você fica mudo no meio tempo.",
+            Risk::Respawns,
+        ),
+        "networkmanager" | "wpa_supplicant" | "iwd" | "systemd-networkd" => k(
+            "Pilha de rede: Wi-Fi, cabo, VPN.",
+            "Serviço de sistema. Encerrar corta a rede até o systemd religar.",
+            Risk::Respawns,
+        ),
+        "sshd" | "sshd-session" => k(
+            "Servidor SSH: aceita logins remotos.",
+            "Matar a sessão atual te desconecta; o serviço em si o systemd religa.",
+            Risk::Safe,
+        ),
         _ => return None,
     })
 }

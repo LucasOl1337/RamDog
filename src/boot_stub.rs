@@ -1,4 +1,4 @@
-//! Partida (tudo que sobe com o PC) é Windows. No macOS a aba existe e explica.
+//! Partida (tudo que sobe com o PC) é Windows. No Linux/macOS a aba existe e explica.
 
 use crate::config::Config;
 use crate::procs::ProcInfo;
@@ -29,7 +29,10 @@ impl Boot {
         ui.add_space(16.0);
         ui.label("A visão Partida lista o que o Windows dispara no boot e no logon.");
         ui.add_space(8.0);
-        ui.label("No macOS o equivalente são LaunchAgents/LaunchDaemons — ainda não está nesta aba.");
+        ui.label(
+            "No Linux o equivalente seria systemd (system/user units) e ~/.config/autostart — ainda não está nesta aba. \
+             No macOS: LaunchAgents/LaunchDaemons.",
+        );
         Vec::new()
     }
 }

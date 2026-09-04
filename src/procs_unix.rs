@@ -66,6 +66,8 @@ impl Sampler {
             // sysinfo: 0–100*ncpu; aqui 0–100 da máquina, igual ao Windows.
             let cpu_pct = (p.cpu_usage() / self.ncpu).clamp(0.0, 100.0);
             let ppid = p.parent().map(|x| x.as_u32()).unwrap_or(0);
+            let session = p.session_id().map(|s| s.as_u32()).unwrap_or(0);
+            let threads = p.tasks().map(|t| t.len() as u32).unwrap_or(0);
             let name_lower = name.to_lowercase();
             out.push(ProcInfo {
                 pid: pid_u,
@@ -78,9 +80,9 @@ impl Sampler {
                 private_ws: rss,
                 working_set: rss,
                 commit: virt,
-                threads: 0,
+                threads,
                 handles: 0,
-                session: 0,
+                session,
                 create_time,
                 cpu_pct,
                 // O `sysinfo` já entrega uma taxa por intervalo, não um contador cru; sem

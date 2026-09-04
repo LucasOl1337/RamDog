@@ -81,19 +81,21 @@ const AI_CMD_HINTS: &[&str] = &[
     "\\orca\\", "orca-terminal", "cua-driver", "computer-use", "windows-mcp",
 ];
 const DEV_NAMES: &[&str] = &[
-    "code", "code - insiders", "devenv", "rider64", "idea64", "pycharm64", "webstorm64", "clion64",
+    "code", "code - insiders", "code-oss", "codium", "devenv", "rider64", "idea64", "pycharm64", "webstorm64", "clion64",
     "goland64", "datagrip64", "studio64", "git", "git-bash", "cargo", "rustc", "rust-analyzer",
-    "dotnet", "msbuild", "docker", "docker desktop", "com.docker.backend", "com.docker.build",
-    "wsl", "wslservice", "wslhost", "vmmem", "vmmemwsl", "windowsterminal", "openconsole", "alacritty",
-    "wezterm-gui", "mintty", "gitkraken", "postman", "insomnia", "tabby", "hyper", "qemu-system-x86_64",
+    "dotnet", "msbuild", "docker", "docker desktop", "com.docker.backend", "com.docker.build", "dockerd", "containerd",
+    "podman", "wsl", "wslservice", "wslhost", "vmmem", "vmmemwsl", "windowsterminal", "openconsole", "alacritty",
+    "wezterm-gui", "wezterm", "kitty", "foot", "ghostty", "gnome-terminal", "gnome-terminal-server", "konsole",
+    "tilix", "xfce4-terminal", "mintty", "gitkraken", "postman", "insomnia", "tabby", "hyper", "qemu-system-x86_64",
     "emulator", "adb", "gradle", "kotlin", "tsc", "esbuild", "vite", "deno", "bun", "go", "gopls",
-    "clangd", "cmake", "ninja", "make", "mingw32-make", "ollama-runner", "sqlite3", "redis-server",
+    "clangd", "cmake", "ninja", "make", "mingw32-make", "nvim", "vim", "emacs", "ollama-runner", "sqlite3", "redis-server",
     "postgres", "pg_ctl", "mysqld", "mongod", "nginx", "ngrok", "cloudflared", "vagrant", "virtualbox",
     "vboxheadless", "vmware-vmx", "vmplayer", "notepad++", "sublime_text", "fleet", "warp", "orbstack",
 ];
 const BROWSER_NAMES: &[&str] = &[
-    "chrome", "brave", "brave browser", "msedge", "firefox", "opera", "opera_gx", "vivaldi", "arc",
-    "chromium", "waterfox", "librewolf", "tor", "iexplore", "zen",
+    "chrome", "brave", "brave browser", "msedge", "firefox", "firefox-bin", "opera", "opera_gx", "vivaldi", "arc",
+    "chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "waterfox", "librewolf", "tor",
+    "iexplore", "zen",
 ];
 const GAMES_NAMES: &[&str] = &[
     "steam", "steamwebhelper", "steamservice", "epicgameslauncher", "epicwebhelper", "riotclientservices",
@@ -118,7 +120,8 @@ const PERSONAL_NAMES: &[&str] = &[
 /// Hosts genéricos: herdam a categoria do pai (node lançado pelo Codex é IA; pelo VS Code é Dev).
 const GENERIC_HOSTS: &[&str] = &[
     "node", "nodejs", "python", "python3", "pythonw", "py", "uv", "uvx", "npm", "npx", "pnpm", "yarn",
-    "bun", "deno", "conhost", "cmd", "powershell", "pwsh", "bash", "sh", "zsh", "fish", "login", "wsl", "wslhost",
+    "bun", "deno", "conhost", "cmd", "powershell", "pwsh", "bash", "sh", "dash", "zsh", "fish", "login",
+    "sudo", "su", "env", "systemd-run", "wsl", "wslhost",
     "msedgewebview2", "java", "javaw", "ruby", "perl", "php", "electron", "webview2", "dotnet",
     "cscript", "wscript", "mshta", "rundll32", "esbuild", "tsserver", "typescript", "cargo", "rustc",
     "link", "cl", "gcc", "g++", "clang", "clang++", "make", "cmake", "ninja", "git", "ssh", "sshd",
@@ -153,6 +156,13 @@ const SYSTEM_NAMES: &[&str] = &[
     "powertoys.peek.ui", "powertoys.crophost", "powertoys.keyboardmanagerengine", "powertoys.mousewithoutborders",
     "everything", "listary", "flow.launcher", "translucenttb", "rainmeter", "wallpaper32", "wallpaper64",
     "lively", "displayfusion", "displayfusionhookapp64", "monitorswitcher", "ramdog",
+    "systemd", "init", "kthreadd", "dbus-daemon", "dbus-broker", "dbus-broker-launch",
+    "systemd-journald", "systemd-logind", "systemd-udevd", "systemd-resolved", "systemd-timesyncd",
+    "systemd-networkd", "systemd-oomd", "systemd-homed", "networkmanager", "wpa_supplicant", "iwd",
+    "polkitd", "polkit-agent-helper-1", "udisksd", "pipewire", "pipewire-pulse", "wireplumber", "pulseaudio",
+    "xorg", "xwayland", "gnome-shell", "gsd-xsettings", "mutter", "kwin_x11", "kwin_wayland", "plasmashell",
+    "gdm", "gdm-session-worker", "sddm", "lightdm", "accounts-daemon", "colord", "fwupd", "avahi-daemon",
+    "bluetoothd", "modemmanager", "cupsd", "cron", "crond", "rsyslogd", "irqbalance", "snapd",
 ];
 
 /// Host genérico (shell, runtime, ferramenta) que não diz nada sobre "quem" é o dono do processo.
@@ -188,7 +198,8 @@ fn own_rule(p: &ProcInfo, base: &str) -> Option<Category> {
     }
     let path = p.exe_path.to_lowercase();
     if !path.is_empty()
-        && (path.contains("\\steam\\") || path.contains("\\steamapps\\") || path.contains("\\epic games\\")
+        && (path.contains("\\steam\\") || path.contains("\\steamapps\\") || path.contains("/steam/")
+            || path.contains("/steamapps/") || path.contains("\\epic games\\")
             || path.contains("\\riot games\\") || path.contains("\\gog galaxy\\") || path.contains("\\ea games\\")
             || path.contains("\\ubisoft\\") || path.contains("\\battle.net\\") || path.contains("\\xboxgames\\"))
     {
@@ -211,7 +222,21 @@ fn fallback_rule(p: &ProcInfo, base: &str) -> Category {
         return Category::System;
     }
     let path = p.exe_path.to_lowercase();
-    if p.session == 0 || path.starts_with("c:\\windows\\") || path.contains("\\windows\\system32\\") {
+    // session 0 no Windows é a sessão de serviços. No Linux o campo começa em 0 quando
+    // sysinfo não acha sid — tratar 0 como "sistema" classificava *todo* processo como Sistema.
+    if cfg!(windows)
+        && (p.session == 0 || path.starts_with("c:\\windows\\") || path.contains("\\windows\\system32\\"))
+    {
+        return Category::System;
+    }
+    if is_linux_kernel_thread(base) {
+        return Category::System;
+    }
+    if path.starts_with("/usr/lib/systemd")
+        || path.starts_with("/lib/systemd")
+        || path.contains("/lib/systemd/")
+        || path.starts_with("/usr/libexec/")
+    {
         return Category::System;
     }
     if base == "node" || base == "python" || base == "python3" || base == "pythonw" || base == "java" || base == "javaw" {
@@ -266,15 +291,56 @@ pub fn classify(procs: &[ProcInfo], overrides: &HashMap<String, Category>) -> Ha
     result
 }
 
-/// Processos que o Windows não deixa (ou não deve deixar) matar sem derrubar o sistema.
+/// Kernel thread do Linux: nome entre colchetes ou os clássicos do kthreadd.
+fn is_linux_kernel_thread(name_lower: &str) -> bool {
+    let n = name_lower.trim_start_matches('[').trim_end_matches(']');
+    n == "kthreadd"
+        || n == "kdevtmpfs"
+        || n == "kauditd"
+        || n == "kswapd0"
+        || n == "kswapd1"
+        || n == "kcompactd0"
+        || n == "khugepaged"
+        || n == "oom_reaper"
+        || n == "writeback"
+        || n == "kblockd"
+        || n == "kintegrityd"
+        || n == "kthrotld"
+        || n == "kstrp"
+        || n == "watchdogd"
+        || n.starts_with("kswapd")
+        || n.starts_with("kcompactd")
+        || n.starts_with("kworker")
+        || n.starts_with("ksoftirqd")
+        || n.starts_with("migration/")
+        || n.starts_with("rcu_")
+        || n.starts_with("watchdog/")
+        || n.starts_with("cpuhp/")
+        || n.starts_with("idle_inject")
+        || n.starts_with("irq/")
+        || n.starts_with("scsi_")
+        || n.starts_with("nvme-")
+        || n.starts_with("jbd2/")
+        || n.starts_with("ext4-")
+        || n.starts_with("ipv6_addrconf")
+}
+
+/// Processos que o SO não deixa (ou não deve deixar) matar sem derrubar a sessão.
 pub fn is_critical(name_lower: &str, pid: u32) -> bool {
-    if pid == 4 || pid == 0 {
+    if pid == 0 || pid == 1 || pid == 2 || pid == 4 {
+        return true;
+    }
+    let base = base_name(name_lower);
+    if is_linux_kernel_thread(base) {
         return true;
     }
     matches!(
-        base_name(name_lower),
+        base,
         "system" | "registry" | "memory compression" | "secure system" | "smss" | "csrss" | "wininit"
             | "winlogon" | "services" | "lsass" | "fontdrvhost" | "dwm" | "sihost" | "logonui" | "lsaiso"
             | "kernel_task" | "launchd" | "windowserver" | "loginwindow" | "syspolicyd"
+            | "systemd" | "init" | "kthreadd" | "dbus-broker" | "dbus-daemon"
+            | "gnome-shell" | "kwin_wayland" | "kwin_x11" | "xorg" | "xwayland"
+            | "gdm" | "gdm-session-worker" | "sddm" | "lightdm"
     )
 }

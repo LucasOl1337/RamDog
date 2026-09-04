@@ -15,17 +15,16 @@
 //! Inicia sempre que `hwtemp.exe` está ao lado do `ramdog.exe`. Sem admin o helper
 //! sobe (asInvoker) mas Tctl/DIMM/fans vêm vazios — a UI mostra "–", nunca inventa número.
 
-use std::io::{BufRead, BufReader};
 #[cfg(windows)]
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 #[cfg(windows)]
 use std::process::{Child, ChildStdin, Command, Stdio};
-#[cfg(not(windows))]
-use std::process::Child;
+#[cfg(windows)]
 use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 
+#[cfg(windows)]
 #[derive(Deserialize, Default, Clone)]
 struct HwTempMsg {
     cpu_temp: Option<f32>,
@@ -109,16 +108,24 @@ impl HwCmd {
 }
 
 pub struct HwTempReader {
+    #[cfg(windows)]
     latest: Arc<Mutex<HwTemp>>,
     #[cfg(windows)]
     stdin: Arc<Mutex<ChildStdin>>,
+    #[cfg(windows)]
     child: Child,
 }
 
 impl HwTempReader {
-    /// `None` só se `hwtemp.exe` não estiver ao lado do `ramdog.exe` (ou o spawn falhar).
+    /// Windows: `None` se `hwtemp.exe` não estiver ao lado do `ramdog.exe`.
+    /// Linux: sempre `Some` — a leitura é `/sys/class/hwmon`, sem helper.
+    /// macOS: `None` (sem hwmon nem LibreHardwareMonitor).
     pub fn spawn() -> Option<Self> {
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            return Some(Self {});
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             return None;
         }
@@ -162,7 +169,19 @@ impl HwTempReader {
     }
 
     pub fn read(&self) -> HwTemp {
-        self.latest.lock().map(|g| g.clone()).unwrap_or_default()
+        #[cfg(target_os = "linux")]
+        {
+            let _ = self;
+            return linux_hwmon_read();
+        }
+        #[cfg(windows)]
+        {
+            self.latest.lock().map(|g| g.clone()).unwrap_or_default()
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            HwTemp::default()
+        }
     }
 
     #[cfg(windows)]
@@ -192,7 +211,95 @@ impl Drop for HwTempReader {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
+            let _ = self.child.kill();
         }
-        let _ = self.child.kill();
+    }
+}
+
+/// Leitura direta do hwmon. Sem escrita de PWM: se o RamDog cair, não há curva para desfazer.
+#[cfg(target_os = "linux")]
+fn linux_hwmon_read() -> HwTemp {
+    let Ok(entries) = std::fs::read_dir("/sys/class/hwmon") else {
+        return HwTemp::default();
+    };
+    let mut sensors = Vec::new();
+    let mut dimm = Vec::new();
+    let mut cpu_temps = Vec::new();
+    for ent in entries.flatten() {
+        let dir = ent.path();
+        let chip = std::fs::read_to_string(dir.join("name")).unwrap_or_default();
+        let chip = chip.trim();
+        if chip.is_empty() {
+            continue;
+        }
+        let hw = hwmon_group(chip);
+        for i in 1..32u32 {
+            let raw = match std::fs::read_to_string(dir.join(format!("temp{i}_input"))) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let Ok(milli) = raw.trim().parse::<i64>() else { continue };
+            let c = milli as f32 / 1000.0;
+            if !(1.0..=150.0).contains(&c) {
+                continue;
+            }
+            let label = std::fs::read_to_string(dir.join(format!("temp{i}_label")))
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| format!("{chip} temp{i}"));
+            sensors.push(SensorRow {
+                hw: hw.to_string(),
+                name: label,
+                kind: "temp".into(),
+                value: c,
+            });
+            if hw == "CPU" {
+                cpu_temps.push(c);
+            }
+            if hw == "RAM" {
+                dimm.push(c);
+            }
+        }
+        for i in 1..16u32 {
+            let raw = match std::fs::read_to_string(dir.join(format!("fan{i}_input"))) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let Ok(rpm) = raw.trim().parse::<f32>() else { continue };
+            if rpm < 0.0 {
+                continue;
+            }
+            let label = std::fs::read_to_string(dir.join(format!("fan{i}_label")))
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| format!("{chip} fan{i}"));
+            sensors.push(SensorRow {
+                hw: hw.to_string(),
+                name: label,
+                kind: "rpm".into(),
+                value: rpm,
+            });
+        }
+    }
+    HwTemp {
+        cpu_temp: cpu_temps.iter().cloned().reduce(f32::max),
+        dimm_temps: dimm,
+        sensors,
+        fans: Vec::new(),
+        stab: StabState::default(),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn hwmon_group(name: &str) -> &'static str {
+    match name.to_ascii_lowercase().as_str() {
+        "k10temp" | "coretemp" | "zenpower" | "zenpower3" | "cpu_thermal" | "k8temp" | "via_cputemp"
+        | "acpitz" => "CPU",
+        "amdgpu" | "nouveau" | "nvidia" | "radeon" | "i915" | "xe" => "GPU",
+        "spd5118" | "jc42" | "ee1004" | "dimm" => "RAM",
+        "nvme" | "drivetemp" | "hddtemp" => "Disco",
+        _ => "Placa-mãe",
     }
 }

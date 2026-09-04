@@ -1,5 +1,5 @@
 //! Organizar monitores e janelas depende do Win32 (EnumWindows, SetWindowPos, DWM).
-//! No macOS a aba existe e explica por quê.
+//! No Linux/macOS a aba existe e explica por quê.
 
 use crate::config::Config;
 use crate::procs::ProcInfo;
@@ -21,8 +21,9 @@ impl Screens {
         ui.label("A visão Telas arrasta janelas entre monitores, encaixa em grades e aplica cenários.");
         ui.add_space(8.0);
         ui.label(
-            "Ela é escrita direto em Win32. No macOS o equivalente é a Accessibility API, que exige \
-             permissão explícita do sistema — ainda não está nesta aba.",
+            "Ela é escrita direto em Win32. No Linux o equivalente seria X11/_NET_WM ou o protocolo \
+             wlr-foreign-toplevel do Wayland; no macOS, a Accessibility API (permissão explícita). \
+             Ainda não está nesta aba.",
         );
         Vec::new()
     }

@@ -1,4 +1,4 @@
-//! Desperdício é Windows (Defender, SCM, Appx). No macOS a aba existe e explica.
+//! Desperdício é Windows (Defender, SCM, Appx). No Linux/macOS a aba existe e explica.
 
 use crate::procs::ProcInfo;
 
@@ -18,7 +18,7 @@ impl Drains {
         ui.add_space(16.0);
         ui.label("Desperdício (Defender, serviços, Appx) é específico do Windows.");
         ui.add_space(8.0);
-        ui.label("No macOS o RamDog lista, categoriza e finaliza processos — essa aba não tem equivalente.");
+        ui.label("No Linux e no macOS o RamDog lista, categoriza e finaliza processos — essa aba não tem equivalente.");
         Vec::new()
     }
 }

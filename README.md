@@ -5,11 +5,12 @@
 <h1 align="center">RamDog</h1>
 
 <p align="center">
-  Gerenciador de processos para Windows e macOS: origem, categorias, kill de árvore.
+  Gerenciador de processos para Windows, Linux e macOS: origem, categorias, kill de árvore.
 </p>
 
 <p align="center">
   <img alt="Windows x64" src="https://img.shields.io/badge/Windows-x64-0B3A4A?logo=windows&logoColor=4FC3F7">
+  <img alt="Linux" src="https://img.shields.io/badge/Linux-x86_64%20%7C%20aarch64-333333?logo=linux&logoColor=white">
   <img alt="macOS" src="https://img.shields.io/badge/macOS-arm64%20%7C%20x86_64-111111?logo=apple&logoColor=white">
   <img alt="Rust" src="https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white">
   <img alt="MIT" src="https://img.shields.io/badge/license-MIT-69F0AE">
@@ -27,12 +28,12 @@ Este app existe por isso.
 
 - **Origem / lançado por.** Coluna Origem = primeiro ancestral vivo que não seja host genérico (`cmd`, `bash`, `node`…). Quando a cadeia de pais morreu, o RamDog lê o ambiente herdado e mostra em roxo o agente (Claude Code + sessão + PID, Codex, Cursor Agent, Gemini CLI…) e o host (Maestri, VS Code, Cursor, Windows Terminal…), além de `npm run <script>` no projeto.
 - **Categorias.** IA / Agentes, Dev, Navegador, Jogos, Pessoal, Sistema, Outros — regra automática, com override manual por processo.
-- **Kill, árvore e lock.** Finaliza o processo ou a árvore (processo + filhos). Lock impede que o RamDog encerre o protegido. Processos críticos do SO (`System`/`csrss`/`dwm` no Windows; `kernel_task`/`launchd`/`WindowServer` no macOS) são sempre protegidos.
-- **Visões.** Lista (plana), Árvore (pai → filhos, RAM da subárvore), Categorias (agrupado) nas abas ao lado da busca. Os addons — **Partida**, **Desperdício**, **Térmico** e **Telas**, só no Windows — ficam longe delas, com o nome escrito no bloco de controles do canto superior direito: clicar troca o conteúdo da janela, clicar de novo volta para a lista de processos.
+- **Kill, árvore e lock.** Finaliza o processo ou a árvore (processo + filhos). Lock impede que o RamDog encerre o protegido. Processos críticos do SO (`System`/`csrss`/`dwm` no Windows; `systemd`/`kthreadd`/`gnome-shell`/`Xorg` no Linux; `kernel_task`/`launchd`/`WindowServer` no macOS) são sempre protegidos.
+- **Visões.** Lista (plana), Árvore (pai → filhos, RAM da subárvore), Categorias (agrupado) nas abas ao lado da busca. Os addons — **Partida**, **Desperdício**, **Térmico** e **Telas** — ficam longe delas, com o nome escrito no bloco de controles do canto superior direito: clicar troca o conteúdo da janela, clicar de novo volta para a lista de processos. Partida, Desperdício e Telas são Windows. Térmico no Linux é leitura de hwmon, sem fans.
 - **Agrupar por app.** Na visão Lista, processos do mesmo executável viram uma linha só — `chrome.exe (37)` — somando RAM, CPU, GPU e disco no cabeçalho, com **✖** que encerra o app inteiro. A chave é o caminho do executável, não o nome: dois `svchost.exe` de pastas diferentes nunca caem no mesmo grupo. App com um processo só não agrupa.
 - **Coluna CPU que dá para ler.** A repartição é por `CycleTime` (contado a cada troca de contexto), não pelo tempo de kernel/usuário — que o Windows só cobra em fatias de 15,625 ms e joga inteira em quem estava rodando no tique, fazendo processo de rajada piscar entre 0% e 15%. O total repartido vem de `GetSystemTimes`, então a máquina afogada não dilui o culpado. Por cima, média móvel de τ = 1 s amarrada ao tempo, não à contagem de amostras: o topo da lista para quieto o tempo de você ler. O valor cru do último intervalo continua visível no tooltip.
-- **Medidores.** CPU e RAM no topo nos dois SOs. GPU NVIDIA (NVML) e % de disco estilo Task Manager só no Windows.
-- **Térmico.** O [TempHUD](https://github.com/LucasOl1337/TempHUD) embutido: sensores de CPU/GPU/RAM/placa-mãe, controle de fans SuperIO (% manual ou Auto/BIOS) e **ESTABILIZAR** — fans travados em 50% até 80 °C, rampa linear até 100% aos 92 °C, teto imediato a 95 °C. A curva roda no helper `hwtemp.exe`: se o RamDog cair, os fans voltam à BIOS sozinhos. Fans exigem admin; sem eles a visão mostra só as leituras.
+- **Medidores.** CPU e RAM no topo nos três SOs. GPU NVIDIA (NVML) só no Windows. % de disco: PDH no Windows, `/proc/diskstats` no Linux, ausente no macOS.
+- **Térmico.** No Windows, o [TempHUD](https://github.com/LucasOl1337/TempHUD) embutido: sensores de CPU/GPU/RAM/placa-mãe, controle de fans SuperIO (% manual ou Auto/BIOS) e **ESTABILIZAR** — fans travados em 50% até 80 °C, rampa linear até 100% aos 92 °C, teto imediato a 95 °C. A curva roda no helper `hwtemp.exe`: se o RamDog cair, os fans voltam à BIOS sozinhos. Fans exigem admin; sem eles a visão mostra só as leituras. No Linux a visão lê `/sys/class/hwmon` (só leitura — sem PWM, sem ESTABILIZAR).
 - **Partida.** Tudo que sobe com o PC, não o recorte do Gerenciador de Tarefas: `Run` e `RunOnce` (HKCU, HKLM e Wow64), a pasta Iniciar inteira (`.lnk`, `.vbs`, `.cmd`), tarefas agendadas com gatilho de boot/logon, serviços automáticos, apps UWP, Winlogon e Active Setup. A lista não vem achatada: o corte de fora é **sobe com o PC / não sobe / quebrada** — três contadores clicáveis no topo — e, dentro de cada bloco, a **fase do arranque**, da superfície para o fundo: seus programas, ao entrar na conta, com a máquina, antes do Windows. Cada faixa diz quantas entradas tem e quantas estão rodando agora, e recolhe com um clique. Estado na partida e estado agora deixaram de ser a mesma coluna: o check responde "sobe com o PC", a coluna **Agora** responde "tem processo de pé". Dá para trocar o corte de dentro para tipo de origem, agrupar só por fase ou só por tipo, ou voltar para a lista plana.
 - **Telas.** Mapa dos monitores em escala: arraste a janela de um monitor para outro, solte numa zona da grade (metades, terços, quadrantes, principal+2…) e ela encaixa. **Distribuir** espalha tudo que está num monitor pela grade escolhida. **Cenários** salvam o arranjo em fração da área de trabalho — não em pixel — então o preset sobrevive a troca de resolução, de escala e de monitor; ao aplicar, o que já está aberto é movido e o que falta é aberto e posicionado quando a janela aparece.
 - **O que é isso, posso matar?** Ficha de 80 processos do Windows no painel de detalhes: o que faz, por que está aberto e o risco de encerrar — 🟢 seguro, 🟡 o Windows reabre sozinho, 🔴 derruba a sessão.
@@ -51,17 +52,19 @@ Depois: `ramdog` no terminal, ou o atalho **RamDog** na área de trabalho.
 
 O RamDog **pede elevação ao abrir** (um prompt de UAC, por qualquer caminho: atalho, PATH ou clique no exe). É o que destrava a temperatura de CPU/RAM, encerrar serviço e processo de outro usuário, e as ações do Partida e do Desperdício sem um UAC por clique. Quem não tem direito de elevar não fica de fora: o RamDog abre limitado em vez de recusar a subir (`highestAvailable`, não `requireAdministrator`).
 
-**macOS** (Apple Silicon ou Intel):
+**Linux** (x86_64 ou aarch64) e **macOS** (Apple Silicon ou Intel):
 
 ```bash
 curl -sSfL https://raw.githubusercontent.com/LucasOl1337/RamDog/main/install.sh | sh
 ```
 
-Baixa o tar do [release](https://github.com/LucasOl1337/RamDog/releases) (`RamDog-macos-aarch64.tar.gz` ou `…-x86_64.tar.gz`) para `~/.local/bin/ramdog` e abre. Se o Gatekeeper bloquear: Ajustes → Privacidade e segurança → Abrir mesmo assim.
+Baixa o tar do [release](https://github.com/LucasOl1337/RamDog/releases) (`RamDog-linux-x86_64.tar.gz`, `RamDog-linux-aarch64.tar.gz`, `RamDog-macos-aarch64.tar.gz` ou `…-x86_64.tar.gz`) para `~/.local/bin/ramdog` e abre. No Mac, se o Gatekeeper bloquear: Ajustes → Privacidade e segurança → Abrir mesmo assim.
 
-No Mac: lista, categorias, origem, árvore, kill. Sem Desperdício, sem Telas, sem temp de CPU, sem GPU NVML. Sem binário no release, o script cai no `cargo build` (precisa [rustup](https://rustup.rs) + git).
+No Linux: lista, categorias, origem, árvore, kill, temperatura via hwmon (`/sys/class/hwmon`), disco no topo via `/proc/diskstats`. Sem Desperdício, sem Telas, sem Partida, sem NVML, sem controle de fan. Janela: Wayland ou X11 (eframe). Sem binário no release, o script cai no `cargo build` (precisa [rustup](https://rustup.rs) + git e libs nativas, ver abaixo).
 
-[Release](https://github.com/LucasOl1337/RamDog/releases) com zip (Windows) e tar (macOS), se preferir baixar na mão.
+No Mac: lista, categorias, origem, árvore, kill. Sem Desperdício, sem Telas, sem temp de CPU, sem GPU NVML.
+
+[Release](https://github.com/LucasOl1337/RamDog/releases) com zip (Windows) e tar (Linux/macOS), se preferir baixar na mão.
 
 Do código:
 
@@ -69,6 +72,13 @@ Do código:
 git clone https://github.com/LucasOl1337/RamDog.git
 cd RamDog
 cargo build --release
+```
+
+No Linux (Debian/Ubuntu e derivados), o `eframe` com Wayland/X11 precisa das libs de desenvolvimento:
+
+```bash
+sudo apt install build-essential pkg-config libxkbcommon-dev libwayland-dev \
+  libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev
 ```
 
 No Windows, o manifesto de elevação só entra no perfil `release` — ele vale para todos os
@@ -90,7 +100,7 @@ dotnet publish hwtemp -c Release -o target/release --no-self-contained
 | Finalizar árvore (processo + filhos) | `Shift+Del`, `Shift`+✖, botão direito → Finalizar árvore, ou painel inferior |
 | Proteger / desproteger | 🔒/🔓 na linha, botão direito, ou painel inferior. Protegidos nunca são finalizados pelo RamDog |
 | Categoria manual | botão direito → Categoria, ou combo no painel inferior (`auto` volta à regra automática) |
-| Visões | **Lista**, **Árvore**, **Categorias** nas abas ao lado da busca; **Partida**, **Desperdício**, **Térmico** e **Telas** com o nome escrito no bloco de controles do canto superior direito (só no Windows) — o botão aceso é a visão atual e clicar nele volta para a última visão de processo |
+| Visões | **Lista**, **Árvore**, **Categorias** nas abas ao lado da busca; **Partida**, **Desperdício**, **Térmico** e **Telas** com o nome escrito no bloco de controles do canto superior direito — o botão aceso é a visão atual e clicar nele volta para a última visão de processo. Partida/Desperdício/Telas só no Windows; Térmico no Linux é hwmon só leitura |
 | Agrupar por app | caixa **Agrupar por app** na visão Lista; ▶/▼ recolhe e abre um grupo, **Expandir tudo** / **Recolher tudo** valem para a lista inteira; **✖** no cabeçalho encerra todos os processos daquele app |
 | Filtro | busca por nome / PID / comando; chips de categoria (clique alterna, duplo clique isola); `ocultar abaixo de N MB`, no canto direito da fileira junto de `coluna RAM mostra` |
 | Origem | coluna *Origem* = primeiro ancestral vivo que não seja host genérico (cmd, bash, node...); cadeia completa clicável no painel inferior (`Ir para o pai`) |
@@ -127,10 +137,10 @@ Os slots guardam posição em fração da **área de trabalho** do monitor, nunc
 
 ## Limites
 
-**Os dois SOs**
+**Os três SOs**
 
-- Processos de outros usuários: no Windows já vem resolvido pela elevação de abertura (o botão **Reabrir como admin** só aparece quando ela foi recusada ou o usuário não pode elevar); no macOS, `sudo ramdog` se precisar. A UI nunca inventa número — GPU/temp/disco ausentes aparecem "–".
-- Configuração: Windows `%APPDATA%\RamDog\config.json`; macOS `~/Library/Application Support/RamDog/config.json`.
+- Processos de outros usuários: no Windows já vem resolvido pela elevação de abertura (o botão **Reabrir como admin** só aparece quando ela foi recusada ou o usuário não pode elevar); no Linux e no macOS, `sudo ramdog` se precisar. A UI nunca inventa número — GPU/temp/disco ausentes aparecem "–".
+- Configuração: Windows `%APPDATA%\RamDog\config.json`; Linux `$XDG_CONFIG_HOME/RamDog/config.json` (ou `~/.config/RamDog/config.json`); macOS `~/Library/Application Support/RamDog/config.json`.
 
 **Só Windows**
 
@@ -143,6 +153,14 @@ Os slots guardam posição em fração da **área de trabalho** do monitor, nunc
 - GPU no topo e na tabela: **NVIDIA** (`nvml.dll`). Sem driver, "–".
 - `MsMpEng.exe` é processo protegido pelo kernel: a seção Defender só reduz o trabalho dele, não mata. Com Tamper Protection ligada, pausar tempo real não pega.
 
+**Só Linux**
+
+- Sem Desperdício, sem Telas, sem Partida, sem NVML, sem assinatura digital, sem ícone extraído do executável.
+- Térmico: leitura de `/sys/class/hwmon` (coretemp/k10temp/zenpower, GPU, DIMM se o kernel expôs). Sem escrita de PWM e sem ESTABILIZAR — os fans ficam com o kernel/BIOS.
+- Disco no topo: `%util` e bytes/s de `/proc/diskstats` (discos inteiros; partições/loop/zram de fora).
+- Sem display (SSH puro, sem `WAYLAND_DISPLAY`/`DISPLAY`) a janela não abre.
+- Precisa das libs X11/Wayland em tempo de execução (`libxkbcommon`, `libwayland`, `libX11`, GL).
+
 **Só macOS**
 
 - Sem Desperdício, sem Telas, sem temp de CPU, sem NVML. Disco no topo não tem % idle estilo Task Manager.
@@ -151,6 +169,8 @@ Os slots guardam posição em fração da **área de trabalho** do monitor, nunc
 ## Como mede
 
 **Windows:** RAM = *Private Working Set* (`NtQuerySystemInformation`, mesma coluna Memória do Gerenciador de Tarefas). CPU no topo = `GetSystemTimes`; CPU por processo = fatia de `CycleTime` sobre a capacidade do mesmo `GetSystemTimes`, com média móvel de τ = 1 s (sem `CycleTime` — Windows antigo ou VM que zera o campo — cai no delta de kernel+user). Processo que morreu entre duas amostras fica fora dos dois lados da conta: os % dele somem da lista em vez de serem herdados por quem ficou. GPU = NVML + PDH `\GPU Engine(*)\Utilization Percentage` (máximo entre engines do PID). Disco no topo = PDH `% Idle Time` + bytes/s (`PdhAddEnglishCounterW`, nomes em inglês). `hwtemp.exe` lê Tctl/Tdie e DIMM.
+
+**Linux:** processos, RAM (RSS) e CPU via [sysinfo](https://crates.io/crates/sysinfo). Disco por processo = bytes lidos+escritos/s (`/proc/pid/io`). Disco no topo = `/proc/diskstats`. Temperatura = hwmon. Sem NVML, sem LibreHardwareMonitor, sem WinVerifyTrust.
 
 **macOS:** processos, RAM (RSS) e CPU via [sysinfo](https://crates.io/crates/sysinfo). Disco por processo = bytes lidos+escritos/s. Sem PDH, sem NVML, sem LibreHardwareMonitor.
 

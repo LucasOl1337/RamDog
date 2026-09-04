@@ -1110,9 +1110,13 @@ impl App {
                 self.toast("Elevação cancelada ou falhou".into(), true);
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
         {
             self.toast("No macOS, rode o RamDog com sudo se precisar matar processos de outros usuários.".into(), true);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.toast("No Linux, rode o RamDog com sudo se precisar matar processos de outros usuários.".into(), true);
         }
     }
 
@@ -1398,8 +1402,11 @@ impl App {
     fn cpu_temp(&self) -> Temp {
         match self.hwtemp.cpu_temp {
             Some(t) => Temp::C(t.round() as u32),
-            None if cfg!(not(windows)) => {
-                Temp::Missing("Temperatura de CPU no macOS ainda não está ligada (o helper hwtemp é Windows).".into())
+            None if cfg!(target_os = "macos") => {
+                Temp::Missing("Temperatura de CPU no macOS ainda não está ligada.".into())
+            }
+            None if cfg!(target_os = "linux") => {
+                Temp::Missing("Sem sensor de CPU em /sys/class/hwmon (coretemp, k10temp ou zenpower).".into())
             }
             None if !self.is_admin => {
                 Temp::Missing("Temperatura de CPU precisa de admin: o sensor Tctl só responde por driver de hardware. Volte ao modo completo e use ⬆ Admin.".into())
@@ -1413,6 +1420,12 @@ impl App {
     fn ram_temp(&self) -> Temp {
         match self.hwtemp.ram_max() {
             Some(t) => Temp::C(t.round() as u32),
+            None if cfg!(target_os = "linux") => {
+                Temp::Missing("Nenhum pente expõe sensor no hwmon (spd5118/jc42). Sem isso o RamDog não inventa °C.".into())
+            }
+            None if cfg!(target_os = "macos") => {
+                Temp::Missing("Temperatura de RAM no macOS ainda não está ligada.".into())
+            }
             None if !self.is_admin => Temp::Missing("Temperatura dos pentes precisa de admin (leitura SMBus).".into()),
             None => Temp::Missing("Nenhum pente desta máquina expõe sensor de temperatura.".into()),
         }
@@ -2864,7 +2877,11 @@ impl App {
                 ui.vertical_centered(|ui| {
                     ui.add_space(40.0);
                     ui.label(RichText::new("Sem leitura de sensores").strong().size(15.0));
-                    let why = if !cfg!(windows) {
+                    let why = if cfg!(target_os = "macos") {
+                        "A visão Térmico no macOS ainda não está ligada."
+                    } else if cfg!(target_os = "linux") {
+                        "Nenhum sensor em /sys/class/hwmon. Sem coretemp/k10temp/zenpower o kernel não expôs temperatura."
+                    } else if !cfg!(windows) {
                         "A visão Térmico ainda é só Windows: depende do helper hwtemp.exe (LibreHardwareMonitorLib)."
                     } else if cmd.is_none() {
                         "hwtemp.exe não foi achado ao lado do ramdog.exe — reinstale com o helper junto."
@@ -3036,6 +3053,11 @@ impl App {
                     "Sem controles de fan: rode elevado (botão \"Reabrir como admin\" no topo) — o driver de sensores não sobe sem isso."
                 };
                 ui.label(RichText::new(why).color(MUTED));
+            } else if cfg!(target_os = "linux") {
+                ui.add_space(14.0);
+                ui.label(RichText::new(
+                    "No Linux a visão Térmico é só leitura (hwmon). O RamDog não escreve PWM — sem curva ESTABILIZAR, os fans ficam com o kernel/BIOS."
+                ).color(MUTED));
             }
         });
     }
