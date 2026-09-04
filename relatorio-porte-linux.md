@@ -94,6 +94,11 @@ Não invento resultado.
 4. Conferir: lista de processos **não** toda em Sistema; PID 1 com lock; ✖ em processo próprio; Térmico se hwmon existir; disco no topo; Partida/Desperdício/Telas só explicam a ausência.
 5. Sem display: esperar falha de janela, não lista headless.
 
+## Git
+
+Commit do porte em `main`: `5638da5` (`feat(linux): porte para Windows e Linux`).
+Remote: `https://github.com/LucasOl1337/RamDog.git`. Pasta `.maestri/` ficou de fora.
+
 ## Estado
 
-**Parcial.** Código do porte está no repo. Relatório honesto. Falta prova em Linux real (OMART) e prova de compile no target GNU. Sem commit.
+**Parcial.** Código do porte está no repo e no commit acima. Relatório honesto. Falta prova em Linux real (OMART) e prova de compile no target GNU.
