@@ -23,7 +23,10 @@ pub struct RgbaIcon {
     pub rgba: Vec<u8>,
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub fn icon_for_exe(path:&str)->Option<RgbaIcon>{crate::desktop_linux::icon(path)}
+
+#[cfg(not(any(windows,target_os = "linux")))]
 pub fn icon_for_exe(_path: &str) -> Option<RgbaIcon> {
     None
 }

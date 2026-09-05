@@ -9,3 +9,7 @@ hwtemp/pub/
 *.suo
 *.pdb
 *.log
+
+# Diagnósticos locais podem conter dados da sessão e caminhos pessoais.
+/diagnostico-linux.md
+/linux/validation/

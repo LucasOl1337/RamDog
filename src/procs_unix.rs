@@ -5,12 +5,12 @@ use std::time::Instant;
 
 use sysinfo::{Pid, System};
 
-use super::{launcher_from_env_lines, Launcher, MemStatus, ProcInfo};
+use super::{launcher_from_env_lines, MemStatus, ProcInfo};
 
 pub struct Sampler {
     sys: System,
     ncpu: f32,
-    prev_io: HashMap<u32, (u64, Instant)>,
+    prev_io: HashMap<u32, (u64, Instant, u64)>,
 }
 
 impl Sampler {
@@ -32,6 +32,11 @@ impl Sampler {
         let mut seen = HashMap::new();
 
         for (pid, p) in self.sys.processes() {
+            // sysinfo 0.33 includes user threads in this map. Their RSS belongs
+            // to the parent process and must never enter process totals again.
+            if matches!(p.thread_kind(), Some(sysinfo::ThreadKind::Userland)) {
+                continue;
+            }
             let pid_u = pid.as_u32();
             seen.insert(pid_u, ());
             let name = os(p.name());
@@ -47,7 +52,7 @@ impl Sampler {
             let io = p.disk_usage();
             let io_total = io.total_read_bytes.saturating_add(io.total_written_bytes);
             let disk_bps = match self.prev_io.get(&pid_u) {
-                Some((prev, t0)) => {
+                Some((prev, t0, start)) if *start == p.start_time() => {
                     let dt = now.duration_since(*t0).as_secs_f64();
                     if dt > 0.0 {
                         io_total.saturating_sub(*prev) as f64 / dt
@@ -55,9 +60,9 @@ impl Sampler {
                         0.0
                     }
                 }
-                None => 0.0,
+                _ => 0.0,
             };
-            self.prev_io.insert(pid_u, (io_total, now));
+            self.prev_io.insert(pid_u, (io_total, now, p.start_time()));
 
             let start = p.start_time();
             let create_time = (start as i64).saturating_mul(10_000_000) + 116_444_736_000_000_000;
@@ -67,7 +72,10 @@ impl Sampler {
             let cpu_pct = (p.cpu_usage() / self.ncpu).clamp(0.0, 100.0);
             let ppid = p.parent().map(|x| x.as_u32()).unwrap_or(0);
             let session = p.session_id().map(|s| s.as_u32()).unwrap_or(0);
-            let threads = p.tasks().map(|t| t.len() as u32).unwrap_or(0);
+            let threads = p.tasks().map(|t| t.len() as u32 + 1).unwrap_or(0);
+            #[cfg(target_os = "linux")]
+            let linux_memory = std::fs::read_to_string(format!("/proc/{pid_u}/smaps_rollup"))
+                .ok().and_then(|text| parse_smaps_rollup(&text));
             let name_lower = name.to_lowercase();
             out.push(ProcInfo {
                 pid: pid_u,
@@ -77,6 +85,11 @@ impl Sampler {
                 name_lower,
                 exe_path: exe,
                 cmdline,
+                #[cfg(target_os = "linux")]
+                linux_memory,
+                #[cfg(target_os = "linux")]
+                private_ws: linux_memory.map(|m| m.0).unwrap_or(0),
+                #[cfg(not(target_os = "linux"))]
                 private_ws: rss,
                 working_set: rss,
                 commit: virt,
@@ -116,15 +129,31 @@ fn os(s: impl AsRef<std::ffi::OsStr>) -> String {
 pub fn mem_status() -> MemStatus {
     let mut sys = System::new();
     sys.refresh_memory();
+    #[cfg(target_os = "linux")]
+    let linux_commit = std::fs::read_to_string("/proc/meminfo").ok().and_then(|s| {
+        Some((kb_field(&s, "Committed_AS:")?, kb_field(&s, "CommitLimit:")?))
+    });
     MemStatus {
+        #[cfg(target_os = "linux")]
+        linux_commit,
         total_phys: sys.total_memory(),
         avail_phys: sys.available_memory(),
+        #[cfg(target_os = "linux")]
+        total_commit: linux_commit.map(|m| m.1).unwrap_or(0),
+        #[cfg(target_os = "linux")]
+        avail_commit: linux_commit.map(|m| m.1.saturating_sub(m.0)).unwrap_or(0),
+        #[cfg(not(target_os = "linux"))]
         total_commit: sys.total_memory().saturating_add(sys.total_swap()),
+        #[cfg(not(target_os = "linux"))]
         avail_commit: sys.available_memory().saturating_add(sys.free_swap()),
     }
 }
 
 pub fn kill(pid: u32) -> Result<(), String> {
+    // POSIX treats 0 and negative PIDs as process groups, not individual tasks.
+    if pid == 0 || pid > i32::MAX as u32 {
+        return Err("PID inválido".into());
+    }
     let pid_i = pid as i32;
     let rc = unsafe { libc::kill(pid_i, libc::SIGKILL) };
     if rc == 0 {
@@ -148,3 +177,66 @@ pub fn enable_debug_privilege() {}
 // silencia aviso se o `kill` import acima parecer unused no glob
 #[allow(dead_code)]
 fn _pid_ty(_: Pid) {}
+
+#[cfg(target_os = "linux")]
+fn kb_field(text: &str, key: &str) -> Option<u64> {
+    let mut fields = text.lines().find(|line| line.split_whitespace().next() == Some(key))?.split_whitespace();
+    fields.next()?;
+    let value = fields.next()?.parse::<u64>().ok()?;
+    if fields.next()? != "kB" { return None; }
+    value.checked_mul(1024)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_smaps_rollup(text: &str) -> Option<(u64, u64)> {
+    let private = kb_field(text, "Private_Clean:")?.checked_add(kb_field(text, "Private_Dirty:")?)?;
+    Some((private, kb_field(text, "Pss:")?))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_and_proportional_memory_are_not_rss() {
+        let text = "Rss: 900 kB\nPss: 450 kB\nPrivate_Clean: 100 kB\nPrivate_Dirty: 200 kB\n";
+        assert_eq!(parse_smaps_rollup(text), Some((300 * 1024, 450 * 1024)));
+        assert_eq!(parse_smaps_rollup("Rss: 900 kB"), None);
+        assert_eq!(kb_field("Pss: invalid kB", "Pss:"), None);
+        assert_eq!(kb_field("Pss: 450 MB", "Pss:"), None);
+    }
+
+    #[test]
+    fn sampling_does_not_turn_threads_into_processes() {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let worker = std::thread::spawn(move || { let _ = rx.recv(); });
+        let mut sampler = Sampler::new();
+        let rows = sampler.sample();
+        let own = std::process::id();
+        let process = rows.iter().find(|p| p.pid == own).unwrap();
+        let status = std::fs::read_to_string("/proc/self/status").unwrap();
+        let threads: u32 = status.lines().find(|s| s.starts_with("Threads:")).unwrap()
+            .split_whitespace().nth(1).unwrap().parse().unwrap();
+        assert_eq!(process.threads, threads);
+        for task in sampler.sys.process(sysinfo::Pid::from_u32(own)).unwrap().tasks().unwrap() {
+            assert!(!rows.iter().any(|p| p.pid == task.as_u32()), "thread leaked into process list");
+        }
+        assert!(process.linux_memory.is_some());
+        assert!(process.private_ws <= process.working_set);
+        tx.send(()).unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn global_commit_can_exceed_limit() {
+        let mem = MemStatus { linux_commit: Some((300, 200)), total_commit: 200, ..Default::default() };
+        assert_eq!(mem.used_commit(), 300);
+        assert!(mem_status().linux_commit.is_some());
+    }
+
+    #[test]
+    fn kill_rejects_process_group_ids() {
+        assert!(kill(0).is_err());
+        assert!(kill(u32::MAX).is_err());
+    }
+}

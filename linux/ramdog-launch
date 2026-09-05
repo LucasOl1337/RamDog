@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+binary="${RAMDOG_BINARY:-$(dirname -- "$(readlink -f -- "$0")")/ramdog}"
+if ! command -v systemd-run >/dev/null || ! systemctl --user show-environment >/dev/null 2>&1; then
+  exec "$binary" "$@"
+fi
+if systemctl --user is-active --quiet ramdog.service; then
+  if command -v hyprctl >/dev/null; then
+    hyprctl eval 'local w=hl.get_windows({class="ramdog"})[1]; if w then hl.dispatch(hl.dsp.focus({window=w})) end' >/dev/null 2>&1 || hyprctl dispatch focuswindow 'class:^ramdog$' >/dev/null 2>&1 || true
+  fi
+  exit 0
+fi
+systemctl --user reset-failed ramdog.service >/dev/null 2>&1 || true
+exec systemd-run --user --unit=ramdog --collect --setenv=RUST_BACKTRACE=1 -- "$binary" "$@"

@@ -5,6 +5,7 @@ set -e
 
 REPO="LucasOl1337/RamDog"
 DEST="${RAMDOG_HOME:-$HOME/.local/bin}"
+VERSION="${RAMDOG_VERSION:-latest}"
 
 os="$(uname -s)"
 arch="$(uname -m)"
@@ -35,24 +36,54 @@ mkdir -p "$DEST"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-url="https://github.com/$REPO/releases/latest/download/$asset"
+if [ "$VERSION" = latest ]; then
+  release_url="https://github.com/$REPO/releases/latest/download"
+else
+  case "$VERSION" in
+    v[0-9]*.[0-9]*.[0-9]*) ;;
+    *) echo 'RAMDOG_VERSION deve ser latest ou vX.Y.Z'; exit 1 ;;
+  esac
+  release_url="https://github.com/$REPO/releases/download/$VERSION"
+fi
+url="$release_url/$asset"
 echo "RamDog — tentando $url"
-if curl -fsSL "$url" -o "$tmp/rd.tgz"; then
-  tar -xzf "$tmp/rd.tgz" -C "$tmp"
+if curl -fsSL "$url" -o "$tmp/$asset"; then
+  curl -fsSL "$release_url/SHA256SUMS.txt" -o "$tmp/SHA256SUMS.txt"
+  expected="$(awk -v file="$asset" '$2 == file {print $1}' "$tmp/SHA256SUMS.txt")"
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$tmp/$asset" | awk '{print $1}')"
+  else
+    actual="$(shasum -a 256 "$tmp/$asset" | awk '{print $1}')"
+  fi
+  if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
+    echo 'Checksum inválido; instalação interrompida.' >&2
+    exit 1
+  fi
+  tar -xzf "$tmp/$asset" -C "$tmp"
   bin="$(find "$tmp" -name ramdog -type f | head -n 1)"
   if [ -z "$bin" ]; then
-    echo "zip sem ramdog"; exit 1
+    echo "pacote sem ramdog"; exit 1
   fi
   install -m 755 "$bin" "$DEST/ramdog"
+  if [ "$os" = Linux ]; then
+    install -m 755 "$tmp/ramdog-launch" "$DEST/ramdog-launch"
+  fi
 else
   echo "Release $os/$arch ainda nao publicado. Compilando do source (precisa rustup + git)..."
   if ! command -v cargo >/dev/null 2>&1; then
     echo "Instale Rust: https://rustup.rs  e rode este comando de novo."
     exit 1
   fi
-  git clone --depth 1 "https://github.com/$REPO.git" "$tmp/src"
-  cargo build --release --manifest-path "$tmp/src/Cargo.toml"
+  if [ "$VERSION" = latest ]; then
+    git clone --depth 1 "https://github.com/$REPO.git" "$tmp/src"
+  else
+    git clone --depth 1 --branch "$VERSION" "https://github.com/$REPO.git" "$tmp/src"
+  fi
+  cargo build --locked --release --manifest-path "$tmp/src/Cargo.toml"
   install -m 755 "$tmp/src/target/release/ramdog" "$DEST/ramdog"
+  if [ "$os" = Linux ]; then
+    install -m 755 "$tmp/src/linux/ramdog-launch" "$DEST/ramdog-launch"
+  fi
 fi
 
 case ":$PATH:" in
@@ -61,5 +92,10 @@ case ":$PATH:" in
 esac
 
 echo "Instalado: $DEST/ramdog"
-echo "Abrir:  ramdog"
-exec "$DEST/ramdog"
+if [ "$os" = Linux ]; then
+  echo 'Abrir: ramdog-launch (ou ramdog diretamente)'
+  if [ "${RAMDOG_NO_LAUNCH:-0}" != 1 ]; then exec "$DEST/ramdog-launch"; fi
+else
+  echo 'Abrir: ramdog'
+  if [ "${RAMDOG_NO_LAUNCH:-0}" != 1 ]; then exec "$DEST/ramdog"; fi
+fi

@@ -29,11 +29,11 @@ Este app existe por isso.
 - **Origem / lançado por.** Coluna Origem = primeiro ancestral vivo que não seja host genérico (`cmd`, `bash`, `node`…). Quando a cadeia de pais morreu, o RamDog lê o ambiente herdado e mostra em roxo o agente (Claude Code + sessão + PID, Codex, Cursor Agent, Gemini CLI…) e o host (Maestri, VS Code, Cursor, Windows Terminal…), além de `npm run <script>` no projeto.
 - **Categorias.** IA / Agentes, Dev, Navegador, Jogos, Pessoal, Sistema, Outros — regra automática, com override manual por processo.
 - **Kill, árvore e lock.** Finaliza o processo ou a árvore (processo + filhos). Lock impede que o RamDog encerre o protegido. Processos críticos do SO (`System`/`csrss`/`dwm` no Windows; `systemd`/`kthreadd`/`gnome-shell`/`Xorg` no Linux; `kernel_task`/`launchd`/`WindowServer` no macOS) são sempre protegidos.
-- **Visões.** Lista (plana), Árvore (pai → filhos, RAM da subárvore), Categorias (agrupado) nas abas ao lado da busca. Os addons — **Partida**, **Desperdício**, **Térmico** e **Telas** — ficam longe delas, com o nome escrito no bloco de controles do canto superior direito: clicar troca o conteúdo da janela, clicar de novo volta para a lista de processos. Partida, Desperdício e Telas são Windows. Térmico no Linux é leitura de hwmon, sem fans.
+- **Visões.** Lista (plana), Árvore (pai → filhos, RAM da subárvore), Categorias (agrupado) nas abas ao lado da busca. Os addons — **Partida**, **Desperdício**, **Térmico** e **Telas** — ficam longe delas, com o nome escrito no bloco de controles do canto superior direito: clicar troca o conteúdo da janela, clicar de novo volta para a lista de processos. No Linux: Partida e Desperdício usam systemd/XDG, Telas usa Hyprland e Térmico usa hwmon com controle autenticado de PWM. Veja [o porte Linux](linux/README.md).
 - **Agrupar por app.** Na visão Lista, processos do mesmo executável viram uma linha só — `chrome.exe (37)` — somando RAM, CPU, GPU e disco no cabeçalho, com **✖** que encerra o app inteiro. A chave é o caminho do executável, não o nome: dois `svchost.exe` de pastas diferentes nunca caem no mesmo grupo. App com um processo só não agrupa.
 - **Coluna CPU que dá para ler.** A repartição é por `CycleTime` (contado a cada troca de contexto), não pelo tempo de kernel/usuário — que o Windows só cobra em fatias de 15,625 ms e joga inteira em quem estava rodando no tique, fazendo processo de rajada piscar entre 0% e 15%. O total repartido vem de `GetSystemTimes`, então a máquina afogada não dilui o culpado. Por cima, média móvel de τ = 1 s amarrada ao tempo, não à contagem de amostras: o topo da lista para quieto o tempo de você ler. O valor cru do último intervalo continua visível no tooltip.
-- **Medidores.** CPU e RAM no topo nos três SOs. GPU NVIDIA (NVML) só no Windows. % de disco: PDH no Windows, `/proc/diskstats` no Linux, ausente no macOS.
-- **Térmico.** No Windows, o [TempHUD](https://github.com/LucasOl1337/TempHUD) embutido: sensores de CPU/GPU/RAM/placa-mãe, controle de fans SuperIO (% manual ou Auto/BIOS) e **ESTABILIZAR** — fans travados em 50% até 80 °C, rampa linear até 100% aos 92 °C, teto imediato a 95 °C. A curva roda no helper `hwtemp.exe`: se o RamDog cair, os fans voltam à BIOS sozinhos. Fans exigem admin; sem eles a visão mostra só as leituras. No Linux a visão lê `/sys/class/hwmon` (só leitura — sem PWM, sem ESTABILIZAR).
+- **Medidores.** CPU e RAM no topo nos três SOs. GPU NVIDIA via NVML no Windows; NVIDIA via nvidia-smi e AMD/Intel via DRM/hwmon no Linux. % de disco: PDH no Windows, `/proc/diskstats` no Linux, ausente no macOS.
+- **Térmico.** No Windows, o [TempHUD](https://github.com/LucasOl1337/TempHUD) embutido: sensores de CPU/GPU/RAM/placa-mãe, controle de fans SuperIO (% manual ou Auto/BIOS) e **ESTABILIZAR** — fans travados em 50% até 80 °C, rampa linear até 100% aos 92 °C, teto imediato a 95 °C. A curva roda no helper `hwtemp.exe`: se o RamDog cair, os fans voltam à BIOS sozinhos. Fans exigem admin; sem eles a visão mostra só as leituras. No Linux lê `/sys/class/hwmon` e oferece PWM/ESTABILIZAR em controladores compatíveis, com helper autenticado que restaura o estado anterior ao encerrar.
 - **Partida.** Tudo que sobe com o PC, não o recorte do Gerenciador de Tarefas: `Run` e `RunOnce` (HKCU, HKLM e Wow64), a pasta Iniciar inteira (`.lnk`, `.vbs`, `.cmd`), tarefas agendadas com gatilho de boot/logon, serviços automáticos, apps UWP, Winlogon e Active Setup. A lista não vem achatada: o corte de fora é **sobe com o PC / não sobe / quebrada** — três contadores clicáveis no topo — e, dentro de cada bloco, a **fase do arranque**, da superfície para o fundo: seus programas, ao entrar na conta, com a máquina, antes do Windows. Cada faixa diz quantas entradas tem e quantas estão rodando agora, e recolhe com um clique. Estado na partida e estado agora deixaram de ser a mesma coluna: o check responde "sobe com o PC", a coluna **Agora** responde "tem processo de pé". Dá para trocar o corte de dentro para tipo de origem, agrupar só por fase ou só por tipo, ou voltar para a lista plana.
 - **Telas.** Mapa dos monitores em escala: arraste a janela de um monitor para outro, solte numa zona da grade (metades, terços, quadrantes, principal+2…) e ela encaixa. **Distribuir** espalha tudo que está num monitor pela grade escolhida. **Cenários** salvam o arranjo em fração da área de trabalho — não em pixel — então o preset sobrevive a troca de resolução, de escala e de monitor; ao aplicar, o que já está aberto é movido e o que falta é aberto e posicionado quando a janela aparece.
 - **O que é isso, posso matar?** Ficha de 80 processos do Windows no painel de detalhes: o que faz, por que está aberto e o risco de encerrar — 🟢 seguro, 🟡 o Windows reabre sozinho, 🔴 derruba a sessão.
@@ -60,7 +60,9 @@ curl -sSfL https://raw.githubusercontent.com/LucasOl1337/RamDog/main/install.sh 
 
 Baixa o tar do [release](https://github.com/LucasOl1337/RamDog/releases) (`RamDog-linux-x86_64.tar.gz`, `RamDog-linux-aarch64.tar.gz`, `RamDog-macos-aarch64.tar.gz` ou `…-x86_64.tar.gz`) para `~/.local/bin/ramdog` e abre. No Mac, se o Gatekeeper bloquear: Ajustes → Privacidade e segurança → Abrir mesmo assim.
 
-No Linux: lista, categorias, origem, árvore, kill, temperatura via hwmon (`/sys/class/hwmon`), disco no topo via `/proc/diskstats`. Sem Desperdício, sem Telas, sem Partida, sem NVML, sem controle de fan. Janela: Wayland ou X11 (eframe). Sem binário no release, o script cai no `cargo build` (precisa [rustup](https://rustup.rs) + git e libs nativas, ver abaixo).
+No Linux: lista, categorias, origem, árvore, kill, USS/PSS/RSS, GPU, sensores e ventoinhas, Partida/Desperdício via systemd e Telas via Hyprland. Esses recursos chegam na **v0.9.0**: veja as [patch notes](docs/releases/v0.9.0.md) e o [changelog](CHANGELOG.md). Consulte [dependências e limites](linux/README.md). Janela: Wayland ou X11 (eframe). Os binários Linux requerem glibc 2.39+ (Ubuntu 24.04 ou distribuição compatível); em sistemas anteriores, compile do código. Sem binário no release, o script cai no `cargo build` (precisa [rustup](https://rustup.rs) + git e libs nativas, ver abaixo).
+
+O instalador verifica SHA-256 e, no Linux, também instala `ramdog-launch`, que mantém o app independente do terminal usando systemd de usuário quando disponível. `RAMDOG_HOME` muda o destino, `RAMDOG_VERSION=v0.9.0` fixa a versão e `RAMDOG_NO_LAUNCH=1` instala sem abrir. Exemplo: `curl -sSfL https://raw.githubusercontent.com/LucasOl1337/RamDog/main/install.sh | RAMDOG_NO_LAUNCH=1 sh`.
 
 No Mac: lista, categorias, origem, árvore, kill. Sem Desperdício, sem Telas, sem temp de CPU, sem GPU NVML.
 
@@ -100,7 +102,7 @@ dotnet publish hwtemp -c Release -o target/release --no-self-contained
 | Finalizar árvore (processo + filhos) | `Shift+Del`, `Shift`+✖, botão direito → Finalizar árvore, ou painel inferior |
 | Proteger / desproteger | 🔒/🔓 na linha, botão direito, ou painel inferior. Protegidos nunca são finalizados pelo RamDog |
 | Categoria manual | botão direito → Categoria, ou combo no painel inferior (`auto` volta à regra automática) |
-| Visões | **Lista**, **Árvore**, **Categorias** nas abas ao lado da busca; **Partida**, **Desperdício**, **Térmico** e **Telas** com o nome escrito no bloco de controles do canto superior direito — o botão aceso é a visão atual e clicar nele volta para a última visão de processo. Partida/Desperdício/Telas só no Windows; Térmico no Linux é hwmon só leitura |
+| Visões | **Lista**, **Árvore**, **Categorias** nas abas ao lado da busca; **Partida**, **Desperdício**, **Térmico** e **Telas** com o nome escrito no bloco de controles do canto superior direito — o botão aceso é a visão atual e clicar nele volta para a última visão de processo. Partida/Desperdício/Telas/Térmico também implementados no Linux (systemd, Hyprland e hwmon) |
 | Agrupar por app | caixa **Agrupar por app** na visão Lista; ▶/▼ recolhe e abre um grupo, **Expandir tudo** / **Recolher tudo** valem para a lista inteira; **✖** no cabeçalho encerra todos os processos daquele app |
 | Filtro | busca por nome / PID / comando; chips de categoria (clique alterna, duplo clique isola); `ocultar abaixo de N MB`, no canto direito da fileira junto de `coluna RAM mostra` |
 | Origem | coluna *Origem* = primeiro ancestral vivo que não seja host genérico (cmd, bash, node...); cadeia completa clicável no painel inferior (`Ir para o pai`) |
@@ -139,7 +141,7 @@ Os slots guardam posição em fração da **área de trabalho** do monitor, nunc
 
 **Os três SOs**
 
-- Processos de outros usuários: no Windows já vem resolvido pela elevação de abertura (o botão **Reabrir como admin** só aparece quando ela foi recusada ou o usuário não pode elevar); no Linux e no macOS, `sudo ramdog` se precisar. A UI nunca inventa número — GPU/temp/disco ausentes aparecem "–".
+- Processos de outros usuários: no Windows já vem resolvido pela elevação de abertura (o botão **Reabrir como admin** só aparece quando ela foi recusada ou o usuário não pode elevar); no Linux, controles administrativos pedem autenticação própria e métricas de outros usuários podem aparecer como indisponíveis; no macOS, os acessos dependem das permissões da sessão. A UI nunca inventa número — GPU/temp/disco ausentes aparecem "–".
 - Configuração: Windows `%APPDATA%\RamDog\config.json`; Linux `$XDG_CONFIG_HOME/RamDog/config.json` (ou `~/.config/RamDog/config.json`); macOS `~/Library/Application Support/RamDog/config.json`.
 
 **Só Windows**
@@ -155,8 +157,8 @@ Os slots guardam posição em fração da **área de trabalho** do monitor, nunc
 
 **Só Linux**
 
-- Sem Desperdício, sem Telas, sem Partida, sem NVML, sem assinatura digital, sem ícone extraído do executável.
-- Térmico: leitura de `/sys/class/hwmon` (coretemp/k10temp/zenpower, GPU, DIMM se o kernel expôs). Sem escrita de PWM e sem ESTABILIZAR — os fans ficam com o kernel/BIOS.
+- Partida/Desperdício: serviços systemd e autostart XDG, com presets de inicialização. Telas: Hyprland, mapa, organização e cenários. Ícones via desktop entries; integridade SHA-256 via banco local do pacman (não é assinatura Authenticode).
+- Térmico: hwmon (CPU, GPU, DIMM quando disponível), PWM manual/automático e ESTABILIZAR via helper autenticado; requer driver com escrita de PWM.
 - Disco no topo: `%util` e bytes/s de `/proc/diskstats` (discos inteiros; partições/loop/zram de fora).
 - Sem display (SSH puro, sem `WAYLAND_DISPLAY`/`DISPLAY`) a janela não abre.
 - Precisa das libs X11/Wayland em tempo de execução (`libxkbcommon`, `libwayland`, `libX11`, GL).
@@ -170,13 +172,17 @@ Os slots guardam posição em fração da **área de trabalho** do monitor, nunc
 
 **Windows:** RAM = *Private Working Set* (`NtQuerySystemInformation`, mesma coluna Memória do Gerenciador de Tarefas). CPU no topo = `GetSystemTimes`; CPU por processo = fatia de `CycleTime` sobre a capacidade do mesmo `GetSystemTimes`, com média móvel de τ = 1 s (sem `CycleTime` — Windows antigo ou VM que zera o campo — cai no delta de kernel+user). Processo que morreu entre duas amostras fica fora dos dois lados da conta: os % dele somem da lista em vez de serem herdados por quem ficou. GPU = NVML + PDH `\GPU Engine(*)\Utilization Percentage` (máximo entre engines do PID). Disco no topo = PDH `% Idle Time` + bytes/s (`PdhAddEnglishCounterW`, nomes em inglês). `hwtemp.exe` lê Tctl/Tdie e DIMM.
 
-**Linux:** processos, RAM (RSS) e CPU via [sysinfo](https://crates.io/crates/sysinfo). Disco por processo = bytes lidos+escritos/s (`/proc/pid/io`). Disco no topo = `/proc/diskstats`. Temperatura = hwmon. Sem NVML, sem LibreHardwareMonitor, sem WinVerifyTrust.
+**Linux:** processos sem duplicação de threads e CPU via sysinfo; RSS, USS/PSS de smaps_rollup, Virtual por processo e Committed_AS/CommitLimit globais. Disco por processo via /proc/PID/io; topo via /proc/diskstats. GPU via nvidia-smi e DRM; temperatura e PWM via hwmon. [Detalhes](linux/README.md).
 
 **macOS:** processos, RAM (RSS) e CPU via [sysinfo](https://crates.io/crates/sysinfo). Disco por processo = bytes lidos+escritos/s. Sem PDH, sem NVML, sem LibreHardwareMonitor.
 
 ## Licença
 
 [MIT](LICENSE).
+
+## Releases
+
+[Changelog](CHANGELOG.md) · [Patch notes v0.9.0](docs/releases/v0.9.0.md) · [Como publicar com `./release`](docs/RELEASING.md).
 
 ## Também
 

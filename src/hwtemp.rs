@@ -40,7 +40,7 @@ struct HwTempMsg {
 
 /// Uma leitura de sensor: `hw` é o grupo curto ("CPU", "GPU", "Placa-mãe", "RAM"),
 /// `kind` é "temp" | "rpm" | "load".
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, serde::Serialize, Clone)]
 pub struct SensorRow {
     pub hw: String,
     pub name: String,
@@ -50,7 +50,7 @@ pub struct SensorRow {
 
 /// Um controle de fan SuperIO. `auto` = BIOS no comando; `guard` = proteção térmica
 /// sobrepôs o % manual (CPU quente) e está segurando 100%.
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, serde::Serialize, Clone)]
 pub struct FanRow {
     pub name: String,
     pub pct: Option<f32>,
@@ -60,7 +60,7 @@ pub struct FanRow {
     pub guard: bool,
 }
 
-#[derive(Deserialize, Clone, Copy, Default)]
+#[derive(Deserialize, serde::Serialize, Clone, Copy, Default)]
 pub struct StabState {
     pub on: bool,
     /// % que a curva está segurando agora (só significa algo com `on`).
@@ -70,6 +70,10 @@ pub struct StabState {
 
 #[derive(Clone, Default)]
 pub struct HwTemp {
+    #[cfg(target_os = "linux")]
+    pub control_ready: bool,
+    #[cfg(target_os = "linux")]
+    pub control_error: Option<String>,
     pub cpu_temp: Option<f32>,
     /// Um valor por pente de RAM populado; vazio = indisponível (sem admin, sem helper, ou
     /// placa-mãe sem Super I/O suportado pela lib).
@@ -102,7 +106,9 @@ impl HwCmd {
             let _ = writeln!(w, "{line}");
             let _ = w.flush();
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        crate::fans_linux::send(line);
+        #[cfg(not(any(windows,target_os = "linux")))]
         let _ = line;
     }
 }
@@ -172,7 +178,9 @@ impl HwTempReader {
         #[cfg(target_os = "linux")]
         {
             let _ = self;
-            return linux_hwmon_read();
+            let mut reading=linux_hwmon_read();
+            if let Some(control)=crate::fans_linux::state(){reading.fans=control.fans;reading.stab=control.stab;reading.control_ready=true;reading.control_error=control.error;}
+            return reading;
         }
         #[cfg(windows)]
         {
@@ -284,6 +292,8 @@ fn linux_hwmon_read() -> HwTemp {
         }
     }
     HwTemp {
+        control_ready:false,
+        control_error:None,
         cpu_temp: cpu_temps.iter().cloned().reduce(f32::max),
         dimm_temps: dimm,
         sensors,
@@ -296,7 +306,8 @@ fn linux_hwmon_read() -> HwTemp {
 fn hwmon_group(name: &str) -> &'static str {
     match name.to_ascii_lowercase().as_str() {
         "k10temp" | "coretemp" | "zenpower" | "zenpower3" | "cpu_thermal" | "k8temp" | "via_cputemp"
-        | "acpitz" => "CPU",
+        => "CPU",
+        "acpitz" => "Placa-mãe",
         "amdgpu" | "nouveau" | "nvidia" | "radeon" | "i915" | "xe" => "GPU",
         "spd5118" | "jc42" | "ee1004" | "dimm" => "RAM",
         "nvme" | "drivetemp" | "hddtemp" => "Disco",

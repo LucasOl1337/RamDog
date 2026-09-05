@@ -58,7 +58,7 @@ pub fn spawn(ctx: egui::Context, interval_ms: u64) -> SamplerHandle {
         .spawn(move || {
             let mut sampler = Sampler::new();
             let mut metrics = Metrics::new();
-            let gpu_per_proc = metrics.gpu_per_process_available();
+
             let mut icons_sent: HashSet<String> = HashSet::new();
             let mut last = Instant::now() - Duration::from_secs(3600);
             loop {
@@ -71,6 +71,7 @@ pub fn spawn(ctx: egui::Context, interval_ms: u64) -> SamplerHandle {
                     let mem = mem_status();
                     let kernel = kernel_mem();
                     let sys = metrics.sample();
+                    let gpu_per_proc = metrics.gpu_per_process_available();
                     for p in procs.iter_mut() {
                         p.gpu_pct = sys.gpu_by_pid.get(&p.pid).copied().unwrap_or(0.0);
                     }
@@ -87,7 +88,12 @@ pub fn spawn(ctx: egui::Context, interval_ms: u64) -> SamplerHandle {
                     if icons_sent.len() > 4000 {
                         icons_sent.clear();
                     }
-                    let hwtemp = hwtemp_reader.as_ref().map(|r| r.read()).unwrap_or_default();
+                    let mut hwtemp = hwtemp_reader.as_ref().map(|r| r.read()).unwrap_or_default();
+                    #[cfg(target_os = "linux")]
+                    for gpu in &sys.gpu_linux.cards {
+                        if let Some(temp)=gpu.temp_c { hwtemp.sensors.push(crate::hwtemp::SensorRow { hw:format!("GPU · {}",gpu.name),name:"Temperatura".into(),kind:"temp".into(),value:temp as f32 }); }
+                        if let Some(load)=gpu.util_pct { hwtemp.sensors.push(crate::hwtemp::SensorRow { hw:format!("GPU · {}",gpu.name),name:"Utilização".into(),kind:"load".into(),value:load }); }
+                    }
                     let snap = Snapshot {
                         procs,
                         mem,

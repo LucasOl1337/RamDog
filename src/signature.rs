@@ -14,6 +14,8 @@ use std::ptr;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Trust {
+    #[cfg(target_os = "linux")]
+    Package { name:String, verified:bool },
     /// Assinatura presente, íntegra e encadeando até uma raiz confiável.
     Valid,
     /// Nenhuma assinatura no arquivo (nem catálogo do Windows).
@@ -34,6 +36,8 @@ pub struct SigInfo {
 impl SigInfo {
     pub fn label(&self) -> String {
         match &self.trust {
+            #[cfg(target_os = "linux")]
+            Trust::Package{name,verified}=>format!("Pacote {name} · {}",if *verified{"SHA-256 confere"}else{"hash indisponível"}),
             Trust::Valid if self.signer.is_empty() => "assinatura válida".to_string(),
             Trust::Valid => format!("assinado por {}", self.signer),
             Trust::Unsigned => "sem assinatura digital".to_string(),
@@ -44,6 +48,8 @@ impl SigInfo {
 
     pub fn color(&self) -> egui::Color32 {
         match self.trust {
+            #[cfg(target_os = "linux")]
+            Trust::Package{verified,..}=>if verified{egui::Color32::from_rgb(90,220,130)}else{egui::Color32::GRAY},
             Trust::Valid => egui::Color32::from_rgb(90, 220, 130),
             Trust::Unsigned => egui::Color32::from_rgb(230, 190, 80),
             Trust::Invalid(_) => egui::Color32::from_rgb(235, 90, 90),
@@ -53,6 +59,8 @@ impl SigInfo {
 
     pub fn tip(&self) -> &'static str {
         match self.trust {
+            #[cfg(target_os = "linux")]
+            Trust::Package{..}=>"Proveniência do pacote instalado e comparação SHA-256 com a base local do pacman. Não é uma assinatura Authenticode nem revalidação criptográfica do repositório.",
             Trust::Valid => "O arquivo não foi alterado desde que o fabricante o assinou, e o certificado encadeia até uma raiz confiável desta máquina.",
             Trust::Unsigned => "Sem assinatura não há como provar quem fez o arquivo nem se ele foi alterado. Normal em ferramentas pequenas e em builds próprios; suspeito num executável que diz ser do Windows.",
             Trust::Invalid(_) => "A verificação reprovou: o arquivo pode ter sido adulterado, ou o certificado expirou ou não é confiável nesta máquina.",
@@ -61,7 +69,7 @@ impl SigInfo {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows,target_os = "linux")))]
 pub fn verify(_path: &str) -> SigInfo {
     SigInfo { trust: Trust::Unknown("só no Windows".into()), signer: String::new() }
 }
@@ -210,4 +218,26 @@ fn signer_name(path: &str) -> String {
         let _ = CertCloseStore(Some(store), 0);
         out
     }
+}
+
+#[cfg(target_os = "linux")]
+pub fn verify(path:&str)->SigInfo {
+    let check=(||->Result<Trust,String>{
+        let name=crate::linux::command("pacman",&["-Qoq","--",path])?.trim().to_string();
+        let package=crate::linux::command("pacman",&["-Q","--",&name])?;
+        let mut fields=package.split_whitespace();let pkg=fields.next().ok_or("Pacote inválido")?;let version=fields.next().ok_or("Versão inválida")?;
+        let mtree=format!("/var/lib/pacman/local/{pkg}-{version}/mtree");
+        let mut verified=false;
+        if let Ok(tree)=crate::linux::command("gzip",&["-dc","--",&mtree]) {
+            let relative=format!(".{}",path);
+            let expected=tree.lines().find(|l|l.split_whitespace().next()==Some(relative.as_str())).and_then(|l|l.split_whitespace().find_map(|f|f.strip_prefix("sha256digest=")));
+            if let Some(expected)=expected{
+                let sum=crate::linux::command("sha256sum",&["--",path])?;
+                if sum.split_whitespace().next()!=Some(expected){return Ok(Trust::Invalid("SHA-256 difere do pacote instalado".into()));}
+                verified=true;
+            }
+        }
+        Ok(Trust::Package{name,verified})
+    })();
+    SigInfo{trust:check.unwrap_or_else(|_|Trust::Unknown("arquivo não gerenciado pelo pacman ou sem acesso".into())),signer:String::new()}
 }

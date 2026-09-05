@@ -192,6 +192,10 @@ struct MemBreakdown {
 }
 
 pub struct App {
+    #[cfg(target_os = "linux")]
+    gpu_index: usize,
+    #[cfg(target_os = "linux")]
+    smoke_started: Option<Instant>,
     cfg: Config,
     cfg_dirty: bool,
     sampler: SamplerHandle,
@@ -277,7 +281,8 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         setup_style(&cc.egui_ctx);
-        let cfg = Config::load();
+        let mut cfg = Config::load();
+        if !cfg.view.available() { cfg.view = ViewMode::List; }
         let mini = cfg.mini;
         // Abrir direto num addon é legítimo (foi assim que fechou), mas o botão de voltar
         // precisa de um destino desde o primeiro frame.
@@ -286,6 +291,10 @@ impl App {
         let sampler = sampler::spawn(cc.egui_ctx.clone(), cfg.refresh_ms);
         let (sig_tx, sig_rx) = std::sync::mpsc::channel();
         Self {
+            #[cfg(target_os = "linux")]
+            gpu_index: 0,
+            #[cfg(target_os = "linux")]
+            smoke_started: std::env::args().any(|a| a == "--smoke-test").then(Instant::now),
             cfg,
             cfg_dirty: false,
             sampler,
@@ -369,6 +378,8 @@ impl App {
         if let Some(p) = cpu_keep {
             self.sys.cpu_pct = Some(p);
         }
+        #[cfg(target_os = "linux")]
+        { self.sys.gpu = self.sys.gpu_linux.cards.get(self.gpu_index).or_else(|| self.sys.gpu_linux.cards.first()).cloned(); }
         self.gpu_per_proc = snap.gpu_per_proc;
         self.hwtemp = snap.hwtemp;
         self.usage.tick(&self.procs);
@@ -425,6 +436,13 @@ impl App {
         self.subtree.insert(pid, total);
         self.subtree_count.insert(pid, count);
         (total, count)
+    }
+
+    fn gpu_pid_available(&self,pid:u32)->bool {
+        #[cfg(target_os = "linux")]
+        { self.sys.gpu_linux.by_pid.contains_key(&pid) }
+        #[cfg(not(target_os = "linux"))]
+        { let _=pid; self.gpu_per_proc }
     }
 
     fn proc(&self, pid: u32) -> Option<&ProcInfo> {
@@ -490,12 +508,25 @@ impl App {
         }
     }
 
+    fn subtree_memory_available(&self, pid: u32) -> bool {
+        let mut pending = vec![pid];
+        let mut seen = HashSet::new();
+        while let Some(pid) = pending.pop() {
+            if !seen.insert(pid) { continue; }
+            if self.proc(pid).is_some_and(|p| !metric_available(self.cfg.mem_metric, p)) { return false; }
+            if let Some(children) = self.children.get(&pid) { pending.extend(children); }
+        }
+        true
+    }
+
     fn mem_of(&self, p: &ProcInfo) -> u64 {
         Self::metric_of(self.cfg.mem_metric, p)
     }
 
     fn metric_of(m: MemMetric, p: &ProcInfo) -> u64 {
         match m {
+            #[cfg(target_os = "linux")]
+            MemMetric::Proportional => p.linux_memory.map(|m| m.1).unwrap_or(0),
             MemMetric::WorkingSet => p.working_set,
             MemMetric::Private => p.private_ws,
             MemMetric::Commit => p.commit,
@@ -1152,6 +1183,17 @@ impl App {
     /// faixas precisam caber dentro do total, e o working set conta página compartilhada
     /// uma vez por processo que a mapeia.
     fn ram_gauge(&self, ui: &mut egui::Ui, width: f32) {
+        #[cfg(target_os = "linux")]
+        if cfg!(target_os = "linux") {
+            let used = self.mem.used_phys();
+            let total = self.mem.total_phys.max(1);
+            let mut tip = format!("{} em uso de {} (MemTotal − MemAvailable).\n{}", fmt_gb(used), fmt_gb(total), self.linux_memory_summary());
+            if let Some((committed, limit)) = self.mem.linux_commit {
+                tip.push_str(&format!("\nCommit global: {} / {} (Committed_AS / CommitLimit). Pode exceder o limite conforme a política de overcommit.", fmt_gb(committed), fmt_gb(limit)));
+            } else { tip.push_str("\nCommit global: indisponível."); }
+            Self::meter_bar(ui, width, Some(used as f32 / total as f32 * 100.0), tip);
+            return;
+        }
         let b = self.breakdown();
         let total = self.mem.total_phys.max(1);
         let cats = self.cat_totals_with(MemMetric::Private);
@@ -1348,7 +1390,7 @@ impl App {
                     ),
                     None => (
                         None,
-                        Temp::Missing("Sem leitura de GPU: nvml.dll não carregou.".into()),
+                        Temp::Missing("Sem leitura de GPU: leitura de GPU indisponível.".into()),
                         String::new(),
                         "Sem leitura de GPU neste host".to_string(),
                     ),
@@ -1364,7 +1406,7 @@ impl App {
                     .map(fmt_bps)
                     .unwrap_or_default();
                 Self::meter_tile(ui, w, "DISCO", disk_pct, Temp::None, &disk_sub, |ui, w| {
-                    Self::meter_bar(ui, w, disk_pct, "Tempo ocupado do disco");
+                    Self::meter_bar(ui, w, disk_pct, disk_usage_tip());
                 });
             });
             self.mini_fans(ui);
@@ -1447,7 +1489,9 @@ impl App {
         } else {
             ("FANS 50%".to_owned(), THERM_STAB_BG, THERM_STAB_FG)
         };
-        let tip = if !has_fans {
+        let tip = if !has_fans && cfg!(target_os = "linux") {
+            "Abra Térmico e ative o controle de ventoinhas com autenticação."
+        } else if !has_fans {
             "Controle de fans indisponível: precisa de admin e do hwtemp.exe ao lado do ramdog.exe."
         } else if stab_on {
             "Curva do TempHUD ligada. Clique para devolver os fans à BIOS."
@@ -1604,6 +1648,18 @@ impl App {
     /// do modo mini — mesma largura, mesma barra, mesma baseline — e os controles ficam na
     /// mesma fileira, centrados contra ela.
     fn ui_top(&mut self, ui: &mut egui::Ui) {
+        #[cfg(target_os = "linux")]
+        ui.horizontal(|ui| {
+            if !self.sys.gpu_linux.cards.is_empty() {
+                egui::ComboBox::from_id_salt("gpu-selection").selected_text(self.sys.gpu.as_ref().map(|g| g.name.as_str()).unwrap_or("GPU")).show_ui(ui, |ui| {
+                    for (index, card) in self.sys.gpu_linux.cards.iter().enumerate() {
+                        if ui.selectable_value(&mut self.gpu_index,index,&card.name).changed() {self.sys.gpu=Some(card.clone());}
+                    }
+                });
+            }
+            if let Some(error)=&self.sys.gpu_linux.error {ui.colored_label(egui::Color32::YELLOW,error);}
+        });
+
         ui.add_space(6.0);
         // Os medidores tomam toda a largura que sobra depois dos controles, em partes iguais.
         // Com largura fixa, janela larga virava uma faixa morta entre o disco e os controles;
@@ -1663,9 +1719,9 @@ impl App {
                 }
                 None => (
                     None,
-                    Temp::Missing("Sem leitura de GPU: nvml.dll não carregou (placas AMD/Intel ainda não têm essa leitura aqui).".into()),
+                    Temp::Missing("Leitura de GPU indisponível nesta plataforma ou driver.".into()),
                     String::new(),
-                    "Sem GPU NVIDIA detectada (nvml.dll não carregou) — sem essa leitura em placas AMD/Intel aqui ainda.".to_string(),
+                    "Leitura de GPU indisponível nesta plataforma ou driver; não significa utilização zero.".to_string(),
                 ),
             };
             Self::meter_tile(ui, tile_w, "GPU", gpu_pct, gpu_temp, &gpu_sub, |ui, w| {
@@ -1682,7 +1738,7 @@ impl App {
                 .map(fmt_bps)
                 .unwrap_or_default();
             let disk_tip = if disk_pct.is_some() {
-                "% de tempo ocupado do disco (todos os volumes) — igual ao Gerenciador de Tarefas"
+                disk_usage_tip()
             } else {
                 "Contador de disco indisponível neste host."
             };
@@ -1835,7 +1891,10 @@ impl App {
             } else {
                 format!("{}\n\n{}", v.label(), v.tip())
             };
-            if ui.add(b).on_hover_text(tip).clicked() {
+            let tip = if v.available() { tip } else {
+                format!("{} — indisponível nesta versão para Linux/macOS.", v.label())
+            };
+            if ui.add_enabled(v.available(), b).on_disabled_hover_text(&tip).on_hover_text(tip).clicked() {
                 go = Some(v);
             }
         }
@@ -2273,7 +2332,7 @@ impl App {
                 header.col(|ui| self.header_btn(ui, SortKey::Name, "Nome"));
                 let ram_label = match (tree, self.cfg.mem_metric) {
                     (true, MemMetric::Private) => "Priv. (árvore)".to_string(),
-                    (true, MemMetric::Commit) => "Commit (árvore)".to_string(),
+                    (true, MemMetric::Commit) => format!("{} (árvore)", MemMetric::Commit.short()),
                     (true, _) => "RAM (árvore)".to_string(),
                     (false, m) => m.short().to_string(),
                 };
@@ -2378,6 +2437,8 @@ impl App {
                             };
                             let (key, name, cat) = (g.key.clone(), g.name.clone(), g.cat);
                             let (ram, cpu, gpu, disk, oldest) = (g.ram, g.cpu, g.gpu, g.disk, g.oldest);
+                            let ram_complete = g.pids.iter().filter_map(|pid| self.proc(*pid)).all(|p| metric_available(self.cfg.mem_metric, p));
+                            let ram_label = aggregate_memory_text(ram, ram_complete);
                             let count = g.pids.len();
                             let collapsed = self.collapsed_apps.contains(&key);
                             row.col(|ui| {
@@ -2413,11 +2474,9 @@ impl App {
                                 }
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                     ui.add_space(2.0);
-                                    ui.label(num(fmt_bytes(ram)).color(ram_color(ram, ui_text_color(ui_dark()))).strong())
+                                    ui.label(num(ram_label).color(ram_color(ram, ui_text_color(ui_dark()))).strong())
                                         .on_hover_text(
-                                            "Soma dos processos do app. Páginas compartilhadas entre eles \
-                                             entram mais de uma vez — é o mesmo exagero da coluna do \
-                                             Gerenciador de Tarefas, e some ao trocar a métrica para privada.",
+                                            "Soma dos processos do app na métrica escolhida. RSS pode repetir páginas compartilhadas; PSS reparte essas páginas. ≥ indica soma parcial por leituras indisponíveis.",
                                         );
                                 });
                             });
@@ -2533,7 +2592,7 @@ impl App {
                                 }
                                 let lbl = ui.add(egui::Label::new(name).truncate());
                                 if locked {
-                                    lbl.on_hover_text(if critical { "Processo crítico do Windows" } else { "Protegido (lock)" });
+                                    lbl.on_hover_text(if critical { "Processo crítico do sistema" } else { "Protegido (lock)" });
                                 }
                                 if tree && has_children && !expanded {
                                     let c = self.subtree_count.get(&pid).copied().unwrap_or(1) - 1;
@@ -2561,7 +2620,12 @@ impl App {
                                     );
                                     ui.painter().rect_filled(bar, 0.0, ram_color(shown, MUTED).gamma_multiply(0.13));
                                 }
-                                let mut t = num(fmt_bytes(shown)).color(ram_color(shown, text_color));
+                                let label = if !metric_available(self.cfg.mem_metric, &p) && !(tree && has_children) {
+                                    "—".to_string()
+                                } else if tree && has_children {
+                                    aggregate_memory_text(shown, self.subtree_memory_available(pid))
+                                } else { fmt_bytes(shown) };
+                                let mut t = num(label).color(ram_color(shown, text_color));
                                 if tree && has_children {
                                     t = t.strong();
                                 }
@@ -2615,7 +2679,7 @@ impl App {
                                 }
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                     ui.add_space(2.0);
-                                    if !self.gpu_per_proc {
+                                    if !self.gpu_per_proc || !self.gpu_pid_available(p.pid) {
                                         ui.label(RichText::new("–").color(Color32::from_gray(90)))
                                             .on_hover_text("Contador de GPU por processo indisponível neste host");
                                     } else if p.gpu_pct < 0.05 {
@@ -2726,7 +2790,7 @@ impl App {
                                 let btn_size = Vec2::new(22.0, ROW_H - 4.0);
                                 if critical {
                                     ui.add_sized(btn_size, egui::Label::new(RichText::new("🔒").color(Color32::from_gray(if hot { 130 } else { 80 }))))
-                                        .on_hover_text("Crítico do Windows — não pode ser encerrado");
+                                        .on_hover_text("Crítico do sistema — não pode ser encerrado");
                                 } else {
                                     let (icon, tip) = if locked { ("🔒", "Protegido — clique para desproteger") } else { ("🔓", "Clique para proteger (lock)") };
                                     let col = if locked {
@@ -2893,6 +2957,16 @@ impl App {
                 return;
             }
 
+            #[cfg(target_os = "linux")]
+            {
+                if let Some(error)=&hw.control_error{ui.colored_label(egui::Color32::LIGHT_RED,error);}
+                if !hw.control_ready {
+                    if crate::fans_linux::supported(){
+                        if ui.button("Ativar controle de ventoinhas (autenticação)").clicked(){crate::fans_linux::enable();}
+                        ui.label("Um helper separado restaura o controle anterior quando o RamDog fecha. Faixa manual: 30–100%.");
+                    } else {ui.label("Rotações disponíveis abaixo. O driver atual não oferece controles PWM graváveis.");}
+                }
+            }
             // Cartões de sensores: um por hardware, na ordem em que o helper reporta;
             // a temperatura mais alta do hardware vira o número-herói do cartão.
             let mut groups: Vec<(&str, Vec<&crate::hwtemp::SensorRow>)> = Vec::new();
@@ -3006,8 +3080,8 @@ impl App {
                                             };
                                             ui.visuals_mut().selection.bg_fill = fill;
                                             ui.spacing_mut().slider_width = (ui.available_width() - 180.0).max(60.0);
-                                            let sl = ui.add_enabled(!stab_on, egui::Slider::new(&mut v, 0.0..=100.0).show_value(false).trailing_fill(true));
-                                            let dv = ui.add_enabled(!stab_on, egui::DragValue::new(&mut v).range(0.0..=100.0).max_decimals(0).suffix("%"));
+                                            let sl = ui.add_enabled(!stab_on, egui::Slider::new(&mut v, if cfg!(target_os="linux"){30.0..=100.0}else{0.0..=100.0}).show_value(false).trailing_fill(true));
+                                            let dv = ui.add_enabled(!stab_on, egui::DragValue::new(&mut v).range(if cfg!(target_os="linux"){30.0..=100.0}else{0.0..=100.0}).max_decimals(0).suffix("%"));
                                             if sl.changed() || dv.changed() {
                                                 self.thermal_edit.insert(f.name.clone(), (v, now));
                                             }
@@ -3056,7 +3130,7 @@ impl App {
             } else if cfg!(target_os = "linux") {
                 ui.add_space(14.0);
                 ui.label(RichText::new(
-                    "No Linux a visão Térmico é só leitura (hwmon). O RamDog não escreve PWM — sem curva ESTABILIZAR, os fans ficam com o kernel/BIOS."
+                    "Sensores e RPM são lidos pelo hwmon. Ative o controle acima para ajustar PWM ou usar ESTABILIZAR; ao fechar, o helper restaura o estado anterior."
                 ).color(MUTED));
             }
         });
@@ -3165,7 +3239,7 @@ impl App {
                     ui.add_space(6.0);
                     ui.label(RichText::new("●").color(cat.color()).size(10.0));
                     ui.label(RichText::new(&p.name).size(12.0));
-                    ui.label(num(fmt_bytes(Self::metric_of(m, p))).color(ram_color(Self::metric_of(m, p), MUTED)));
+                    ui.label(num(if metric_available(m, p) { fmt_bytes(Self::metric_of(m, p)) } else { "—".into() }).color(ram_color(Self::metric_of(m, p), MUTED)));
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.add_space(10.0);
@@ -3405,8 +3479,9 @@ impl App {
                         ui.label(RichText::new(fmt_bytes(p.working_set)).strong());
                         ui.label(
                             RichText::new(format!(
-                                "(privada {} · commit {})",
-                                fmt_bytes(p.private_ws),
+                                "(privada {} · {} {})",
+                                private_memory_text(&p),
+                                MemMetric::Commit.label(),
                                 fmt_bytes(p.commit)
                             ))
                             .weak()
@@ -3425,14 +3500,19 @@ impl App {
                 });
                 ui.end_row();
 
+                #[cfg(target_os = "linux")]
+                { ui.label(RichText::new("GPU").weak());
+                  let vram=self.sys.gpu_linux.memory_by_pid.get(&p.pid).map(|m|fmt_bytes(*m)).unwrap_or_else(||"indisponível".into());
+                  let load=self.sys.gpu_linux.by_pid.get(&p.pid).map(|n|format!("{n:.1}%")).unwrap_or_else(||"indisponível".into());
+                  ui.label(format!("Uso: {load} · memória de GPU: {vram}")); ui.end_row(); }
                 ui.label(RichText::new("Execução").weak());
                 ui.label(format!(
-                    "iniciado há {}   ·   CPU {:.1}% (último intervalo {:.1}%)   ·   {} threads   ·   {} handles   ·   sessão {}",
+                    "iniciado há {}   ·   CPU {:.1}% (último intervalo {:.1}%)   ·   {} threads   ·   {}   ·   sessão {}",
                     fmt_age(secs),
                     p.cpu_pct,
                     p.cpu_raw_pct,
                     p.threads,
-                    p.handles,
+                    if cfg!(windows) { format!("{} handles", p.handles) } else { "handles: não aplicável".to_string() },
                     p.session
                 ));
                 ui.end_row();
@@ -3461,7 +3541,22 @@ impl App {
     /// soma nem perto do total, cadê o resto?" — e nem o Gerenciador de Tarefas responde. A
     /// base é sempre a memória privada; com working set na coluna a soma passaria de 100% por
     /// dupla contagem do compartilhado, então o excedente é mostrado à parte, nomeado.
+    #[cfg(target_os = "linux")]
+    fn linux_memory_summary(&self) -> String {
+        let measured: Vec<_> = self.procs.iter().filter_map(|p| p.linux_memory).collect();
+        let uss: u64 = measured.iter().map(|m| m.0).sum();
+        let pss: u64 = measured.iter().map(|m| m.1).sum();
+        format!("Processos: {} PSS · {} privados · leitura de {}/{} processos.\nPSS divide páginas compartilhadas; privado conta apenas páginas exclusivas. Leituras ausentes não entram nas somas. A RAM global também inclui o kernel e outras alocações.", fmt_gb(pss), fmt_gb(uss), measured.len(), self.procs.len())
+    }
+
     fn ui_accounting(&mut self, ui: &mut egui::Ui) {
+        #[cfg(target_os = "linux")]
+        if cfg!(target_os = "linux") {
+            let available = self.procs.iter().filter(|p| p.linux_memory.is_some()).count();
+            ui.label(RichText::new(format!("RAM {} em uso · memória detalhada: {available}/{} processos", fmt_gb(self.mem.used_phys()), self.procs.len())).small().color(MUTED))
+                .on_hover_text(self.linux_memory_summary());
+            return;
+        }
         let b = self.breakdown();
         if b.used == 0 {
             return;
@@ -3516,6 +3611,8 @@ impl App {
     }
 
     fn save_cfg_if_dirty(&mut self) {
+        #[cfg(target_os = "linux")]
+        if self.smoke_started.is_some() { self.cfg_dirty=false; return; }
         if self.cfg_dirty {
             self.cfg_dirty = false;
             if let Err(e) = self.cfg.save() {
@@ -3548,6 +3645,17 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ingest(ctx);
+        #[cfg(target_os = "linux")]
+        if let Some(start)=self.smoke_started {
+            let step=(start.elapsed().as_secs()/3) as usize;
+            let views=[ViewMode::List,ViewMode::Tree,ViewMode::Category,ViewMode::Boot,ViewMode::Drains,ViewMode::Screens,ViewMode::Thermal];
+            self.cfg.view=views[step%views.len()];self.cfg.mini=step%10==8;
+            self.cfg.mem_metric=MemMetric::ALL[step%MemMetric::ALL.len()];
+            self.cfg.group_apps=step%2==0;self.rows_dirty=true;
+            self.selected=self.procs.iter().find(|p|p.pid==std::process::id()).map(|p|p.pid);
+            if start.elapsed().as_secs()>=90 {crate::linux::log("SMOKE PASS: 90s, todas as abas, mini e métricas");ctx.send_viewport_cmd(egui::ViewportCommand::Close);}
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         // Fora do ingest: ele retorna cedo quando não há amostra nova, e a verificação
         // de assinatura chega no seu próprio ritmo.
         self.drain_sigs();
@@ -3884,4 +3992,28 @@ fn open_in_explorer(path: &str) {
             let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
         }
     }
+}
+
+fn metric_available(metric: MemMetric, p: &ProcInfo) -> bool {
+    #[cfg(target_os = "linux")]
+    if matches!(metric, MemMetric::Private | MemMetric::Proportional) {
+        return p.linux_memory.is_some();
+    }
+    let _ = (metric, p);
+    true
+}
+
+fn private_memory_text(p: &ProcInfo) -> String {
+    if metric_available(MemMetric::Private, p) { fmt_bytes(p.private_ws) }
+    else { "indisponível".to_string() }
+}
+
+fn disk_usage_tip() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "Tempo ocupado do disco físico mais ativo. A taxa em bytes/s soma os discos físicos; partições e dispositivos virtuais não são contados novamente."
+    } else { "Tempo ocupado do disco (contador do sistema)." }
+}
+
+fn aggregate_memory_text(bytes: u64, complete: bool) -> String {
+    if complete { fmt_bytes(bytes) } else { format!("≥ {}", fmt_bytes(bytes)) }
 }

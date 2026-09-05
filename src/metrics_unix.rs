@@ -12,6 +12,8 @@ use super::SysSample;
 pub struct Metrics {
     sys: System,
     #[cfg(target_os = "linux")]
+    gpu: crate::gpu_linux::Reader,
+    #[cfg(target_os = "linux")]
     disk: DiskCounters,
 }
 
@@ -22,12 +24,17 @@ impl Metrics {
         Self {
             sys,
             #[cfg(target_os = "linux")]
+            gpu: crate::gpu_linux::Reader::new(),
+            #[cfg(target_os = "linux")]
             disk: DiskCounters::new(),
         }
     }
 
     pub fn gpu_per_process_available(&self) -> bool {
-        false
+        #[cfg(target_os = "linux")]
+        { self.gpu.sample().process_supported }
+        #[cfg(not(target_os = "linux"))]
+        { false }
     }
 
     pub fn sample(&mut self) -> SysSample {
@@ -36,57 +43,69 @@ impl Metrics {
         let (disk_pct, disk_bps) = self.disk.sample();
         #[cfg(not(target_os = "linux"))]
         let (disk_pct, disk_bps) = (None, None);
+        #[cfg(target_os = "linux")]
+        let gpu = self.gpu.sample();
         SysSample {
             cpu_pct: Some(self.sys.global_cpu_usage().clamp(0.0, 100.0)),
             disk_pct,
             disk_bps,
+            #[cfg(target_os = "linux")]
+            gpu: gpu.cards.first().cloned(),
+            #[cfg(target_os = "linux")]
+            gpu_by_pid: gpu.by_pid.clone(),
+            #[cfg(target_os = "linux")]
+            gpu_linux: gpu,
+            #[cfg(not(target_os = "linux"))]
             gpu: None,
+            #[cfg(not(target_os = "linux"))]
             gpu_by_pid: HashMap::new(),
         }
     }
 }
 
-/// Soma dos discos inteiros em `/proc/diskstats` (não partições, não loop/ram/zram).
-/// `%` = `io_ticks` / tempo de parede, como o `%util` do iostat — teto 100.
+/// Throughput sums physical disks; utilization is the busiest individual disk.
+/// Keep counters per device so hotplug/reset cannot corrupt the aggregate delta.
 #[cfg(target_os = "linux")]
 struct DiskCounters {
-    prev_read: u64,
-    prev_write: u64,
-    prev_ticks: u64,
+    previous: Option<HashMap<String, [u64; 3]>>,
     prev_at: Instant,
 }
 
 #[cfg(target_os = "linux")]
 impl DiskCounters {
     fn new() -> Self {
-        let (r, w, t) = read_diskstats();
-        Self {
-            prev_read: r,
-            prev_write: w,
-            prev_ticks: t,
-            prev_at: Instant::now(),
-        }
+        Self { previous: read_diskstats(), prev_at: Instant::now() }
     }
 
     fn sample(&mut self) -> (Option<f32>, Option<f64>) {
-        let (r, w, ticks) = read_diskstats();
+        let current = read_diskstats();
         let now = Instant::now();
         let dt = now.duration_since(self.prev_at).as_secs_f64();
-        let out = if dt > 0.0 && (self.prev_read != 0 || self.prev_write != 0 || self.prev_ticks != 0) {
-            let bytes = r.saturating_sub(self.prev_read).saturating_add(w.saturating_sub(self.prev_write)) as f64;
-            let bps = bytes / dt;
-            let dt_ms = dt * 1000.0;
-            let util = (ticks.saturating_sub(self.prev_ticks) as f64 / dt_ms * 100.0).clamp(0.0, 100.0) as f32;
-            (Some(util), Some(bps))
-        } else {
-            (None, None)
+        let result = match (&self.previous, &current) {
+            (Some(previous), Some(current)) => disk_delta(previous, current, dt),
+            _ => (None, None),
         };
-        self.prev_read = r;
-        self.prev_write = w;
-        self.prev_ticks = ticks;
+        self.previous = current;
         self.prev_at = now;
-        out
+        result
     }
+}
+
+#[cfg(target_os = "linux")]
+fn disk_delta(previous: &HashMap<String, [u64; 3]>, current: &HashMap<String, [u64; 3]>, dt: f64) -> (Option<f32>, Option<f64>) {
+    if dt <= 0.0 { return (None, None); }
+    let mut bytes = 0.0f64;
+    let mut busy = 0.0f64;
+    let mut measured = false;
+    for (name, now) in current {
+        let Some(old) = previous.get(name) else { continue };
+        if now.iter().zip(old).any(|(n, o)| n < o) { continue; }
+        measured = true;
+        bytes += (now[0] - old[0]) as f64 + (now[1] - old[1]) as f64;
+        busy = busy.max((now[2] - old[2]) as f64 / (dt * 1000.0) * 100.0);
+    }
+    if measured { (Some(busy.clamp(0.0, 100.0) as f32), Some(bytes / dt)) }
+    else { (None, None) }
 }
 
 #[cfg(target_os = "linux")]
@@ -114,30 +133,43 @@ fn is_whole_disk(name: &str) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn read_diskstats() -> (u64, u64, u64) {
-    let Ok(s) = std::fs::read_to_string("/proc/diskstats") else {
-        return (0, 0, 0);
-    };
-    let mut read_bytes = 0u64;
-    let mut write_bytes = 0u64;
-    let mut io_ticks = 0u64;
-    for line in s.lines() {
-        let mut it = line.split_whitespace();
-        let Some(_) = it.next() else { continue }; // major
-        let Some(_) = it.next() else { continue }; // minor
-        let Some(name) = it.next() else { continue };
-        if !is_whole_disk(name) {
-            continue;
-        }
-        // 0 reads 1 merged 2 sectors_read 3 time_r 4 writes 5 wmerged 6 sectors_written
-        // 7 time_w 8 inflight 9 io_ticks
-        let mut fields = [0u64; 10];
-        for slot in fields.iter_mut() {
-            *slot = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
-        }
-        read_bytes = read_bytes.saturating_add(fields[2].saturating_mul(512));
-        write_bytes = write_bytes.saturating_add(fields[6].saturating_mul(512));
-        io_ticks = io_ticks.saturating_add(fields[9]);
+fn read_diskstats() -> Option<HashMap<String, [u64; 3]>> {
+    let text = std::fs::read_to_string("/proc/diskstats").ok()?;
+    let mut disks = HashMap::new();
+    for line in text.lines() {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        if fields.len() < 13 || !is_whole_disk(fields[2]) { continue; }
+        let (Ok(read), Ok(write), Ok(ticks)) = (fields[5].parse::<u64>(), fields[9].parse::<u64>(), fields[12].parse::<u64>()) else { continue; };
+        disks.insert(fields[2].to_owned(), [read.saturating_mul(512), write.saturating_mul(512), ticks]);
     }
-    (read_bytes, write_bytes, io_ticks)
+    if disks.is_empty() { None } else { Some(disks) }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_disks_show_busiest_not_sum() {
+        let previous = HashMap::from([("sda".into(), [0, 0, 0]), ("sdb".into(), [0, 0, 0])]);
+        let current = HashMap::from([("sda".into(), [1000, 2000, 600]), ("sdb".into(), [3000, 4000, 700])]);
+        assert_eq!(disk_delta(&previous, &current, 1.0), (Some(70.0), Some(10000.0)));
+    }
+
+    #[test]
+    fn missing_new_and_reset_disks_do_not_create_spikes() {
+        let previous = HashMap::from([("sda".into(), [100, 100, 100])]);
+        let current = HashMap::from([("sdb".into(), [100000, 100000, 100000])]);
+        assert_eq!(disk_delta(&previous, &current, 1.0), (None, None));
+        let reset = HashMap::from([("sda".into(), [0, 0, 0])]);
+        assert_eq!(disk_delta(&previous, &reset, 1.0), (None, None));
+        assert_eq!(disk_delta(&previous, &previous, 0.0), (None, None));
+        assert_eq!(disk_delta(&previous, &previous, 1.0), (Some(0.0), Some(0.0)));
+    }
+
+    #[test]
+    fn excludes_partitions_and_virtual_duplicates() {
+        for name in ["nvme0n1", "sda", "vda", "mmcblk0"] { assert!(is_whole_disk(name)); }
+        for name in ["nvme0n1p1", "sda1", "dm-0", "zram0", "loop0", "mmcblk0p1"] { assert!(!is_whole_disk(name)); }
+    }
 }

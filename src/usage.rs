@@ -39,6 +39,8 @@ pub struct AppUsage {
     pub name: String,
     /// Segundos com o processo aberto, somados enquanto o RamDog esteve rodando.
     pub open_secs: u64,
+    #[serde(default)]
+    pub linux_focus_secs:u64,
     /// Quantas vezes o RamDog viu o app aparecer do nada.
     pub launches: u32,
     /// Unix secs da última vez visto aberto.
@@ -107,6 +109,10 @@ impl Tracker {
                 e.name = proper.clone();
             }
             e.open_secs += add;
+            #[cfg(target_os = "linux")]
+            if let Some(pid)=crate::desktop_linux::focused_pid(){
+                if procs.iter().any(|p|p.pid==pid&&p.exe_path.to_lowercase()==*path){e.linux_focus_secs+=add;}
+            }
             e.last_seen = stamp;
             if fresh {
                 e.launches += 1;
@@ -164,7 +170,10 @@ fn live_paths(procs: &[ProcInfo]) -> HashMap<String, String> {
 
 /// PIDs donos de alguma janela de topo visível e com título. `None` fora do Windows —
 /// aí a contagem volta a valer para todo processo.
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn windowed_pids()->Option<HashSet<u32>>{crate::desktop_linux::windowed_pids()}
+
+#[cfg(not(any(windows,target_os = "linux")))]
 fn windowed_pids() -> Option<HashSet<u32>> {
     None
 }
@@ -488,6 +497,7 @@ pub fn rank(live: &HashMap<String, AppUsage>, ua: &[UaEntry], limit: usize) -> V
             r.name = a.name.clone();
         }
         r.open_secs += a.open_secs;
+        r.focus_secs += a.linux_focus_secs;
         r.launches += a.launches;
         r.last_used = r.last_used.max(a.last_seen);
     }
@@ -598,7 +608,7 @@ mod tests {
         let mut live = HashMap::new();
         live.insert(
             r"c:\program files\bravesoftware\brave-browser\application\brave.exe".to_string(),
-            AppUsage { name: "brave.exe".into(), open_secs: 100, launches: 1, last_seen: 1 },
+            AppUsage { name: "brave.exe".into(), open_secs: 100, launches: 1, last_seen: 1, linux_focus_secs:0 },
         );
         let ua = vec![UaEntry {
             path: String::new(),

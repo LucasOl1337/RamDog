@@ -129,6 +129,7 @@ const GENERIC_HOSTS: &[&str] = &[
     "playwright", "chromedriver", "msedgedriver", "geckodriver", "crashpad_handler", "watchdog",
 ];
 const SYSTEM_NAMES: &[&str] = &[
+    "hyprland", "hyprland-wrapp", "uwsm", "quickshell", "hypridle", "hyprlock", "waybar",
     "system", "registry", "memory compression", "secure system", "smss", "csrss", "wininit", "winlogon",
     "services", "lsass", "svchost", "fontdrvhost", "dwm", "sihost", "ctfmon", "explorer", "runtimebroker",
     "searchhost", "searchindexer", "searchprotocolhost", "searchfilterhost", "startmenuexperiencehost",
@@ -340,7 +341,18 @@ pub fn is_critical(name_lower: &str, pid: u32) -> bool {
             | "winlogon" | "services" | "lsass" | "fontdrvhost" | "dwm" | "sihost" | "logonui" | "lsaiso"
             | "kernel_task" | "launchd" | "windowserver" | "loginwindow" | "syspolicyd"
             | "systemd" | "init" | "kthreadd" | "dbus-broker" | "dbus-daemon"
-            | "gnome-shell" | "kwin_wayland" | "kwin_x11" | "xorg" | "xwayland"
+            | "hyprland" | "hyprland-wrapp" | "uwsm" | "quickshell" | "gnome-shell" | "kwin_wayland" | "kwin_x11" | "xorg" | "xwayland"
             | "gdm" | "gdm-session-worker" | "sddm" | "lightdm"
     )
+}
+
+#[cfg(test)]
+mod protection_tests {
+    #[test]
+    fn omarchy_session_is_protected() {
+        for name in ["hyprland", "hyprland-wrapp", "uwsm", "quickshell"] {
+            assert!(super::is_critical(name, 4242));
+        }
+        assert!(!super::is_critical("ordinary-app", 4242));
+    }
 }

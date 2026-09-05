@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# ./release vX.Y.Z — publish the committed version through GitHub Actions.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+tag="${1:-}"
+if [[ $# != 1 || ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo 'Uso: ./release vX.Y.Z (ver docs/RELEASING.md)' >&2
+  exit 1
+fi
+version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
+[[ "$tag" == "v$version" ]] || { echo 'A tag deve corresponder ao Cargo.toml.' >&2; exit 1; }
+test -s "docs/releases/$tag.md"
+grep -Fq "## [$version]" CHANGELOG.md
+[[ "$(git branch --show-current)" == main ]] || { echo 'Execute na branch main.' >&2; exit 1; }
+[[ -z "$(git status --porcelain)" ]] || { echo 'Faça commit das mudanças antes da release.' >&2; exit 1; }
+if git show-ref --verify --quiet "refs/tags/$tag"; then
+  echo 'A tag já existe. Para uma execução que falhou, use gh run rerun.' >&2
+  exit 1
+fi
+git fetch origin main --tags
+[[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]] || { echo 'Publique/sincronize main antes da release.' >&2; exit 1; }
+if git show-ref --verify --quiet "refs/tags/$tag"; then
+  echo 'A tag já existe no remoto.' >&2
+  exit 1
+fi
+gh auth status >/dev/null
+cargo test --locked -- --test-threads=1
+git tag -a "$tag" -m "RamDog $tag"
+git push origin "refs/tags/$tag"
+echo "Tag $tag enviada. O workflow release publica após todos os testes e pacotes passarem."
+gh run list --workflow release.yml --branch "$tag" --limit 1

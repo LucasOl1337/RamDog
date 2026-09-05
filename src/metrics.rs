@@ -21,6 +21,8 @@ pub struct GpuInfo {
 /// Uma amostra de tudo que não é RAM.
 #[derive(Clone, Debug, Default)]
 pub struct SysSample {
+    #[cfg(target_os = "linux")]
+    pub gpu_linux: crate::gpu_linux::Sample,
     pub cpu_pct: Option<f32>,
     pub disk_pct: Option<f32>,
     pub disk_bps: Option<f64>,

@@ -1,0 +1,128 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            asset: RamDog-linux-x86_64
+          - os: ubuntu-24.04-arm
+            asset: RamDog-linux-aarch64
+          - os: macos-15
+            asset: RamDog-macos-aarch64
+          - os: macos-15-intel
+            asset: RamDog-macos-x86_64
+          - os: windows-2022
+            asset: RamDog-windows-x64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.asset }}
+      - name: Check version and release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
+          test "$GITHUB_REF_NAME" = "v$version"
+          test -s "docs/releases/$GITHUB_REF_NAME.md"
+          grep -Fq "## [$version]" CHANGELOG.md
+      - name: Test
+        run: cargo test --locked -- --test-threads=1
+      - name: Test Unix installer and launcher
+        if: runner.os == 'Linux'
+        run: python3 tests/test_installer.py
+      - name: Build
+        run: cargo build --locked --release
+      - name: Pack Linux/macOS
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: |
+          mkdir -p package dist
+          cp target/release/ramdog LICENSE README.md CHANGELOG.md package/
+          if [ "$RUNNER_OS" = Linux ]; then
+            cp linux/ramdog-launch package/
+            cp linux/README.md package/README-linux.md
+          fi
+          tar -C package -czf "dist/$ASSET.tar.gz" .
+      - uses: actions/setup-dotnet@v4
+        if: runner.os == 'Windows'
+        with:
+          dotnet-version: '8.0.x'
+      - name: Pack Windows with thermal helper
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package, dist | Out-Null
+          dotnet publish hwtemp -c Release -r win-x64 --self-contained false -o package
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item target/release/ramdog.exe, assets/ramdog.ico, LICENSE, README.md, CHANGELOG.md package/
+          Compress-Archive -Path package/* -DestinationPath dist/RamDog-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Verify packages and create checksums
+        working-directory: dist
+        run: |
+          test -s RamDog-linux-x86_64.tar.gz
+          test -s RamDog-linux-aarch64.tar.gz
+          test -s RamDog-macos-aarch64.tar.gz
+          test -s RamDog-macos-x86_64.tar.gz
+          test -s RamDog-windows-x64.zip
+          sha256sum -- *.tar.gz *.zip > SHA256SUMS.txt
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" --json isDraft > release-state.json 2>/dev/null; then
+            test "$(jq -r .isDraft release-state.json)" = true
+          else
+            gh release create "$tag" --verify-tag --draft --title "RamDog $tag" \
+              --notes-file "docs/releases/$tag.md"
+          fi
+          gh release upload "$tag" dist/* --clobber
+          gh release edit "$tag" --notes-file "docs/releases/$tag.md" --draft=false --latest

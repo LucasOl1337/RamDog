@@ -133,6 +133,8 @@ pub struct ProcInfo {
     pub name_lower: String,
     pub exe_path: String,
     pub cmdline: String,
+    #[cfg(target_os = "linux")]
+    pub linux_memory: Option<(u64, u64)>, // USS, PSS; None = unavailable
     pub private_ws: u64,
     pub working_set: u64,
     pub commit: u64,
@@ -158,6 +160,8 @@ pub struct ProcInfo {
 pub struct MemStatus {
     pub total_phys: u64,
     pub avail_phys: u64,
+    #[cfg(target_os = "linux")]
+    pub linux_commit: Option<(u64, u64)>, // Committed_AS, CommitLimit
     pub total_commit: u64,
     pub avail_commit: u64,
 }
@@ -167,7 +171,10 @@ impl MemStatus {
         self.total_phys.saturating_sub(self.avail_phys)
     }
     pub fn used_commit(&self) -> u64 {
-        self.total_commit.saturating_sub(self.avail_commit)
+        #[cfg(target_os = "linux")]
+        { self.linux_commit.map(|m| m.0).unwrap_or(0) }
+        #[cfg(not(target_os = "linux"))]
+        { self.total_commit.saturating_sub(self.avail_commit) }
     }
 }
 

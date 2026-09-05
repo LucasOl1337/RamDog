@@ -111,6 +111,10 @@ pub struct ScreenSlot {
     pub exe: String,
     /// Argumentos da abertura (uma linha, com aspas se precisar).
     pub args: String,
+    #[cfg(target_os = "linux")]
+    pub argv: Vec<String>,
+    #[cfg(target_os = "linux")]
+    pub monitor_name: String,
     /// Rótulo na lista. Vazio = nome do arquivo do exe.
     pub label: String,
     pub monitor: usize,
@@ -137,6 +141,8 @@ pub enum MemMetric {
     /// Working set: RAM física que o processo ocupa agora, incluindo páginas compartilhadas.
     /// Responde "quem devo matar". Superconta o compartilhado — a soma estoura o total.
     WorkingSet,
+    #[cfg(target_os = "linux")]
+    Proportional,
     /// Working set privado: só o que é exclusivo do processo. Soma abaixo do real, mas é a
     /// única base que fecha a conta contra o "em uso" sem dupla contagem.
     Private,
@@ -145,26 +151,41 @@ pub enum MemMetric {
 }
 
 impl MemMetric {
+    #[cfg(target_os = "linux")]
+    pub const ALL: [MemMetric; 4] = [MemMetric::WorkingSet, MemMetric::Proportional, MemMetric::Private, MemMetric::Commit];
+    #[cfg(not(target_os = "linux"))]
     pub const ALL: [MemMetric; 3] = [MemMetric::WorkingSet, MemMetric::Private, MemMetric::Commit];
 
     pub fn label(self) -> &'static str {
         match self {
-            MemMetric::WorkingSet => "Working set",
+            #[cfg(target_os = "linux")]
+            MemMetric::Proportional => "Proporcional (PSS)",
+            MemMetric::WorkingSet => if cfg!(target_os = "linux") { "Residente (RSS)" } else { "Working set" },
             MemMetric::Private => "Privado",
-            MemMetric::Commit => "Commit",
+            MemMetric::Commit => if cfg!(windows) { "Commit" } else { "Virtual" },
         }
     }
 
     /// Rótulo curto para o cabeçalho da coluna.
     pub fn short(self) -> &'static str {
         match self {
+            #[cfg(target_os = "linux")]
+            MemMetric::Proportional => "RAM PSS",
             MemMetric::WorkingSet => "RAM",
             MemMetric::Private => "RAM priv.",
-            MemMetric::Commit => "Commit",
+            MemMetric::Commit => if cfg!(windows) { "Commit" } else { "Virtual" },
         }
     }
 
     pub fn tip(self) -> &'static str {
+        #[cfg(target_os = "linux")]
+        { return match self {
+            MemMetric::WorkingSet => "RAM residente (RSS), incluindo páginas compartilhadas. A soma pode contar a mesma página em vários processos.",
+            MemMetric::Proportional => "RAM proporcional (PSS): divide cada página compartilhada entre os processos que a usam. Totais incluem apenas leituras acessíveis; — indica indisponível.",
+            MemMetric::Private => "RAM exclusiva (USS): Private_Clean + Private_Dirty de smaps_rollup. Totais incluem apenas leituras acessíveis; — indica indisponível.",
+            MemMetric::Commit => "Espaço de endereçamento virtual reservado. Não representa RAM consumida nem memória confirmada (commit).",
+        }; }
+        #[cfg(not(target_os = "linux"))]
         match self {
             MemMetric::WorkingSet => concat!(
                 "RAM física ocupada agora, incluindo páginas compartilhadas (DLLs, memória ",
@@ -207,6 +228,10 @@ impl ViewMode {
     pub const CORE: [ViewMode; 3] = [ViewMode::List, ViewMode::Tree, ViewMode::Category];
     pub const ADDONS: [ViewMode; 4] =
         [ViewMode::Boot, ViewMode::Drains, ViewMode::Thermal, ViewMode::Screens];
+
+    pub fn available(self) -> bool {
+        cfg!(any(windows, target_os = "linux")) || matches!(self, Self::List | Self::Tree | Self::Category | Self::Thermal)
+    }
 
     pub fn is_addon(self) -> bool {
         matches!(self, ViewMode::Boot | ViewMode::Drains | ViewMode::Thermal | ViewMode::Screens)
