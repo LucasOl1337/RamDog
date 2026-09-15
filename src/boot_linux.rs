@@ -6,6 +6,7 @@ use crate::{
     usage,
 };
 use std::collections::BTreeMap;
+use serde_json::json;
 pub enum BootOut {
     Toast(String, bool),
     Kill(Vec<u32>),
@@ -22,6 +23,28 @@ pub struct Boot {
 impl Boot {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn snapshot_json(&mut self) -> serde_json::Value {
+        let inventory = startup_linux::scan().unwrap_or_default();
+        json!({
+            "supported": true,
+            "warnings": inventory.warnings,
+            "entries": inventory.entries.into_iter().map(|entry| json!({
+                "id": entry.id,
+                "name": entry.name,
+                "command": entry.description,
+                "kind": entry.kind,
+                "enabled": entry.enabled,
+                "missing": false,
+                "can_toggle": entry.can_toggle,
+                "can_remove": false,
+                "microsoft": false,
+                "origin": entry.kind,
+                "running_hint": entry.active,
+                "status": entry.state,
+            })).collect::<Vec<_>>(),
+        })
     }
     pub fn ui(
         &mut self,
@@ -40,14 +63,15 @@ impl Boot {
         if self.scan.due(30) {
             self.scan.start(startup_linux::scan);
         }
-        crate::kit::intro(ui, "Serviços, temporizadores, sockets e aplicativos de login. Alterar a inicialização não encerra o que já está rodando.");
+        let locale = cfg.locale;
+        crate::kit::intro(ui, locale.text("Serviços, temporizadores, sockets e aplicativos de login. Alterar a inicialização não encerra o que já está rodando.", "Services, timers, sockets, and login applications. Changing startup does not stop anything already running."));
         ui.add_space(6.0);
         crate::kit::toolbar(ui, |ui| {
-            if ui.add(crate::kit::button("Atualizar")).clicked() {
+            if ui.add(crate::kit::button(locale.text("Atualizar", "Refresh"))).clicked() {
                 self.scan.start(startup_linux::scan);
             }
-            ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("Buscar").desired_width(200.0));
-            ui.label(crate::kit::muted(&format!("{} entradas", self.scan.value.entries.len())));
+            ui.add(egui::TextEdit::singleline(&mut self.search).hint_text(locale.text("Buscar", "Search")).desired_width(200.0));
+            ui.label(crate::kit::muted(&format!("{} {}", self.scan.value.entries.len(), locale.text("entradas", "entries"))));
         });
         self.scan.status(ui);
         self.action.status(ui);
@@ -55,9 +79,9 @@ impl Boot {
             ui.colored_label(egui::Color32::YELLOW, warning);
         }
         crate::kit::toolbar(ui, |ui| {
-            ui.label(crate::kit::muted("Preset"));
-            ui.add(egui::TextEdit::singleline(&mut self.preset).hint_text("nome").desired_width(160.0));
-            if ui.add(crate::kit::button("Salvar estado atual")).clicked() && !self.preset.trim().is_empty() {
+            ui.label(crate::kit::muted(locale.text("Preset", "Preset")));
+            ui.add(egui::TextEdit::singleline(&mut self.preset).hint_text(locale.text("nome", "name")).desired_width(160.0));
+            if ui.add(crate::kit::button(locale.text("Salvar estado atual", "Save current state"))).clicked() && !self.preset.trim().is_empty() {
                 let states: BTreeMap<_, _> = self
                     .scan
                     .value
@@ -70,7 +94,7 @@ impl Boot {
                 out.push(BootOut::SaveCfg);
             }
             egui::ComboBox::from_id_salt("linux-boot-preset")
-                .selected_text("Carregar preset")
+                .selected_text(locale.text("Carregar preset", "Load preset"))
                 .show_ui(ui, |ui| {
                     for (name, states) in &cfg.boot_presets {
                         if ui.button(name).clicked() {
@@ -93,17 +117,17 @@ impl Boot {
         });
         if let Some(changes) = self.pending.clone() {
             crate::kit::row(ui, |ui| {
-                ui.label(format!("{} alterações no preset:", changes.len()));
+                ui.label(format!("{} {}:", changes.len(), locale.text("alterações no preset", "preset changes")));
                 for (e, on) in &changes {
                     ui.label(format!(
                         "{} → {}",
                         e.name,
-                        if *on { "habilitar" } else { "desabilitar" }
+                        if *on { locale.text("habilitar", "enable") } else { locale.text("desabilitar", "disable") }
                     ));
                 }
                 ui.horizontal(|ui| {
                     if ui
-                        .add_enabled(!self.action.busy(), crate::kit::primary("Aplicar alterações"))
+                        .add_enabled(!self.action.busy(), crate::kit::primary(locale.text("Aplicar alterações", "Apply changes")))
                         .clicked()
                     {
                         self.action.start(move || {
@@ -114,7 +138,7 @@ impl Boot {
                         });
                         self.pending = None;
                     }
-                    if ui.add(crate::kit::button("Cancelar")).clicked() {
+                    if ui.add(crate::kit::button(locale.text("Cancelar", "Cancel"))).clicked() {
                         self.pending = None;
                     }
                 });
@@ -129,12 +153,13 @@ impl Boot {
                 .spacing([14.0, 8.0])
                 .min_row_height(26.0)
                 .show(ui, |ui| {
-                    for label in ["Iniciar", "Entrada", "Origem", "Estado", "RAM", "Ações"] {
+                    for label in [locale.text("Iniciar", "Start"), locale.text("Entrada", "Entry"), locale.text("Origem", "Origin"), locale.text("Estado", "State"), "RAM", locale.text("Ações", "Actions")] {
                         ui.label(crate::kit::muted(label));
                     }
                     ui.end_row();
                     for e in &self.scan.value.entries {
-                        if !format!("{} {} {}", e.name, e.description, e.kind)
+                        let kind = e.kind_for(locale);
+                        if !format!("{} {} {}", e.name, e.description, kind)
                             .to_lowercase()
                             .contains(&query)
                         {
@@ -147,7 +172,7 @@ impl Boot {
                                 egui::Checkbox::without_text(&mut on),
                             )
                             .on_disabled_hover_text(
-                                "Unidade essencial, estática ou gerenciada por dependências",
+                                locale.text("Unidade essencial, estática ou gerenciada por dependências", "Essential, static, or dependency-managed unit"),
                             )
                             .changed()
                         {
@@ -159,11 +184,11 @@ impl Boot {
                             ui.set_max_width(240.0);
                             ui.add(egui::Label::new(&e.name).truncate()).on_hover_text(&e.description);
                         });
-                        ui.label(crate::kit::muted(&e.kind));
+                        ui.label(crate::kit::muted(&kind));
                         if e.active {
-                            crate::kit::badge(ui, "em execução", egui::Color32::from_rgb(120, 200, 140));
+                            crate::kit::badge(ui, locale.text("em execução", "running"), egui::Color32::from_rgb(120, 200, 140));
                         } else {
-                            ui.label(crate::kit::muted(&format!("{} · parada", e.state)));
+                            ui.label(crate::kit::muted(&format!("{} · {}", e.state_for(locale), locale.text("parada", "stopped"))));
                         }
                         ui.label(
                             egui::RichText::new(
@@ -179,7 +204,7 @@ impl Boot {
                             if ui
                                 .add_enabled(
                                     !e.protected && !self.action.busy(),
-                                    crate::kit::button(if e.active { "Parar" } else { "Iniciar" }),
+                                    crate::kit::button(if e.active { locale.text("Parar", "Stop") } else { locale.text("Iniciar", "Start") }),
                                 )
                                 .clicked()
                             {
@@ -188,7 +213,7 @@ impl Boot {
                                     .start(move || startup_linux::unit_action(user, action, &unit));
                             }
                         } else {
-                            ui.label(crate::kit::muted("no próximo login"));
+                            ui.label(crate::kit::muted(locale.text("no próximo login", "at next login")));
                         }
                         ui.end_row();
                     }

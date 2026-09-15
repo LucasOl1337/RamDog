@@ -23,15 +23,17 @@ impl Boot {
         _procs: &[ProcInfo],
         _search: &str,
         _is_admin: bool,
-        _cfg: &mut Config,
+        cfg: &mut Config,
         _tracker: &usage::Tracker,
     ) -> Vec<BootOut> {
         ui.add_space(16.0);
-        ui.label("A visão Partida lista o que o Windows dispara no boot e no logon.");
+        ui.label(cfg.locale.text("A visão Partida lista o que o Windows dispara no boot e no logon.", "Startup lists what Windows launches at boot and sign-in."));
         ui.add_space(8.0);
         ui.label(
-            "No Linux o equivalente seria systemd (system/user units) e ~/.config/autostart — ainda não está nesta aba. \
-             No macOS: LaunchAgents/LaunchDaemons.",
+            cfg.locale.text(
+                "No Linux o equivalente seria systemd (system/user units) e ~/.config/autostart — ainda não está nesta aba. No macOS: LaunchAgents/LaunchDaemons.",
+                "On Linux the equivalent would be systemd (system/user units) and ~/.config/autostart — this tab does not cover it yet. On macOS: LaunchAgents/LaunchDaemons.",
+            ),
         );
         Vec::new()
     }

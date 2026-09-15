@@ -40,6 +40,10 @@ $exe = Get-ChildItem $tmp -Filter 'ramdog.exe' -Recurse | Select-Object -First 1
 if (-not $exe) { throw "ramdog.exe não veio no zip." }
 
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
+# V0.10 exposes the CLI through ramdog.exe; remove the pre-v0.10 split CLI so
+# an upgrade cannot leave two binaries reporting different versions.
+$obsolete = Join-Path $dest 'ramdog-cli.exe'
+if (Test-Path $obsolete) { Remove-Item $obsolete -Force }
 Get-ChildItem $tmp -Recurse -File | ForEach-Object {
     Copy-Item $_.FullName (Join-Path $dest $_.Name) -Force
 }

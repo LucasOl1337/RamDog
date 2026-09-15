@@ -1,4 +1,5 @@
 //! Limpeza fora do Linux: a visão existe, mas explica que ainda não chegou.
+use crate::config::Locale;
 use crate::procs::ProcInfo;
 
 pub enum CleanOut {
@@ -19,9 +20,10 @@ impl Clean {
         _procs: &[ProcInfo],
         _mem: &dyn Fn(&ProcInfo) -> u64,
         _locked: &dyn Fn(&ProcInfo) -> bool,
+        locale: Locale,
     ) -> Vec<CleanOut> {
-        ui.heading("Limpeza");
-        ui.label("A visão Limpeza ainda é só Linux: cache do usuário, lixeira, pacman, journal, coredumps e sobras na RAM.");
+        ui.heading(locale.text("Limpeza", "Cleanup"));
+        ui.label(locale.text("A visão Limpeza ainda é só Linux: cache do usuário, lixeira, pacman, journal, coredumps e sobras na RAM.", "Cleanup is currently Linux-only: user cache, trash, pacman, journals, coredumps, and leftover RAM."));
         Vec::new()
     }
 }

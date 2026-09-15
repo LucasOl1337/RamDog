@@ -1,6 +1,6 @@
 //! Hyprland window management: monitor map, drag/drop, grids and reusable scenarios.
 use crate::{
-    config::{Config, ScreenPreset, ScreenSlot},
+    config::{Config, Locale, ScreenPreset, ScreenSlot},
     linux::{self, Job},
     procs::ProcInfo,
 };
@@ -60,11 +60,15 @@ pub struct Layout {
     pub windows: Vec<Window>,
 }
 pub fn scan() -> Result<Layout, String> {
+    scan_for(Locale::Portuguese)
+}
+
+pub fn scan_for(locale: Locale) -> Result<Layout, String> {
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() {
-        return Err(
-            "Esta integração controla janelas no Hyprland. Inicie na sessão Hyprland/Omarchy."
-                .into(),
-        );
+        return Err(locale.text(
+            "Esta integração controla janelas no Hyprland. Inicie na sessão Hyprland/Omarchy.",
+            "This integration controls windows through Hyprland. Start a Hyprland/Omarchy session.",
+        ).into());
     }
     let mut monitors: Vec<Monitor> =
         serde_json::from_str(&linux::command("hyprctl", &["-j", "monitors"])?)
@@ -82,15 +86,23 @@ pub fn scan() -> Result<Layout, String> {
     })
 }
 fn selector(address: &str) -> Result<String, String> {
+    selector_for(address, Locale::Portuguese)
+}
+
+fn selector_for(address: &str, locale: Locale) -> Result<String, String> {
     if !address
         .strip_prefix("0x")
         .is_some_and(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit()))
     {
-        return Err("Endereço de janela inválido".into());
+        return Err(locale.text("Endereço de janela inválido", "Invalid window address").into());
     }
     Ok(format!("address:{address}"))
 }
 fn dispatch(action: &str, arg: &str) -> Result<(), String> {
+    dispatch_for(action, arg, Locale::Portuguese)
+}
+
+fn dispatch_for(action: &str, arg: &str, locale: Locale) -> Result<(), String> {
     static LUA: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let lua = *LUA.get_or_init(|| {
         linux::command("hyprctl", &["-j", "version"])
@@ -106,7 +118,7 @@ fn dispatch(action: &str, arg: &str) -> Result<(), String> {
             })
     });
     let response = if lua {
-        let expression = lua_dispatch(action, arg)?;
+        let expression = lua_dispatch_for(action, arg, locale)?;
         linux::command("hyprctl", &["dispatch", &expression])?
     } else {
         linux::command("hyprctl", &["dispatch", action, arg])?
@@ -118,9 +130,13 @@ fn dispatch(action: &str, arg: &str) -> Result<(), String> {
     }
 }
 fn lua_dispatch(action: &str, arg: &str) -> Result<String, String> {
+    lua_dispatch_for(action, arg, Locale::Portuguese)
+}
+
+fn lua_dispatch_for(action: &str, arg: &str, locale: Locale) -> Result<String, String> {
     let quote = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
     let window = |s: &str| -> Result<String, String> {
-        selector(s.strip_prefix("address:").ok_or("Seletor inválido")?)?;
+        selector_for(s.strip_prefix("address:").ok_or(locale.text("Seletor inválido", "Invalid selector"))?, locale)?;
         Ok(quote(s))
     };
     Ok(match action {
@@ -138,7 +154,7 @@ fn lua_dispatch(action: &str, arg: &str) -> Result<String, String> {
             "hl.dsp.window.fullscreen_state({internal=0,client=0,action=\"set\"})".into()
         }
         "movewindow" => {
-            let (monitor, w) = arg.split_once(',').ok_or("Monitor inválido")?;
+            let (monitor, w) = arg.split_once(',').ok_or(locale.text("Monitor inválido", "Invalid monitor"))?;
             format!(
                 "hl.dsp.window.move({{monitor={},window={},follow=true}})",
                 quote(monitor.trim_start_matches("mon:")),
@@ -146,10 +162,10 @@ fn lua_dispatch(action: &str, arg: &str) -> Result<String, String> {
             )
         }
         "resizewindowpixel" | "movewindowpixel" => {
-            let (coords, w) = arg.split_once(',').ok_or("Coordenadas inválidas")?;
+            let (coords, w) = arg.split_once(',').ok_or(locale.text("Coordenadas inválidas", "Invalid coordinates"))?;
             let fields: Vec<_> = coords.split_whitespace().collect();
             if fields.len() != 3 || fields[0] != "exact" {
-                return Err("Coordenadas inválidas".into());
+                return Err(locale.text("Coordenadas inválidas", "Invalid coordinates").into());
             }
             let x = fields[1].parse::<i32>().map_err(|e| e.to_string())?;
             let y = fields[2].parse::<i32>().map_err(|e| e.to_string())?;
@@ -163,27 +179,31 @@ fn lua_dispatch(action: &str, arg: &str) -> Result<String, String> {
                 window(w)?
             )
         }
-        _ => return Err("Dispatcher não suportado".into()),
+        _ => return Err(locale.text("Dispatcher não suportado", "Unsupported dispatcher").into()),
     })
 }
 
 pub fn place(address: &str, monitor: &Monitor, rect: egui::Rect) -> Result<(), String> {
-    let window = selector(address)?;
+    place_for(address, monitor, rect, Locale::Portuguese)
+}
+
+pub fn place_for(address: &str, monitor: &Monitor, rect: egui::Rect, locale: Locale) -> Result<(), String> {
+    let window = selector_for(address, locale)?;
     if !monitor
         .name
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || "_-".contains(c))
     {
-        return Err("Nome de monitor inválido".into());
+        return Err(locale.text("Nome de monitor inválido", "Invalid monitor name").into());
     }
     if !rect.is_finite() || rect.width() < 1.0 || rect.height() < 1.0 {
-        return Err("Retângulo inválido".into());
+        return Err(locale.text("Retângulo inválido", "Invalid rectangle").into());
     }
-    dispatch("focuswindow", &window)?;
-    dispatch("fullscreenstate", "0 0")?;
-    dispatch("setfloating", &window)?;
-    dispatch("movewindow", &format!("mon:{},{}", monitor.name, window))?;
-    dispatch(
+    dispatch_for("focuswindow", &window, locale)?;
+    dispatch_for("fullscreenstate", "0 0", locale)?;
+    dispatch_for("setfloating", &window, locale)?;
+    dispatch_for("movewindow", &format!("mon:{},{}", monitor.name, window), locale)?;
+    dispatch_for(
         "resizewindowpixel",
         &format!(
             "exact {} {},{}",
@@ -191,8 +211,9 @@ pub fn place(address: &str, monitor: &Monitor, rect: egui::Rect) -> Result<(), S
             rect.height().round() as i32,
             window
         ),
+        locale,
     )?;
-    dispatch(
+    dispatch_for(
         "movewindowpixel",
         &format!(
             "exact {} {},{}",
@@ -200,6 +221,7 @@ pub fn place(address: &str, monitor: &Monitor, rect: egui::Rect) -> Result<(), S
             rect.top().round() as i32,
             window
         ),
+        locale,
     )
 }
 fn zones(monitor: &Monitor, grid: &str) -> Vec<egui::Rect> {
@@ -276,7 +298,11 @@ pub fn capture(layout: &Layout, selected: &BTreeSet<String>) -> ScreenPreset {
     }
 }
 pub fn apply(preset: ScreenPreset) -> Result<(), String> {
-    let mut layout = scan()?;
+    apply_for(preset, Locale::Portuguese)
+}
+
+pub fn apply_for(preset: ScreenPreset, locale: Locale) -> Result<(), String> {
+    let mut layout = scan_for(locale)?;
     let mut used = BTreeSet::new();
     let mut missing = Vec::new();
     for slot in preset.slots {
@@ -305,7 +331,7 @@ pub fn apply(preset: ScreenPreset) -> Result<(), String> {
             });
             for _ in 0..30 {
                 std::thread::sleep(std::time::Duration::from_millis(300));
-                layout = scan()?;
+                layout = scan_for(locale)?;
                 found = layout.windows.iter().find(matches).cloned();
                 if found.is_some() {
                     break;
@@ -321,24 +347,29 @@ pub fn apply(preset: ScreenPreset) -> Result<(), String> {
             .iter()
             .find(|m| m.name == slot.monitor_name)
             .or_else(|| layout.monitors.get(slot.monitor))
-            .ok_or("Monitor do cenário indisponível")?;
+            .ok_or(locale.text("Monitor do cenário indisponível", "Scene monitor is unavailable"))?;
         let a = monitor.area();
         let w = slot.w.clamp(0.01, 1.0) * a.width();
         let h = slot.h.clamp(0.01, 1.0) * a.height();
         let x = (a.left() + slot.x * a.width()).clamp(a.left(), (a.right() - w).max(a.left()));
         let y = (a.top() + slot.y * a.height()).clamp(a.top(), (a.bottom() - h).max(a.top()));
-        place(
-            &window.address,
-            monitor,
-            egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h)),
-        )?;
+            place_for(
+                &window.address,
+                monitor,
+                egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h)),
+                locale,
+            )?;
         used.insert(window.address);
     }
     if missing.is_empty() {
         Ok(())
     } else {
         Err(format!(
-            "Janelas não encontradas (abrir automaticamente desativado): {}",
+            "{}: {}",
+            locale.text(
+                "Janelas não encontradas (abrir automaticamente desativado)",
+                "Windows not found (automatic launch disabled)",
+            ),
             missing.join(", ")
         ))
     }
@@ -364,20 +395,24 @@ impl Screens {
         cfg: &mut Config,
     ) -> Vec<ScreenOut> {
         let mut out = Vec::new();
+        let locale = cfg.locale;
         self.layout.poll();
         if self.action.poll() {
-            self.layout.start(scan);
+            self.layout.start(move || scan_for(locale));
         }
         if self.layout.due(3) {
-            self.layout.start(scan);
+            self.layout.start(move || scan_for(locale));
         }
-        crate::kit::intro(ui, "Hyprland: selecione janelas para distribuir numa grade, ou arraste uma janela no mapa para outro monitor.");
+        crate::kit::intro(ui, cfg.locale.text(
+            "Hyprland: selecione janelas para distribuir numa grade, ou arraste uma janela no mapa para outro monitor.",
+            "Hyprland: select windows to arrange in a grid, or drag a window on the map to another monitor.",
+        ));
         self.layout.status(ui);
         self.action.status(ui);
         ui.add_space(6.0);
         crate::kit::toolbar(ui, |ui| {
-            if ui.add(crate::kit::button("Atualizar")).clicked() {
-                self.layout.start(scan);
+            if ui.add(crate::kit::button(cfg.locale.text("Atualizar", "Refresh"))).clicked() {
+                self.layout.start(move || scan_for(locale));
             }
             egui::ComboBox::from_id_salt("linux-monitor")
                 .selected_text(
@@ -386,7 +421,7 @@ impl Screens {
                         .monitors
                         .get(self.monitor)
                         .map(|m| m.name.as_str())
-                        .unwrap_or("Monitor"),
+                        .unwrap_or(cfg.locale.text("Monitor", "Monitor")),
                 )
                 .show_ui(ui, |ui| {
                     for (i, m) in self.layout.value.monitors.iter().enumerate() {
@@ -394,10 +429,10 @@ impl Screens {
                     }
                 });
             for (id, label) in [
-                ("1", "Inteira"),
-                ("2", "2 colunas"),
-                ("3", "3 colunas"),
-                ("4", "4 quadrantes"),
+                ("1", cfg.locale.text("Inteira", "Full screen")),
+                ("2", cfg.locale.text("2 colunas", "2 columns")),
+                ("3", cfg.locale.text("3 colunas", "3 columns")),
+                ("4", cfg.locale.text("4 quadrantes", "4 quadrants")),
             ] {
                 if ui
                     .selectable_value(&mut cfg.screen_grid, id.into(), label)
@@ -407,7 +442,7 @@ impl Screens {
                 }
             }
             if ui
-                .checkbox(&mut cfg.screen_snap, "Encaixar na grade")
+                .checkbox(&mut cfg.screen_snap, cfg.locale.text("Encaixar na grade", "Snap to grid"))
                 .changed()
             {
                 out.push(ScreenOut::SaveCfg);
@@ -415,7 +450,7 @@ impl Screens {
             if ui
                 .add_enabled(
                     !self.action.busy() && !self.selected.is_empty(),
-                    egui::Button::new("Organizar selecionadas"),
+                    egui::Button::new(cfg.locale.text("Organizar selecionadas", "Arrange selected")),
                 )
                 .clicked()
             {
@@ -425,7 +460,7 @@ impl Screens {
                     self.action.start(move || {
                         let zones = zones(&monitor, &grid);
                         for (i, address) in addresses.iter().enumerate() {
-                            place(address, &monitor, zones[i % zones.len()])?;
+                            place_for(address, &monitor, zones[i % zones.len()], locale)?;
                         }
                         Ok(())
                     });
@@ -541,19 +576,19 @@ impl Screens {
                             } else {
                                 target
                             };
-                            self.action.start(move || place(&address, &m, target));
+                            self.action.start(move || place_for(&address, &m, target, locale));
                         }
                     }
                 }
             }
         }
         crate::kit::toolbar(ui, |ui| {
-            ui.label(crate::kit::muted("Cenário"));
-            ui.add(egui::TextEdit::singleline(&mut self.preset).hint_text("nome").desired_width(160.0));
+            ui.label(crate::kit::muted(cfg.locale.text("Cenário", "Scene")));
+            ui.add(egui::TextEdit::singleline(&mut self.preset).hint_text(cfg.locale.text("nome", "name")).desired_width(160.0));
             if ui
                 .add_enabled(
                     !self.selected.is_empty(),
-                    crate::kit::button("Salvar selecionadas"),
+                    crate::kit::button(cfg.locale.text("Salvar selecionadas", "Save selected")),
                 )
                 .clicked()
                 && !self.preset.trim().is_empty()
@@ -568,16 +603,16 @@ impl Screens {
         for (name, preset) in &mut cfg.screen_presets {
             ui.collapsing(name, |ui| {
                 if ui
-                    .add_enabled(!self.action.busy(), crate::kit::primary("Aplicar cenário"))
+                    .add_enabled(!self.action.busy(), crate::kit::primary(cfg.locale.text("Aplicar cenário", "Apply scene")))
                     .clicked()
                 {
                     let preset = preset.clone();
-                    self.action.start(move || apply(preset));
+                    self.action.start(move || apply_for(preset, locale));
                 }
                 for slot in &mut preset.slots {
                     ui.horizontal(|ui| {
                         ui.label(&slot.label);
-                        if ui.checkbox(&mut slot.launch, "Abrir se fechada").changed() {
+                        if ui.checkbox(&mut slot.launch, cfg.locale.text("Abrir se fechada", "Open if closed")).changed() {
                             out.push(ScreenOut::SaveCfg);
                         }
                     });
@@ -603,18 +638,18 @@ impl Screens {
                             crate::kit::two_lines(ui, egui::RichText::new(&window.title), &window.class);
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if window.floating && ui.add(crate::kit::button("Voltar ao mosaico")).clicked() {
+                            if window.floating && ui.add(crate::kit::button(cfg.locale.text("Voltar ao mosaico", "Tile window"))).clicked() {
                                 let a = window.address.clone();
                                 self.action
-                                    .start(move || dispatch("settiled", &selector(&a)?));
+                                    .start(move || dispatch_for("settiled", &selector_for(&a, locale)?, locale));
                             }
-                            if ui.add(crate::kit::button("Focar")).clicked() {
+                            if ui.add(crate::kit::button(cfg.locale.text("Focar", "Focus"))).clicked() {
                                 let a = window.address.clone();
                                 self.action
-                                    .start(move || dispatch("focuswindow", &selector(&a)?));
+                                    .start(move || dispatch_for("focuswindow", &selector_for(&a, locale)?, locale));
                             }
                             if window.floating {
-                                crate::kit::badge(ui, "flutuando", crate::app::ACCENT_FG);
+                                crate::kit::badge(ui, cfg.locale.text("flutuando", "floating"), crate::app::ACCENT_FG);
                             }
                         });
                     });

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::procs::ProcInfo;
+use crate::config::Locale;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 pub enum Category {
@@ -29,26 +30,34 @@ impl Category {
     ];
 
     pub fn label(self) -> &'static str {
+        self.label_for(Locale::Portuguese)
+    }
+
+    pub fn label_for(self, locale: Locale) -> &'static str {
         match self {
-            Category::Ai => "IA / Agentes",
-            Category::Dev => "Dev",
-            Category::Browser => "Navegador",
-            Category::Games => "Jogos",
-            Category::Personal => "Pessoal",
-            Category::System => "Sistema",
-            Category::Other => "Outros",
+            Category::Ai => locale.text("AI / Agentes", "AI / Agents"),
+            Category::Dev => locale.text("Desenvolvimento", "Dev"),
+            Category::Browser => locale.text("Navegador", "Browser"),
+            Category::Games => locale.text("Jogos", "Games"),
+            Category::Personal => locale.text("Pessoal", "Personal"),
+            Category::System => locale.text("Sistema", "System"),
+            Category::Other => locale.text("Outro", "Other"),
         }
     }
 
     pub fn short(self) -> &'static str {
+        self.short_for(Locale::Portuguese)
+    }
+
+    pub fn short_for(self, locale: Locale) -> &'static str {
         match self {
-            Category::Ai => "IA",
+            Category::Ai => "AI",
             Category::Dev => "Dev",
-            Category::Browser => "Web",
-            Category::Games => "Jogos",
-            Category::Personal => "Pessoal",
-            Category::System => "Sistema",
-            Category::Other => "Outros",
+            Category::Browser => locale.text("Web", "Web"),
+            Category::Games => locale.text("Jogos", "Games"),
+            Category::Personal => locale.text("Pessoal", "Personal"),
+            Category::System => locale.text("Sistema", "System"),
+            Category::Other => locale.text("Outro", "Other"),
         }
     }
 
@@ -434,6 +443,19 @@ mod protection_tests {
             assert!(super::is_critical(name, 4242));
         }
         assert!(!super::is_critical("ordinary-app", 4242));
+    }
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use super::Category;
+    use crate::config::Locale;
+
+    #[test]
+    fn english_labels_are_available() {
+        assert_eq!(Category::Ai.label_for(Locale::English), "AI / Agents");
+        assert_eq!(Category::Games.label_for(Locale::English), "Games");
+        assert_eq!(Category::Personal.short_for(Locale::English), "Personal");
     }
 }
 

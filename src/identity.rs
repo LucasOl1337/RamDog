@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
+use crate::config::Locale;
+
 fn agent_slug(agent: &str) -> Option<&'static str> {
     match agent {
         "Claude Code" => Some("claude"),
@@ -506,11 +508,26 @@ pub fn leftover_reason(
     kernel_state: Option<char>,
     has_window: bool,
 ) -> Option<&'static str> {
+    leftover_reason_for(cmdline, kernel_state, has_window, Locale::Portuguese)
+}
+
+pub fn leftover_reason_for(
+    cmdline: &str,
+    kernel_state: Option<char>,
+    has_window: bool,
+    locale: Locale,
+) -> Option<&'static str> {
     if kernel_state == Some('Z') {
-        return Some("zombie: o processo já morreu e o pai não recolheu o estado");
+        return Some(locale.text(
+            "zombie: o processo já morreu e o pai não recolheu o estado",
+            "zombie: the process is dead and its parent has not reaped it",
+        ));
     }
     if !has_window && qemu_avd(cmdline).is_some() && (cmdline.contains("-qt-hide-window") || cmdline.contains("-no-window")) {
-        return Some("emulador Android sem janela (-qt-hide-window)");
+        return Some(locale.text(
+            "emulador Android sem janela (-qt-hide-window)",
+            "Android emulator without a window (-qt-hide-window)",
+        ));
     }
     None
 }
@@ -521,6 +538,16 @@ pub fn state_label(
     has_window: bool,
     leftover: Option<&str>,
 ) -> &'static str {
+    state_label_for(kernel_state, focused, has_window, leftover, Locale::Portuguese)
+}
+
+pub fn state_label_for(
+    kernel_state: Option<char>,
+    focused: bool,
+    has_window: bool,
+    leftover: Option<&str>,
+    locale: Locale,
+) -> &'static str {
     if kernel_state == Some('Z') {
         return "zombie";
     }
@@ -528,12 +555,12 @@ pub fn state_label(
         return "leftover";
     }
     if focused {
-        return "em foco";
+        return locale.text("em foco", "focused");
     }
     if has_window {
-        return "janela";
+        return locale.text("janela", "window");
     }
-    "fundo"
+    locale.text("fundo", "background")
 }
 
 fn steam_name(id: u32) -> Option<String> {

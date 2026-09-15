@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod cli;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
@@ -58,6 +59,16 @@ mod sys;
 mod usage;
 
 fn main() -> eframe::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| {
+        !matches!(arg.as_str(), "--clean-helper" | "--fan-helper" | "--diagnose" | "--smoke-test")
+    }) {
+        let code = cli::run(args);
+        if code != 0 {
+            std::process::exit(code);
+        }
+        return Ok(());
+    }
     #[cfg(target_os = "linux")]
     {
         if std::env::args().nth(1).as_deref()==Some("--clean-helper") {

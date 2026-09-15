@@ -1,5 +1,6 @@
 [package]
 name = "ramdog"
+default-run = "ramdog"
 version = "0.10.0"
 edition = "2021"
 description = "RamDog — gerenciador de processos para Windows, Linux e macOS: origem, árvore, categorias, kill e lock"
@@ -40,6 +41,7 @@ windows = { version = "0.61", features = [
     "Win32_System_TaskScheduler",
     "Win32_System_Performance",
     "Win32_System_LibraryLoader",
+    "Win32_System_Console",
 ] }
 
 [target.'cfg(not(windows))'.dependencies]

@@ -12,6 +12,8 @@
 use std::ffi::c_void;
 use std::ptr;
 
+use crate::config::Locale;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Trust {
     #[cfg(target_os = "linux")]
@@ -35,14 +37,26 @@ pub struct SigInfo {
 
 impl SigInfo {
     pub fn label(&self) -> String {
+        self.label_for(Locale::Portuguese)
+    }
+
+    pub fn label_for(&self, locale: Locale) -> String {
         match &self.trust {
             #[cfg(target_os = "linux")]
-            Trust::Package{name,verified}=>format!("Pacote {name} · {}",if *verified{"SHA-256 confere"}else{"hash indisponível"}),
-            Trust::Valid if self.signer.is_empty() => "assinatura válida".to_string(),
-            Trust::Valid => format!("assinado por {}", self.signer),
-            Trust::Unsigned => "sem assinatura digital".to_string(),
-            Trust::Invalid(why) => format!("assinatura inválida — {why}"),
-            Trust::Unknown(why) => format!("não verificado ({why})"),
+            Trust::Package { name, verified } => format!(
+                "{} {name} · {}",
+                locale.text("Pacote", "Package"),
+                if *verified {
+                    locale.text("SHA-256 confere", "SHA-256 verified")
+                } else {
+                    locale.text("hash indisponível", "hash unavailable")
+                }
+            ),
+            Trust::Valid if self.signer.is_empty() => locale.text("assinatura válida", "Valid signature").to_string(),
+            Trust::Valid => format!("{} {}", locale.text("assinado por", "Signed by"), self.signer),
+            Trust::Unsigned => locale.text("sem assinatura digital", "No digital signature").to_string(),
+            Trust::Invalid(why) => format!("{} — {why}", locale.text("assinatura inválida", "Invalid signature")),
+            Trust::Unknown(why) => format!("{} ({why})", locale.text("não verificado", "Not verified")),
         }
     }
 
@@ -58,13 +72,29 @@ impl SigInfo {
     }
 
     pub fn tip(&self) -> &'static str {
+        self.tip_for(Locale::Portuguese)
+    }
+
+    pub fn tip_for(&self, locale: Locale) -> &'static str {
         match self.trust {
             #[cfg(target_os = "linux")]
-            Trust::Package{..}=>"Proveniência do pacote instalado e comparação SHA-256 com a base local do pacman. Não é uma assinatura Authenticode nem revalidação criptográfica do repositório.",
-            Trust::Valid => "O arquivo não foi alterado desde que o fabricante o assinou, e o certificado encadeia até uma raiz confiável desta máquina.",
-            Trust::Unsigned => "Sem assinatura não há como provar quem fez o arquivo nem se ele foi alterado. Normal em ferramentas pequenas e em builds próprios; suspeito num executável que diz ser do Windows.",
-            Trust::Invalid(_) => "A verificação reprovou: o arquivo pode ter sido adulterado, ou o certificado expirou ou não é confiável nesta máquina.",
-            Trust::Unknown(_) => "Não foi possível ler o arquivo para verificar.",
+            Trust::Package { .. } => locale.text(
+                "Proveniência do pacote instalado e comparação SHA-256 com a base local do pacman. Não é uma assinatura Authenticode nem revalidação criptográfica do repositório.",
+                "Installed package provenance and SHA-256 comparison with the local pacman database. This is not an Authenticode signature or repository revalidation.",
+            ),
+            Trust::Valid => locale.text(
+                "O arquivo não foi alterado desde que o fabricante o assinou, e o certificado encadeia até uma raiz confiável desta máquina.",
+                "The file has not changed since the publisher signed it, and its certificate chains to a trusted root on this machine.",
+            ),
+            Trust::Unsigned => locale.text(
+                "Sem assinatura não há como provar quem fez o arquivo nem se ele foi alterado. Normal em ferramentas pequenas e em builds próprios; suspeito num executável que diz ser do Windows.",
+                "Without a signature, there is no proof who made the file or whether it changed. Normal for small tools and local builds; suspicious for an executable claiming to be Windows software.",
+            ),
+            Trust::Invalid(_) => locale.text(
+                "A verificação reprovou: o arquivo pode ter sido adulterado, ou o certificado expirou ou não é confiável nesta máquina.",
+                "Verification failed: the file may have been modified, or the certificate expired or is not trusted on this machine.",
+            ),
+            Trust::Unknown(_) => locale.text("Não foi possível ler o arquivo para verificar.", "The file could not be read for verification."),
         }
     }
 }

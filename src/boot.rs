@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use egui::{Color32, RichText, TextureHandle};
 use egui_extras::{Column, TableBuilder};
+use serde_json::json;
 use windows::core::{BSTR, Interface, IUnknown, PCWSTR};
 
 use windows::Win32::Storage::FileSystem::WIN32_FIND_DATAW;
@@ -35,7 +36,7 @@ use windows::Win32::System::Variant::{VARIANT, VT_I4};
 use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
 
 use crate::app::{ACCENT, ACCENT_BG, LINE, MUTED, SURFACE, SURFACE_HI};
-use crate::config::{BootGroup, Config};
+use crate::config::{BootGroup, Config, Locale};
 use crate::icons::IconBank;
 use crate::procs::{self, ProcInfo};
 use crate::sys::{self, SvcStart, SysResult};
@@ -73,28 +74,36 @@ impl Kind {
     ];
 
     fn label(self) -> &'static str {
+        self.label_for(Locale::Portuguese)
+    }
+
+    fn label_for(self, locale: Locale) -> &'static str {
         match self {
-            Kind::Run => "Registro",
-            Kind::Folder => "Pasta Iniciar",
-            Kind::Task => "Tarefa",
-            Kind::Service => "Serviço",
+            Kind::Run => locale.text("Registro", "Registry"),
+            Kind::Folder => locale.text("Pasta Iniciar", "Startup folder"),
+            Kind::Task => locale.text("Tarefa", "Task"),
+            Kind::Service => locale.text("Serviço", "Service"),
             Kind::Driver => "Driver",
             Kind::Uwp => "App UWP",
             Kind::Winlogon => "Winlogon",
-            Kind::Other => "Outro",
+            Kind::Other => locale.text("Outro", "Other"),
         }
     }
 
     fn chip(self) -> &'static str {
+        self.chip_for(Locale::Portuguese)
+    }
+
+    fn chip_for(self, locale: Locale) -> &'static str {
         match self {
-            Kind::Run => "Registro",
-            Kind::Folder => "Pasta",
-            Kind::Task => "Tarefas",
-            Kind::Service => "Serviços",
-            Kind::Driver => "Drivers",
+            Kind::Run => locale.text("Registro", "Registry"),
+            Kind::Folder => locale.text("Pasta", "Folder"),
+            Kind::Task => locale.text("Tarefas", "Tasks"),
+            Kind::Service => locale.text("Serviços", "Services"),
+            Kind::Driver => locale.text("Drivers", "Drivers"),
             Kind::Uwp => "UWP",
             Kind::Winlogon => "Winlogon",
-            Kind::Other => "Outros",
+            Kind::Other => locale.text("Outros", "Other"),
         }
     }
 
@@ -140,20 +149,28 @@ impl Phase {
     }
 
     fn title(self) -> &'static str {
+        self.title_for(Locale::Portuguese)
+    }
+
+    fn title_for(self, locale: Locale) -> &'static str {
         match self {
-            Phase::Kernel => "Antes do Windows",
-            Phase::Machine => "Com a máquina",
-            Phase::Logon => "Ao entrar na conta",
-            Phase::Desktop => "Seus programas",
+            Phase::Kernel => locale.text("Antes do Windows", "Before Windows"),
+            Phase::Machine => locale.text("Com a máquina", "With the machine"),
+            Phase::Logon => locale.text("Ao entrar na conta", "At sign-in"),
+            Phase::Desktop => locale.text("Seus programas", "Your programs"),
         }
     }
 
     fn hint(self) -> &'static str {
+        self.hint_for(Locale::Portuguese)
+    }
+
+    fn hint_for(self, locale: Locale) -> &'static str {
         match self {
-            Phase::Kernel => "drivers e kernel: carregam antes de existir tela de logon",
-            Phase::Machine => "serviços e tarefas de boot: sobem sozinhos, mesmo sem ninguém logado",
-            Phase::Logon => "dispara no logon, antes da área de trabalho aparecer",
-            Phase::Desktop => "abre depois da área de trabalho — é aqui que mora o atraso do seu login",
+            Phase::Kernel => locale.text("drivers e kernel: carregam antes de existir tela de logon", "drivers and kernel: load before the sign-in screen exists"),
+            Phase::Machine => locale.text("serviços e tarefas de boot: sobem sozinhos, mesmo sem ninguém logado", "boot services and tasks: start even when nobody is signed in"),
+            Phase::Logon => locale.text("dispara no logon, antes da área de trabalho aparecer", "starts at sign-in, before the desktop appears"),
+            Phase::Desktop => locale.text("abre depois da área de trabalho — é aqui que mora o atraso do seu login", "opens after the desktop — this is where sign-in delays live"),
         }
     }
 
@@ -197,18 +214,26 @@ impl Status {
     }
 
     fn title(self) -> &'static str {
+        self.title_for(Locale::Portuguese)
+    }
+
+    fn title_for(self, locale: Locale) -> &'static str {
         match self {
-            Status::On => "SOBE COM O PC",
-            Status::Off => "NÃO SOBE",
-            Status::Broken => "QUEBRADAS",
+            Status::On => locale.text("SOBE COM O PC", "STARTS WITH THE PC"),
+            Status::Off => locale.text("NÃO SOBE", "DOES NOT START"),
+            Status::Broken => locale.text("QUEBRADAS", "BROKEN"),
         }
     }
 
     fn hint(self) -> &'static str {
+        self.hint_for(Locale::Portuguese)
+    }
+
+    fn hint_for(self, locale: Locale) -> &'static str {
         match self {
-            Status::On => "dispara sozinho toda vez que o Windows liga",
-            Status::Off => "continua instalado, mas o Windows não dispara mais",
-            Status::Broken => "a partida aponta para um arquivo que não existe mais",
+            Status::On => locale.text("dispara sozinho toda vez que o Windows liga", "starts automatically whenever Windows boots"),
+            Status::Off => locale.text("continua instalado, mas o Windows não dispara mais", "remains installed, but Windows no longer starts it"),
+            Status::Broken => locale.text("a partida aponta para um arquivo que não existe mais", "startup points to a file that no longer exists"),
         }
     }
 
@@ -255,17 +280,25 @@ impl Grp {
     }
 
     fn title(self) -> String {
+        self.title_for(Locale::Portuguese)
+    }
+
+    fn title_for(self, locale: Locale) -> String {
         match self {
-            Grp::St(s) => s.title().to_string(),
-            Grp::Ph(p) => p.title().to_string(),
-            Grp::Kd(k) => k.label().to_string(),
+            Grp::St(s) => s.title_for(locale).to_string(),
+            Grp::Ph(p) => p.title_for(locale).to_string(),
+            Grp::Kd(k) => k.label_for(locale).to_string(),
         }
     }
 
     fn hint(self) -> &'static str {
+        self.hint_for(Locale::Portuguese)
+    }
+
+    fn hint_for(self, locale: Locale) -> &'static str {
         match self {
-            Grp::St(s) => s.hint(),
-            Grp::Ph(p) => p.hint(),
+            Grp::St(s) => s.hint_for(locale),
+            Grp::Ph(p) => p.hint_for(locale),
             Grp::Kd(_) => "",
         }
     }
@@ -449,6 +482,29 @@ impl Boot {
         }
     }
 
+    pub fn snapshot_json(&mut self) -> serde_json::Value {
+        self.refresh();
+        json!({
+            "supported": true,
+            "entries": self.entries.iter().map(|entry| json!({
+                "id": entry.id,
+                "name": entry.name,
+                "command": entry.command,
+                "kind": entry.kind.label(),
+                "phase": entry.phase.title(),
+                "machine": entry.machine,
+                "enabled": entry.enabled,
+                "missing": entry.missing,
+                "can_toggle": entry.can_toggle,
+                "can_remove": entry.can_remove,
+                "microsoft": entry.microsoft,
+                "origin": entry.origin,
+                "running_hint": entry.running_hint,
+                "status": Status::of(entry).title(),
+            })).collect::<Vec<_>>(),
+        })
+    }
+
     fn refresh(&mut self) {
         self.entries = collect();
         self.resolved = self
@@ -520,6 +576,7 @@ impl Boot {
         let mut out = Vec::new();
         let mut queued: Vec<Action> = Vec::new();
         let mut confirm: Option<Pending> = None;
+        let locale = cfg.locale;
 
         let running = running_exes(procs);
         let q = search.trim().to_lowercase();
@@ -543,7 +600,7 @@ impl Boot {
                 e.name.to_lowercase().contains(&q)
                     || e.command.to_lowercase().contains(&q)
                     || e.origin.to_lowercase().contains(&q)
-                    || e.kind.label().to_lowercase().contains(&q)
+                    || e.kind.label_for(locale).to_lowercase().contains(&q)
             })
             .cloned()
             .collect();
@@ -609,21 +666,21 @@ impl Boot {
 
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Partida").strong().size(16.0));
+            ui.label(RichText::new(locale.text("Partida", "Startup")).strong().size(16.0));
             ui.label(
-                RichText::new("— tudo que o Windows dispara no boot e no logon, sem o recorte do Gerenciador de Tarefas")
+                RichText::new(locale.text("— tudo que o Windows dispara no boot e no logon, sem o recorte do Gerenciador de Tarefas", "— everything Windows starts at boot and sign-in, beyond Task Manager's limited list"))
                     .color(MUTED),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Atualizar").on_hover_text("Relê registro, pasta Iniciar, tarefas e serviços").clicked() {
+                if ui.small_button(locale.text("Atualizar", "Refresh")).on_hover_text(locale.text("Relê registro, pasta Iniciar, tarefas e serviços", "Rereads the registry, Startup folder, tasks, and services")).clicked() {
                     self.last_refresh = None;
                 }
-                let scan = egui::Button::new(RichText::new("⌕ Scan de uso").color(Color32::WHITE).strong())
+                let scan = egui::Button::new(RichText::new(locale.text("⌕ Scan de uso", "⌕ Usage scan")).color(Color32::WHITE).strong())
                     .fill(ACCENT_BG)
                     .stroke(egui::Stroke::new(1.0_f32, ACCENT));
                 if ui
                     .add(scan)
-                    .on_hover_text("Mede quais programas você mais usa (tempo em foco + tempo aberto) e sugere o que vale colocar na partida")
+                    .on_hover_text(locale.text("Mede quais programas você mais usa (tempo em foco + tempo aberto) e sugere o que vale colocar na partida", "Measures which programs you use most (focused + open time) and suggests what belongs in startup"))
                     .clicked()
                 {
                     self.refresh_usage(tracker);
@@ -631,7 +688,7 @@ impl Boot {
                 }
                 if self.busy > 0 {
                     ui.spinner();
-                    ui.label(RichText::new(format!("{} ação(ões) aguardando UAC", self.busy)).color(MUTED).small());
+                    ui.label(RichText::new(format!("{} {}", self.busy, locale.text("ação(ões) aguardando UAC", "action(s) waiting for UAC"))).color(MUTED).small());
                 }
             });
         });
@@ -645,7 +702,7 @@ impl Boot {
                 let n = self.entries.iter().filter(|e| Status::of(e) == st).count();
                 let sel = self.status_filter == Some(st);
                 let c = st.color();
-                let text = RichText::new(format!("{}  {}  {n}", st.glyph(), st.title()))
+                let text = RichText::new(format!("{}  {}  {n}", st.glyph(), st.title_for(locale)))
                     .size(12.0)
                     .strong()
                     .color(if n == 0 && !sel { MUTED.gamma_multiply(0.7) } else { c });
@@ -656,7 +713,7 @@ impl Boot {
                     .add(btn)
                     .on_hover_text(format!("{}
 
-Clique para ver só estas.", st.hint()))
+Clique para ver só estas.", st.hint_for(locale)))
                     .clicked()
                 {
                     self.status_filter = if sel { None } else { Some(st) };
@@ -676,14 +733,14 @@ Clique para ver só estas.", st.hint()))
             for k in Kind::ALL {
                 let n = self.entries.iter().filter(|e| e.kind == k).count();
                 let on = self.kinds.contains(&k);
-                let label = format!("{} {n}", k.chip());
+                let label = format!("{} {n}", k.chip_for(locale));
                 let text = RichText::new(label).size(12.0).color(if on { k.color() } else { MUTED });
                 let btn = if on {
                     egui::Button::new(text).stroke(egui::Stroke::new(1.0_f32, k.color().gamma_multiply(0.55)))
                 } else {
                     egui::Button::new(text).fill(Color32::TRANSPARENT)
                 };
-                if ui.add(btn).on_hover_text(k.label()).clicked() {
+                if ui.add(btn).on_hover_text(k.label_for(locale)).clicked() {
                     if on && self.kinds.len() > 1 {
                         self.kinds.remove(&k);
                     } else {
@@ -693,15 +750,15 @@ Clique para ver só estas.", st.hint()))
             }
         });
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Separar por:").small().color(MUTED));
+            ui.label(RichText::new(locale.text("Separar por:", "Group by:")).small().color(MUTED));
             let cur = cfg.boot_group;
             let mut pick: Option<BootGroup> = None;
             egui::ComboBox::from_id_salt("boot_group")
-                .selected_text(RichText::new(cur.label()).size(12.0))
+                .selected_text(RichText::new(cur.label_for(locale)).size(12.0))
                 .width(168.0)
                 .show_ui(ui, |ui| {
                     for g in BootGroup::ALL {
-                        if ui.selectable_label(cur == g, g.label()).on_hover_text(g.tip()).clicked() {
+                        if ui.selectable_label(cur == g, g.label_for(locale)).on_hover_text(g.tip_for(locale)).clicked() {
                             pick = Some(g);
                         }
                     }
@@ -714,7 +771,7 @@ Clique para ver só estas.", st.hint()))
                 }
             }
             if cur != BootGroup::Flat {
-                if ui.small_button("⊟").on_hover_text("Recolher todos os grupos").clicked() {
+                if ui.small_button("⊟").on_hover_text(locale.text("Recolher todos os grupos", "Collapse all groups")).clicked() {
                     // Vale varrer tudo, não só o que está filtrado: chave sobrando no conjunto
                     // não atrapalha, chave faltando deixaria um grupo aberto sem motivo.
                     for e in &self.entries {
@@ -728,13 +785,13 @@ Clique para ver só estas.", st.hint()))
                         }
                     }
                 }
-                if ui.small_button("⊞").on_hover_text("Abrir todos os grupos").clicked() {
+                if ui.small_button("⊞").on_hover_text(locale.text("Abrir todos os grupos", "Expand all groups")).clicked() {
                     self.collapsed.clear();
                 }
             }
             ui.separator();
-            ui.checkbox(&mut self.hide_microsoft, "esconder Microsoft");
-            ui.checkbox(&mut self.only_running, "só as que estão rodando");
+            ui.checkbox(&mut self.hide_microsoft, locale.text("esconder Microsoft", "hide Microsoft"));
+            ui.checkbox(&mut self.only_running, locale.text("só as que estão rodando", "running only"));
             ui.separator();
             self.presets_bar(ui, &mut confirm, cfg, &mut out);
         });
@@ -748,7 +805,7 @@ Clique para ver só estas.", st.hint()))
         let mut sort_click: Option<SortKey> = None;
 
         if self.scan_open {
-            self.scan_panel(ui, &mut add);
+            self.scan_panel(ui, &mut add, locale);
             ui.add_space(4.0);
         }
 
@@ -762,7 +819,7 @@ Clique para ver só estas.", st.hint()))
             };
             let color = if sort == key { ACCENT } else { MUTED };
             let b = egui::Button::new(RichText::new(format!("{text}{arrow}")).small().color(color).strong()).frame(false);
-            if ui.add(b).on_hover_text("Ordenar por esta coluna").clicked() {
+            if ui.add(b).on_hover_text(locale.text("Ordenar por esta coluna", "Sort by this column")).clicked() {
                 *click = Some(key);
             }
         };
@@ -855,9 +912,9 @@ Clique para ver só estas.", st.hint()))
         if filtered.is_empty() {
             ui.add_space(24.0);
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new("Nenhuma entrada bate com os filtros de agora").color(MUTED));
+                ui.label(RichText::new(locale.text("Nenhuma entrada bate com os filtros de agora", "No entries match the current filters")).color(MUTED));
                 ui.label(
-                    RichText::new("Tire o filtro de estado lá em cima, ligue mais tipos ou limpe a busca.")
+                    RichText::new(locale.text("Tire o filtro de estado lá em cima, ligue mais tipos ou limpe a busca.", "Clear the state filter above, enable more source types, or clear the search."))
                         .small()
                         .color(MUTED),
                 );
@@ -897,15 +954,15 @@ Clique para ver só estas.", st.hint()))
             .header(22.0, |mut h| {
                 h.col(|ui| {
                     ui.label(RichText::new("▲").small().strong().color(Status::On.color()))
-                        .on_hover_text("Marcado = sobe com o PC. Desmarcar tira da partida sem desinstalar nada.");
+                        .on_hover_text(locale.text("Marcado = sobe com o PC. Desmarcar tira da partida sem desinstalar nada.", "Checked = starts with the PC. Unchecking removes it from startup without uninstalling anything."));
                 });
-                h.col(|ui| head(ui, "Nome", SortKey::Name, &mut sort_click));
-                h.col(|ui| head(ui, "Tipo", SortKey::Kind, &mut sort_click));
-                h.col(|ui| head(ui, "Escopo", SortKey::Scope, &mut sort_click));
-                h.col(|ui| { ui.label(RichText::new("Comando").small().color(MUTED).strong()); });
-                h.col(|ui| head(ui, "Agora", SortKey::State, &mut sort_click));
-                h.col(|ui| head(ui, "Uso", SortKey::Usage, &mut sort_click));
-                h.col(|ui| { ui.label(RichText::new("Ações").small().color(MUTED).strong()); });
+                h.col(|ui| head(ui, locale.text("Nome", "Name"), SortKey::Name, &mut sort_click));
+                h.col(|ui| head(ui, locale.text("Tipo", "Type"), SortKey::Kind, &mut sort_click));
+                h.col(|ui| head(ui, locale.text("Escopo", "Scope"), SortKey::Scope, &mut sort_click));
+                h.col(|ui| { ui.label(RichText::new(locale.text("Comando", "Command")).small().color(MUTED).strong()); });
+                h.col(|ui| head(ui, locale.text("Agora", "Now"), SortKey::State, &mut sort_click));
+                h.col(|ui| head(ui, locale.text("Uso", "Usage"), SortKey::Usage, &mut sort_click));
+                h.col(|ui| { ui.label(RichText::new(locale.text("Ações", "Actions")).small().color(MUTED).strong()); });
             })
             .body(|body| {
                 body.heterogeneous_rows(heights.into_iter(), |mut row| {
@@ -951,11 +1008,11 @@ Clique para ver só estas.", st.hint()))
                                 let t = p.text(
                                     egui::pos2(x + 16.0, cy),
                                     egui::Align2::LEFT_CENTER,
-                                    h.grp.title(),
+                                    h.grp.title_for(locale),
                                     egui::FontId::proportional(if deep { 13.0 } else { 12.0 }),
                                     c,
                                 );
-                                let hint = h.grp.hint();
+                                let hint = h.grp.hint_for(locale);
                                 if !hint.is_empty() {
                                     p.text(
                                         egui::pos2(t.right() + 10.0, cy),
@@ -965,15 +1022,16 @@ Clique para ver só estas.", st.hint()))
                                         MUTED,
                                     );
                                 }
-                                let plural = if h.total == 1 { "entrada" } else { "entradas" };
-                                let counts = if matches!(h.grp, Grp::St(_)) {
-                                    format!("{} {plural} · {} rodando agora", h.total, h.running)
-                                } else if deep {
-                                    format!("{}/{} sobem com o PC · {} rodando", h.on, h.total, h.running)
+                                let counts = if locale == Locale::Portuguese {
+                                    let plural = if h.total == 1 { "entrada" } else { "entradas" };
+                                    if matches!(h.grp, Grp::St(_)) { format!("{} {plural} · {} rodando agora", h.total, h.running) }
+                                    else if deep { format!("{}/{} sobem com o PC · {} rodando", h.on, h.total, h.running) }
+                                    else { format!("{} {plural} · {} rodando", h.total, h.running) }
                                 } else {
-                                    // Já está dentro de um bloco de estado: repetir "23/23 sobem"
-                                    // seria dizer duas vezes a mesma coisa.
-                                    format!("{} {plural} · {} rodando", h.total, h.running)
+                                    let plural = if h.total == 1 { "entry" } else { "entries" };
+                                    if matches!(h.grp, Grp::St(_)) { format!("{} {plural} · {} running now", h.total, h.running) }
+                                    else if deep { format!("{}/{} start with the PC · {} running", h.on, h.total, h.running) }
+                                    else { format!("{} {plural} · {} running", h.total, h.running) }
                                 };
                                 p.text(
                                     egui::pos2(band.right() - 10.0, cy),
@@ -999,9 +1057,9 @@ Clique para ver só estas.", st.hint()))
                                     if ui
                                         .checkbox(&mut on, "")
                                         .on_hover_text(if e.enabled {
-                                            "Sobe com o PC — desmarque para tirar da partida"
+                                            locale.text("Sobe com o PC — desmarque para tirar da partida", "Starts with the PC — uncheck to remove from startup")
                                         } else {
-                                            "Não sobe — marque para voltar a subir com o PC"
+                                            locale.text("Não sobe — marque para voltar a subir com o PC", "Does not start — check to start with the PC again")
                                         })
                                         .changed()
                                     {
@@ -1010,7 +1068,7 @@ Clique para ver só estas.", st.hint()))
                                 } else {
                                     let mut dummy = e.enabled;
                                     ui.add_enabled(false, egui::Checkbox::new(&mut dummy, ""))
-                                        .on_hover_text("Esta origem não se liga nem desliga por aqui");
+                                        .on_hover_text(locale.text("Esta origem não se liga nem desliga por aqui", "This source cannot be toggled here"));
                                 }
                             });
                             row.col(|ui| {
@@ -1035,19 +1093,19 @@ Clique para ver só estas.", st.hint()))
                                 ui.add(egui::Label::new(RichText::new(&e.name).strong().color(name_c)).truncate());
                             });
                             row.col(|ui| {
-                                ui.label(RichText::new(e.kind.label()).small().color(e.kind.color()))
+                                ui.label(RichText::new(e.kind.label_for(locale)).small().color(e.kind.color()))
                                     .on_hover_text(&e.origin);
                             });
                             row.col(|ui| {
                                 ui.label(
-                                    RichText::new(if e.machine { "máquina" } else { "usuário" })
+                                    RichText::new(if e.machine { locale.text("máquina", "machine") } else { locale.text("usuário", "user") })
                                         .small()
                                         .color(MUTED),
                                 )
                                 .on_hover_text(if e.machine {
-                                    "Vale para todas as contas do PC — mexer pede admin"
+                                    locale.text("Vale para todas as contas do PC — mexer pede admin", "Applies to every account on the PC — changing it requires admin rights")
                                 } else {
-                                    "Só para a sua conta"
+                                    locale.text("Só para a sua conta", "Only your account")
                                 });
                             });
                             row.col(|ui| {
@@ -1056,18 +1114,18 @@ Clique para ver só estas.", st.hint()))
                             });
                             row.col(|ui| {
                                 let (txt, c) = if e.missing {
-                                    ("ausente", Status::Broken.color())
+                                    (locale.text("ausente", "missing"), Status::Broken.color())
                                 } else if is_run {
-                                    ("rodando", Color32::from_rgb(120, 200, 140))
+                                    (locale.text("rodando", "running"), Color32::from_rgb(120, 200, 140))
                                 } else {
-                                    ("parado", MUTED)
+                                    (locale.text("parado", "stopped"), MUTED)
                                 };
                                 ui.label(RichText::new(txt).small().color(c)).on_hover_text(if e.missing {
-                                    "O arquivo apontado não existe mais"
+                                    locale.text("O arquivo apontado não existe mais", "The referenced file no longer exists")
                                 } else if is_run {
-                                    "Tem processo deste executável rodando agora"
+                                    locale.text("Tem processo deste executável rodando agora", "A process for this executable is running now")
                                 } else {
-                                    "Nenhum processo deste executável rodando agora"
+                                    locale.text("Nenhum processo deste executável rodando agora", "No process for this executable is running now")
                                 });
                             });
                             row.col(|ui| {
@@ -1077,12 +1135,9 @@ Clique para ver só estas.", st.hint()))
                                 } else {
                                     let strong = u.total() >= 3600;
                                     let c = if strong { Color32::from_rgb(120, 200, 140) } else { MUTED };
-                                    ui.label(RichText::new(usage::fmt_secs(u.total())).small().color(c)).on_hover_text(format!(
-                                        "Em foco: {}\nAberto (medido pelo RamDog): {}\nÚltima vez: {}",
-                                        usage::fmt_secs(u.focus),
-                                        usage::fmt_secs(u.open),
-                                        usage::fmt_ago(u.last)
-                                    ));
+                                    ui.label(RichText::new(usage::fmt_secs(u.total())).small().color(c)).on_hover_text(
+                                        if locale == Locale::Portuguese { format!("Em foco: {}\nAberto (medido pelo RamDog): {}\nÚltima vez: {}", usage::fmt_secs(u.focus), usage::fmt_secs(u.open), usage::fmt_ago(u.last)) } else { format!("Focused: {}\nOpen (measured by RamDog): {}\nLast used: {}", usage::fmt_secs(u.focus), usage::fmt_secs(u.open), usage::fmt_ago(u.last)) }
+                                    );
                                 }
                             });
                             row.col(|ui| {
@@ -1090,12 +1145,12 @@ Clique para ver só estas.", st.hint()))
                                 if is_run {
                                     if let Some(name) = exe_name_from_cmd(&e.command) {
                                         let pids: Vec<u32> = procs.iter().filter(|p| p.name_lower == name).map(|p| p.pid).collect();
-                                        if !pids.is_empty() && ui.small_button("Finalizar").clicked() {
+                                        if !pids.is_empty() && ui.small_button(locale.text("Finalizar", "Terminate")).clicked() {
                                             kill = Some(pids);
                                         }
                                     }
                                 }
-                                if e.can_remove && ui.add(egui::Button::new(RichText::new("Remover").color(Color32::from_rgb(232, 120, 100))).small()).clicked() {
+                                if e.can_remove && ui.add(egui::Button::new(RichText::new(locale.text("Remover", "Remove")).color(Color32::from_rgb(232, 120, 100))).small()).clicked() {
                                     remove = Some(e.clone());
                                 }
                             });
@@ -1135,8 +1190,8 @@ Clique para ver só estas.", st.hint()))
         }
         if let Some(e) = remove {
             confirm = Some(Pending {
-                title: format!("Remover {} da partida?", e.name),
-                lines: vec![e.origin.clone(), e.command.clone(), "O programa continua instalado. Só deixa de subir com o PC.".into()],
+                title: if locale == Locale::Portuguese { format!("Remover {} da partida?", e.name) } else { format!("Remove {} from startup?", e.name) },
+                lines: vec![e.origin.clone(), e.command.clone(), locale.text("O programa continua instalado. Só deixa de subir com o PC.", "The program remains installed; it simply stops starting with the PC.").into()],
                 action: Action::Remove(e),
             });
         }
@@ -1148,7 +1203,7 @@ Clique para ver só estas.", st.hint()))
             self.pending = Some(p);
         }
         for a in queued {
-            self.run(a, is_admin, &mut out);
+            self.run(a, is_admin, locale, &mut out);
         }
 
         if self.pending.is_some() {
@@ -1165,10 +1220,10 @@ Clique para ver só estas.", st.hint()))
                 }
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if ui.add(egui::Button::new(RichText::new("Confirmar").strong()).fill(Color32::from_rgb(160, 60, 55))).clicked() {
+                    if ui.add(egui::Button::new(RichText::new(locale.text("Confirmar", "Confirm")).strong()).fill(Color32::from_rgb(160, 60, 55))).clicked() {
                         go = true;
                     }
-                    if ui.button("Cancelar").clicked() {
+                    if ui.button(locale.text("Cancelar", "Cancel")).clicked() {
                         cancel = true;
                     }
                 });
@@ -1178,7 +1233,7 @@ Clique para ver só estas.", st.hint()))
             }
             if go {
                 if let Some(p) = self.pending.take() {
-                    self.run(p.action, is_admin, &mut out);
+                    self.run(p.action, is_admin, locale, &mut out);
                 }
             }
         }
@@ -1195,16 +1250,16 @@ Clique para ver só estas.", st.hint()))
                         ui.horizontal_wrapped(|ui| {
                             ui.label(RichText::new(&e.name).strong());
                             ui.label(
-                                RichText::new(format!("{} {}", st.glyph(), st.title()))
+                                RichText::new(format!("{} {}", st.glyph(), st.title_for(locale)))
                                     .color(st.color())
                                     .small()
                                     .strong(),
                             );
-                            ui.label(RichText::new(e.kind.label()).color(e.kind.color()).small());
+                            ui.label(RichText::new(e.kind.label_for(locale)).color(e.kind.color()).small());
                             ui.label(RichText::new(&e.origin).weak().small());
                         });
                         ui.label(
-                            RichText::new(format!("{} — {}", e.phase.title(), e.phase.hint()))
+                            RichText::new(format!("{} — {}", e.phase.title_for(locale), e.phase.hint_for(locale)))
                                 .color(e.phase.color())
                                 .small(),
                         );
@@ -1212,7 +1267,7 @@ Clique para ver só estas.", st.hint()))
                         if !e.can_toggle {
                             ui.label(
                                 RichText::new(
-                                    "Só leitura: mexer nesta origem daqui derrubaria o logon ou o boot.",
+                                    locale.text("Só leitura: mexer nesta origem daqui derrubaria o logon ou o boot.", "Read-only: changing this source here could break sign-in or boot."),
                                 )
                                 .color(MUTED)
                                 .small(),
@@ -1234,7 +1289,8 @@ Clique para ver só estas.", st.hint()))
         cfg: &mut Config,
         out: &mut Vec<BootOut>,
     ) {
-        ui.label(RichText::new("Presets:").small().color(MUTED));
+        let locale = cfg.locale;
+        ui.label(RichText::new(locale.text("Presets:", "Presets:")).small().color(MUTED));
         let names: Vec<String> = cfg.boot_presets.keys().cloned().collect();
         let shown = if self.preset_sel.is_empty() { "—".to_string() } else { self.preset_sel.clone() };
         egui::ComboBox::from_id_salt("boot_preset")
@@ -1249,40 +1305,40 @@ Clique para ver só estas.", st.hint()))
 
         let has_sel = cfg.boot_presets.contains_key(&self.preset_sel);
         if ui
-            .add_enabled(has_sel, egui::Button::new(RichText::new("Aplicar").small()))
-            .on_hover_text("Liga e desliga as entradas até a partida ficar igual ao preset")
+            .add_enabled(has_sel, egui::Button::new(RichText::new(locale.text("Aplicar", "Apply")).small()))
+            .on_hover_text(locale.text("Liga e desliga as entradas até a partida ficar igual ao preset", "Toggles entries until startup matches the preset"))
             .clicked()
         {
             let want = cfg.boot_presets.get(&self.preset_sel).cloned().unwrap_or_default();
             let diff = preset_diff(&self.entries, &want);
             if diff.is_empty() {
-                out.push(BootOut::Toast(format!("{}: a partida já está assim", self.preset_sel), false));
+                out.push(BootOut::Toast(if locale == Locale::Portuguese { format!("{}: a partida já está assim", self.preset_sel) } else { format!("{}: startup already matches", self.preset_sel) }, false));
             } else {
                 let machine = diff.iter().filter(|(e, _)| e.machine).count();
                 let mut lines: Vec<String> = diff
                     .iter()
                     .take(12)
-                    .map(|(e, w)| format!("{} {}", if *w { "ligar" } else { "desligar" }, e.name))
+                    .map(|(e, w)| format!("{} {}", if locale == Locale::Portuguese { if *w { "ligar" } else { "desligar" } } else { if *w { "enable" } else { "disable" } }, e.name))
                     .collect();
                 if diff.len() > 12 {
-                    lines.push(format!("… e mais {}", diff.len() - 12));
+                    lines.push(if locale == Locale::Portuguese { format!("… e mais {}", diff.len() - 12) } else { format!("… and {} more", diff.len() - 12) });
                 }
                 if machine > 0 {
-                    lines.push(format!("{machine} entrada(s) de máquina — vai pedir UAC uma vez só."));
+                    lines.push(if locale == Locale::Portuguese { format!("{machine} entrada(s) de máquina — vai pedir UAC uma vez só.") } else { format!("{machine} machine entr(y/ies) — one UAC prompt will be required.") });
                 }
                 *confirm = Some(Pending {
-                    title: format!("Aplicar preset \"{}\" — {} mudança(s)?", self.preset_sel, diff.len()),
+                    title: if locale == Locale::Portuguese { format!("Aplicar preset \"{}\" — {} mudança(s)?", self.preset_sel, diff.len()) } else { format!("Apply preset \"{}\" — {} change(s)?", self.preset_sel, diff.len()) },
                     lines,
                     action: Action::Preset(self.preset_sel.clone(), diff),
                 });
             }
         }
         if ui
-            .add_enabled(has_sel, egui::Button::new(RichText::new("Excluir").small().color(Color32::from_rgb(232, 120, 100))))
+            .add_enabled(has_sel, egui::Button::new(RichText::new(locale.text("Excluir", "Delete")).small().color(Color32::from_rgb(232, 120, 100))))
             .clicked()
         {
             cfg.boot_presets.remove(&self.preset_sel);
-            out.push(BootOut::Toast(format!("preset \"{}\" excluído", self.preset_sel), false));
+            out.push(BootOut::Toast(if locale == Locale::Portuguese { format!("preset \"{}\" excluído", self.preset_sel) } else { format!("preset \"{}\" deleted", self.preset_sel) }, false));
             self.preset_sel.clear();
             out.push(BootOut::SaveCfg);
         }
@@ -1290,13 +1346,13 @@ Clique para ver só estas.", st.hint()))
         ui.add_space(6.0);
         ui.add(
             egui::TextEdit::singleline(&mut self.preset_name)
-                .hint_text("nome do preset")
+                .hint_text(locale.text("nome do preset", "preset name"))
                 .desired_width(120.0),
         );
         let can_save = !self.preset_name.trim().is_empty() && !self.entries.is_empty();
         if ui
-            .add_enabled(can_save, egui::Button::new(RichText::new("Salvar atual").small()))
-            .on_hover_text("Guarda o estado ligado/desligado de todas as entradas que dá para alternar")
+            .add_enabled(can_save, egui::Button::new(RichText::new(locale.text("Salvar atual", "Save current")).small()))
+            .on_hover_text(locale.text("Guarda o estado ligado/desligado de todas as entradas que dá para alternar", "Saves the enabled/disabled state of every switchable entry"))
             .clicked()
         {
             let name = self.preset_name.trim().to_string();
@@ -1310,13 +1366,13 @@ Clique para ver só estas.", st.hint()))
             cfg.boot_presets.insert(name.clone(), snap);
             self.preset_sel = name.clone();
             self.preset_name.clear();
-            out.push(BootOut::Toast(format!("preset \"{name}\" salvo com {n} entradas"), false));
+            out.push(BootOut::Toast(if locale == Locale::Portuguese { format!("preset \"{name}\" salvo com {n} entradas") } else { format!("preset \"{name}\" saved with {n} entries") }, false));
             out.push(BootOut::SaveCfg);
         }
     }
 
     /// Painel do Scan: os programas mais usados, com ícone, e um botão para pôr na partida.
-    fn scan_panel(&mut self, ui: &mut egui::Ui, add: &mut Option<(String, String)>) {
+    fn scan_panel(&mut self, ui: &mut egui::Ui, add: &mut Option<(String, String)>, locale: Locale) {
         // Quem já está na partida não precisa de sugestão — só de um selo.
         let already: HashSet<String> = self
             .resolved
@@ -1348,14 +1404,14 @@ Clique para ver só estas.", st.hint()))
             .inner_margin(egui::Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("O que você mais usa neste PC").strong().size(14.0));
+                    ui.label(RichText::new(locale.text("O que você mais usa neste PC", "What you use most on this PC")).strong().size(14.0));
                     ui.label(
-                        RichText::new("— tempo em foco (histórico do Windows) + tempo aberto medido pelo RamDog")
+                        RichText::new(locale.text("— tempo em foco (histórico do Windows) + tempo aberto medido pelo RamDog", "— focused time (Windows history) + open time measured by RamDog"))
                             .small()
                             .color(MUTED),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("Fechar").clicked() {
+                        if ui.small_button(locale.text("Fechar", "Close")).clicked() {
                             close = true;
                         }
                     });
@@ -1364,8 +1420,7 @@ Clique para ver só estas.", st.hint()))
                 if top.is_empty() {
                     ui.label(
                         RichText::new(
-                            "Nada medido ainda. O histórico do Windows (UserAssist) pode estar limpo — \
-                             deixe o RamDog aberto e a contagem própria começa a preencher a lista.",
+                            locale.text("Nada medido ainda. O histórico do Windows (UserAssist) pode estar limpo — deixe o RamDog aberto e a contagem própria começa a preencher a lista.", "Nothing measured yet. Windows history (UserAssist) may be empty — leave RamDog open and its own measurements will fill the list."),
                         )
                         .color(MUTED),
                     );
@@ -1391,25 +1446,25 @@ Clique para ver só estas.", st.hint()))
                                 92.0,
                                 RichText::new(usage::fmt_secs(r.focus_secs + r.open_secs)).color(Color32::from_rgb(120, 200, 140)),
                             )
-                            .on_hover_text(format!(
-                                "Em foco: {}\nAberto com janela (medido pelo RamDog): {}",
-                                usage::fmt_secs(r.focus_secs),
-                                usage::fmt_secs(r.open_secs)
-                            ));
+                            .on_hover_text(if locale == Locale::Portuguese {
+                                format!("Em foco: {}\nAberto com janela (medido pelo RamDog): {}", usage::fmt_secs(r.focus_secs), usage::fmt_secs(r.open_secs))
+                            } else {
+                                format!("Focused: {}\nOpen with a window (measured by RamDog): {}", usage::fmt_secs(r.focus_secs), usage::fmt_secs(r.open_secs))
+                            });
                             cell(ui, 60.0, RichText::new(format!("{}×", r.launches)).small().color(MUTED))
-                                .on_hover_text("Vezes que o programa foi aberto");
+                                .on_hover_text(locale.text("Vezes que o programa foi aberto", "Times the program was opened"));
                             cell(ui, 96.0, RichText::new(usage::fmt_ago(r.last_used)).small().color(MUTED))
-                                .on_hover_text("Última vez usado");
+                                .on_hover_text(locale.text("Última vez usado", "Last used"));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if on_startup {
                                     ui.label(
-                                        RichText::new("já na partida")
+                                        RichText::new(locale.text("já na partida", "already in startup"))
                                             .small()
                                             .color(Color32::from_rgb(120, 200, 140)),
                                     );
                                 } else if ui
-                                    .add(egui::Button::new(RichText::new("+ Partida").small().color(Color32::WHITE)).fill(ACCENT_BG))
-                                    .on_hover_text("Cria um atalho na pasta Iniciar do seu usuário — sem UAC")
+                                    .add(egui::Button::new(RichText::new(locale.text("+ Partida", "+ Startup")).small().color(Color32::WHITE)).fill(ACCENT_BG))
+                                    .on_hover_text(locale.text("Cria um atalho na pasta Iniciar do seu usuário — sem UAC", "Creates a shortcut in your user's Startup folder — no UAC"))
                                     .clicked()
                                 {
                                     let label = std::path::Path::new(&r.path)
@@ -1428,13 +1483,13 @@ Clique para ver só estas.", st.hint()))
         }
     }
 
-    fn run(&mut self, action: Action, is_admin: bool, out: &mut Vec<BootOut>) {
+    fn run(&mut self, action: Action, is_admin: bool, locale: Locale, out: &mut Vec<BootOut>) {
         match action {
             Action::Toggle(e, enabled) => {
-                let label = format!("{}: {}", e.name, if enabled { "ativar" } else { "desativar" });
+                let label = format!("{}: {}", e.name, if locale == Locale::Portuguese { if enabled { "ativar" } else { "desativar" } } else { if enabled { "enable" } else { "disable" } });
                 match apply_toggle(&e, enabled) {
                     Ok(()) => {
-                        out.push(BootOut::Toast(format!("{}: {}", e.name, if enabled { "ativa na partida" } else { "fora da partida" }), false));
+                        out.push(BootOut::Toast(if locale == Locale::Portuguese { format!("{}: {}", e.name, if enabled { "ativa na partida" } else { "fora da partida" }) } else { format!("{}: {}", e.name, if enabled { "enabled at startup" } else { "disabled at startup" }) }, false));
                         self.last_refresh = None;
                     }
                     Err(err) if e.machine && !is_admin && err.contains("acesso negado") => {
@@ -1445,10 +1500,10 @@ Clique para ver só estas.", st.hint()))
                 }
             }
             Action::Remove(e) => {
-                let label = format!("{}: remover", e.name);
+                let label = format!("{}: {}", e.name, locale.text("remover", "remove"));
                 match apply_remove(&e) {
                     Ok(()) => {
-                        out.push(BootOut::Toast(format!("{}: removido da partida", e.name), false));
+                        out.push(BootOut::Toast(if locale == Locale::Portuguese { format!("{}: removido da partida", e.name) } else { format!("{}: removed from startup", e.name) }, false));
                         self.last_refresh = None;
                     }
                     Err(err) if e.machine && !is_admin && err.contains("acesso negado") => {
@@ -1483,18 +1538,18 @@ Clique para ver só estas.", st.hint()))
                     sys::run_elevated_ps(format!("preset {name}"), elevate.join("; "), self.tx.clone());
                 }
                 self.last_refresh = None;
-                let mut msg = format!("preset \"{name}\": {ok} aplicada(s)");
+                let mut msg = if locale == Locale::Portuguese { format!("preset \"{name}\": {ok} aplicada(s)") } else { format!("preset \"{name}\": {ok} applied") };
                 if !elevate.is_empty() {
-                    msg.push_str(&format!(", {} via UAC", elevate.len()));
+                    msg.push_str(&format!(", {} {}", elevate.len(), locale.text("via UAC", "via UAC")));
                 }
                 if !failed.is_empty() {
-                    msg.push_str(&format!(", {} falharam", failed.len()));
+                    msg.push_str(&format!(", {} {}", failed.len(), locale.text("falharam", "failed")));
                 }
                 out.push(BootOut::Toast(msg, !failed.is_empty()));
             }
             Action::AddStartup { exe, label } => match create_startup_lnk(&exe, &label) {
                 Ok(name) => {
-                    out.push(BootOut::Toast(format!("{name} agora sobe com o PC"), false));
+                    out.push(BootOut::Toast(if locale == Locale::Portuguese { format!("{name} agora sobe com o PC") } else { format!("{name} now starts with the PC") }, false));
                     self.last_refresh = None;
                 }
                 Err(err) => out.push(BootOut::Toast(format!("{label}: {err}"), true)),

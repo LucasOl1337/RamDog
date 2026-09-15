@@ -4,6 +4,8 @@
 //! por um qemu sem janela e três `gh auth git-credential` em loop — todos com RAM perto
 //! de zero. A coluna CPU em % da máquina (16 núcleos) transformava 1,5 núcleo em "9%".
 
+use crate::config::Locale;
+
 /// Núcleos equivalentes. `100` na coluna CPU é a máquina inteira.
 pub fn cores(cpu_machine_pct: f32, ncpu: u32) -> f32 {
     if ncpu == 0 {
@@ -39,12 +41,36 @@ impl StealKind {
         }
     }
 
+    pub fn chip_for(self, locale: Locale) -> &'static str {
+        if locale == Locale::Portuguese {
+            return self.chip();
+        }
+        match self {
+            StealKind::SoftwareGpu => "GPU on CPU",
+            StealKind::Leftover => "leftover",
+            StealKind::CredentialSpin => "loop",
+            StealKind::CheapCpu => "CPU-only",
+        }
+    }
+
     pub fn short(self) -> &'static str {
         match self {
             StealKind::SoftwareGpu => "gráficos por software, a GPU real fica parada",
             StealKind::Leftover => "sobra",
             StealKind::CredentialSpin => "loop de credencial",
             StealKind::CheapCpu => "CPU sem RAM",
+        }
+    }
+
+    pub fn short_for(self, locale: Locale) -> &'static str {
+        if locale == Locale::Portuguese {
+            return self.short();
+        }
+        match self {
+            StealKind::SoftwareGpu => "software graphics while the real GPU sits idle",
+            StealKind::Leftover => "leftover process",
+            StealKind::CredentialSpin => "credential loop",
+            StealKind::CheapCpu => "CPU with little RAM",
         }
     }
 }
@@ -184,6 +210,32 @@ pub fn banner(p: &Snapshot, thieves: &[Thief]) -> Option<String> {
     } else {
         Some(parts.join(" "))
     }
+}
+
+pub fn banner_for(p: &Snapshot, thieves: &[Thief], locale: Locale) -> Option<String> {
+    if locale == Locale::Portuguese {
+        return banner(p, thieves);
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if p.game_starved() {
+        parts.push("A game is open but the GPU is idle: the bottleneck is CPU or swap, not graphics.".into());
+    } else if p.load_hot() {
+        if let Some(l) = p.load1 {
+            parts.push(format!("Load {l:.1} across {} cores — the CPU queue is full.", p.ncpu));
+        }
+    }
+    if p.swap_hot() {
+        parts.push(format!("Swap in use: {}.", fmt_gb(p.swap_used)));
+    }
+    if !thieves.is_empty() {
+        let list = thieves
+            .iter()
+            .map(|t| format!("{} ({})", t.label, t.kind.short_for(locale)))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        parts.push(format!("Contention: {list}."));
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
 }
 
 #[cfg(test)]
@@ -334,5 +386,18 @@ mod tests {
         assert!(text.contains("Emulador Android (sfr-portfolio)"));
         assert!(text.contains("loop de credencial"));
         assert!(banner(&Snapshot::default(), &[]).is_none());
+    }
+
+    #[test]
+    fn english_contention_banner_uses_english_labels() {
+        let thieves = vec![Thief {
+            pid: 1,
+            label: "RamDog".into(),
+            kind: StealKind::CheapCpu,
+            cores: 1.0,
+        }];
+        let text = banner_for(&Snapshot::default(), &thieves, Locale::English).expect("banner");
+        assert_eq!(text, "Contention: RamDog (CPU with little RAM).");
+        assert_eq!(StealKind::CheapCpu.chip_for(Locale::English), "CPU-only");
     }
 }

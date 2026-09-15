@@ -1,7 +1,9 @@
 use egui::{Align, Color32, Layout, RichText};
+use serde_json::json;
 
 use crate::app::MUTED;
 use crate::{
+    config::Locale,
     linux::Job,
     procs::ProcInfo,
     startup_linux::{self, Inventory, Source},
@@ -23,7 +25,34 @@ impl Drains {
             ..Default::default()
         }
     }
-    pub fn ui(&mut self, ui: &mut egui::Ui, _procs: &[ProcInfo], _admin: bool) -> Vec<DrainOut> {
+
+    pub fn snapshot_json(&mut self) -> serde_json::Value {
+        let inventory = startup_linux::scan().unwrap_or_default();
+        let services = inventory
+            .entries
+            .into_iter()
+            .filter_map(|entry| {
+                let Source::Unit { .. } = entry.source else { return None };
+                Some(json!({
+                    "name": entry.name,
+                    "label": entry.description,
+                    "why": entry.kind,
+                    "proc_hint": entry.pid,
+                    "stop_only": false,
+                    "state": if entry.active { "running" } else { "stopped" },
+                    "start": if entry.enabled { "automatic" } else { "disabled" },
+                }))
+            })
+            .collect::<Vec<_>>();
+        json!({
+            "supported": true,
+            "services": services,
+            "protected_services": [],
+            "defender": serde_json::Value::Null,
+            "appx_families": [],
+        })
+    }
+    pub fn ui(&mut self, ui: &mut egui::Ui, _procs: &[ProcInfo], _admin: bool, locale: Locale) -> Vec<DrainOut> {
         use crate::kit;
         self.scan.poll();
         if self.action.poll() {
@@ -32,11 +61,11 @@ impl Drains {
         if self.scan.due(10) {
             self.scan.start(startup_linux::scan);
         }
-        kit::intro(ui, "Serviços em segundo plano, do maior pro menor em RAM. Revise o consumo e a finalidade antes de parar um; os essenciais estão protegidos.");
+        kit::intro(ui, locale.text("Serviços em segundo plano, do maior pro menor em RAM. Revise o consumo e a finalidade antes de parar um; os essenciais estão protegidos.", "Background services, largest to smallest by RAM. Review their purpose before stopping one; essential services are protected."));
         ui.add_space(6.0);
         kit::toolbar(ui, |ui| {
-            ui.checkbox(&mut self.only_active, RichText::new("Somente em execução").size(12.5));
-            if ui.add(kit::button("Atualizar")).clicked() {
+            ui.checkbox(&mut self.only_active, RichText::new(locale.text("Somente em execução", "Running only")).size(12.5));
+            if ui.add(kit::button(locale.text("Atualizar", "Refresh"))).clicked() {
                 self.scan.start(startup_linux::scan);
             }
             self.scan.status(ui);
@@ -59,7 +88,7 @@ impl Drains {
             for e in entries {
                 kit::row(ui, |ui| {
                     ui.horizontal(|ui| {
-                        let mut sub = e.kind.clone();
+                        let mut sub = e.kind_for(locale);
                         if e.pid > 0 {
                             sub.push_str(&format!(" · PID {}", e.pid));
                         }
@@ -76,14 +105,14 @@ impl Drains {
                                 if ui
                                     .add_enabled(
                                         e.can_toggle && !self.action.busy(),
-                                        kit::button(if e.enabled { "Não iniciar no boot" } else { "Iniciar no boot" }),
+                                        kit::button(if e.enabled { locale.text("Não iniciar no boot", "Do not start at boot") } else { locale.text("Iniciar no boot", "Start at boot") }),
                                     )
                                     .clicked()
                                 {
                                     let e = e.clone();
                                     self.action.start(move || startup_linux::toggle(&e, !e.enabled));
                                 }
-                                for (label, action, enabled) in [("Iniciar", "start", !e.active), ("Reiniciar", "restart", e.active), ("Parar", "stop", e.active)] {
+                                for (label, action, enabled) in [(locale.text("Iniciar", "Start"), "start", !e.active), (locale.text("Reiniciar", "Restart"), "restart", e.active), (locale.text("Parar", "Stop"), "stop", e.active)] {
                                     if ui.add_enabled(enabled && !e.protected && !self.action.busy(), kit::button(label)).clicked() {
                                         let (user, unit) = (*user, unit.clone());
                                         self.action.start(move || startup_linux::unit_action(user, action, &unit));
@@ -91,13 +120,13 @@ impl Drains {
                                 }
                             }
                             if e.protected {
-                                kit::badge(ui, "protegido", MUTED);
+                                kit::badge(ui, locale.text("protegido", "protected"), MUTED);
                             }
                             if e.active {
-                                kit::badge(ui, "em execução", Color32::from_rgb(120, 200, 140));
+                                kit::badge(ui, locale.text("em execução", "running"), Color32::from_rgb(120, 200, 140));
                             }
                             ui.label(
-                                RichText::new(e.memory.map(|m| format!("{:.1} MiB", m as f64 / 1048576.0)).unwrap_or_else(|| "RAM indisponível".into()))
+                                RichText::new(e.memory.map(|m| format!("{:.1} MiB", m as f64 / 1048576.0)).unwrap_or_else(|| locale.text("RAM indisponível", "RAM unavailable").into()))
                                     .monospace()
                                     .size(12.5),
                             );
