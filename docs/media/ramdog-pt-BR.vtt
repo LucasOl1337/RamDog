@@ -1,77 +1,94 @@
 WEBVTT
 
 1
-00:00:00.300 --> 00:00:01.976
+00:00:00.300 --> 00:00:01.620
 Seu PC está ocupado.
 
 2
-00:00:01.976 --> 00:00:04.360
+00:00:01.620 --> 00:00:04.920
 Mas você sabe quem está por trás de cada processo?
 
 3
-00:00:06.600 --> 00:00:09.506
-O RamDog reúne consumo, origem e categorias.
+00:00:06.700 --> 00:00:11.637
+O RamDog agora tem barra lateral, cards com histórico e a lista em
+linha dupla.
 
 4
-00:00:09.506 --> 00:00:13.700
-Agrupe os processos por aplicativo e encontre o que está usando
-a memória da máquina.
+00:00:11.637 --> 00:00:14.700
+Agrupe por app e ache quem está usando a memória.
 
 5
-00:00:17.600 --> 00:00:19.253
+00:00:18.700 --> 00:00:20.112
 Veja quem abriu quem.
 
 6
-00:00:19.253 --> 00:00:21.816
-Inspecione o comando e encerre uma árvore de processos.
+00:00:20.112 --> 00:00:21.255
+Encerre a árvore.
 
 7
-00:00:21.816 --> 00:00:24.700
-O cadeado protege o que precisa continuar rodando.
+00:00:21.255 --> 00:00:24.080
+O cadeado protege o que precisa continuar.
 
 8
-00:00:28.600 --> 00:00:33.350
-Separe agentes de inteligência artificial, ferramentas de
-desenvolvimento e navegadores.
+00:00:28.600 --> 00:00:31.530
+Separe agentes, desenvolvimento e navegadores.
 
 9
-00:00:33.350 --> 00:00:36.290
-Alterne entre as categorias sem perder o contexto.
+00:00:31.530 --> 00:00:33.950
+Troque de visão sem perder o contexto.
 
 10
-00:00:37.600 --> 00:00:43.500
-Na Partida, confira o que inicia com o sistema. No Linux, o
-painel reúne serviços e entradas de inicialização.
+00:00:35.700 --> 00:00:39.877
+O addon Limpeza junta sobras na RAM com cache, lixeira e journal.
 
 11
-00:00:45.600 --> 00:00:50.070
-Em Desperdício, investigue os serviços e seu consumo antes de
-decidir o que fazer.
+00:00:39.877 --> 00:00:41.740
+Nada some sem você confirmar.
 
 12
-00:00:52.600 --> 00:00:54.952
-Acompanhe temperaturas e ventoinhas.
+00:00:44.600 --> 00:00:47.697
+Na Partida, confira o que inicia com o sistema.
 
 13
-00:00:54.952 --> 00:00:59.710
-As leituras e os controles disponíveis dependem dos sensores e
-dos drivers do seu computador.
+00:00:47.697 --> 00:00:49.740
+No Linux, serviços e autostart.
 
 14
-00:01:01.033 --> 00:01:06.653
-O painel Telas organiza janelas no Hyprland. Em outros
-ambientes Linux, ele informa essa limitação.
+00:00:51.600 --> 00:00:55.780
+Em Desperdício, veja os serviços e o consumo antes de decidir.
 
 15
-00:01:07.967 --> 00:01:11.597
-Quer só acompanhar? O modo mini mantém os indicadores por
-perto.
+00:00:57.600 --> 00:01:00.080
+Acompanhe temperaturas e ventoinhas.
 
 16
-00:01:11.597 --> 00:01:14.307
-E um duplo clique traz a janela completa de volta.
+00:01:00.080 --> 00:01:03.180
+As leituras dependem dos sensores da máquina.
 
 17
-00:01:16.967 --> 00:01:20.987
-RamDog. Mais contexto para cuidar do seu PC. Gratuito, com
-código aberto.
+00:01:04.600 --> 00:01:07.095
+Telas organiza janelas no Hyprland.
+
+18
+00:01:07.095 --> 00:01:10.660
+Nesta bancada X11, o painel mostra essa limitação.
+
+19
+00:01:11.760 --> 00:01:13.065
+Quer só acompanhar?
+
+20
+00:01:13.065 --> 00:01:16.020
+O modo mini deixa os indicadores por perto.
+
+21
+00:01:19.760 --> 00:01:20.239
+RamDog.
+
+22
+00:01:20.239 --> 00:01:22.699
+Mais contexto para cuidar do seu PC.
+
+23
+00:01:22.699 --> 00:01:24.340
+Gratuito, código aberto.
