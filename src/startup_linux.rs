@@ -41,6 +41,17 @@ struct LiveUnit {
     description: String,
 }
 
+/// systemd --user precisa do barramento de sessão. Sem ele (SSH, container, bancada X11
+/// isolada) o erro cru do systemctl vira um bloco amarelo ilegível; a lista de sistema
+/// e o autostart XDG continuam válidos.
+fn friendly_scan_warning(user: bool, err: String) -> String {
+    if user && err.contains("user scope bus") {
+        "Sessão de usuário do systemd indisponível. Serviços de sistema e autostart XDG continuam listados.".into()
+    } else {
+        err
+    }
+}
+
 pub fn protected(unit: &str) -> bool {
     [
         "dbus",
@@ -66,7 +77,7 @@ pub fn scan() -> Result<Inventory, String> {
     for user in [true, false] {
         match scan_units(user) {
             Ok(mut entries) => inventory.entries.append(&mut entries),
-            Err(e) => inventory.warnings.push(e),
+            Err(e) => inventory.warnings.push(friendly_scan_warning(user, e)),
         }
     }
     inventory.entries.extend(scan_desktops());
@@ -391,6 +402,16 @@ mod tests {
         let p=parse_properties("Id=a.service\nMainPID=42\nMemoryCurrent=18446744073709551615\n\nId=b.service\nMainPID=5\nMemoryCurrent=4096\n");
         assert_eq!(p["a.service"], (42, None));
         assert_eq!(p["b.service"], (5, Some(4096)));
+    }
+
+    #[test]
+    fn missing_user_bus_is_not_raw_systemctl_dump() {
+        let raw = "systemctl: Failed to connect to user scope bus via local transport: No such file or directory (exit status: 1)".into();
+        let msg = friendly_scan_warning(true, raw);
+        assert!(!msg.contains("systemctl:"));
+        assert!(msg.contains("Sessão de usuário"));
+        let other = friendly_scan_warning(false, "systemctl: Unit not found (exit status: 1)".into());
+        assert!(other.contains("systemctl:"));
     }
 }
 
