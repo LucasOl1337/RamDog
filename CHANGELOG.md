@@ -13,6 +13,7 @@ As mudanças são registradas por versão. As notas descrevem funcionalidades di
 
 ### Corrigido
 
+- Linux: sem barramento de usuário do systemd, Partida e Desperdício avisam em português em vez de despejar o erro cru do `systemctl`.
 - Zumbi não "finalizava": o kernel aceita SIGTERM/SIGKILL num processo `Z` e o RamDog contava como `1 finalizado(s), ~0,0 MB` sem nada mudar. Agora o ✖ num zumbi pede ao pai para recolher (SIGCHLD) e diz quem segura; Shift+✖ finaliza o pai.
 - Linux: o cliente Steam relançado por um atalho (`steam steam://rungameid/2357570`) era rotulado como o jogo (`Overwatch 2 · Steam / Proton`) horas depois de o jogo fechar. Agora é `Steam`.
 - Linux: ícone do binário escolhido pelo primeiro `.desktop` que o `read_dir` devolvesse. `Counter-Strike 2.desktop` (`Exec=steam steam://rungameid/730`) dava o ícone do CS ao cliente Steam. O `.desktop` com o nome do programa ganha; atalho com URL perde.
