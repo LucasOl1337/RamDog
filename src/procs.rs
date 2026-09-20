@@ -202,6 +202,10 @@ pub struct ProcInfo {
     /// A mesma medida sem suavização, do último intervalo. Só aparece no detalhe/tooltip:
     /// serve para conferir um pico que a média ainda está subindo para alcançar.
     pub cpu_raw_pct: f32,
+    /// % de CPU dos filhos que nasceram e morreram entre duas amostras, creditada ao pai
+    /// (`cutime + cstime` no Linux). É onde vai parar o `rg`, `git` ou `cc` de 2 s que a
+    /// lista nunca chega a ver. Zero no Windows: o kernel não guarda essa conta.
+    pub cpu_children_pct: f32,
     /// Bytes/s de disco (leitura + escrita), delta entre amostras.
     pub disk_bps: f64,
     /// % de uso de GPU somado entre engines (preenchido por `gpu::Gpu`).
@@ -241,6 +245,7 @@ impl Default for ProcInfo {
             create_time: 0,
             cpu_pct: 0.0,
             cpu_raw_pct: 0.0,
+            cpu_children_pct: 0.0,
             disk_bps: 0.0,
             gpu_pct: 0.0,
             gpu_load: None,
@@ -505,6 +510,7 @@ impl Sampler {
                 create_time: r.create_time,
                 cpu_pct,
                 cpu_raw_pct,
+                cpu_children_pct: 0.0,
                 disk_bps,
                 gpu_pct: 0.0,
                 gpu_load: None,
@@ -562,8 +568,11 @@ impl Sampler {
         let dt_wall = self.last_at.map(|t| now.duration_since(t).as_secs_f64()).unwrap_or(0.0);
         self.last_at = Some(now);
 
-        // Deltas de quem existe nas duas amostras. Processo novo entra com zero: sem o
-        // instante anterior não há taxa nenhuma para medir.
+        // Deltas de quem existe nas duas amostras. Processo novo tem `create_time`, então
+        // o total acumulado já é o delta: nasceu dentro da janela, tudo aconteceu nela;
+        // é mais velho (leitura anterior falhou), entra com a média de vida escalada pra
+        // janela. Antes entrava com zero e um `cl.exe` de 4 s nunca aparecia na lista.
+        let now_ft = now_filetime();
         let mut d_time: Vec<i64> = Vec::with_capacity(raw.len());
         let mut d_cycles: Vec<u64> = Vec::with_capacity(raw.len());
         let mut sum_time: i64 = 0;
@@ -574,6 +583,13 @@ impl Sampler {
                     (r.user_time + r.kernel_time - prev.total_100ns).max(0),
                     r.cycle_time.saturating_sub(prev.cycles),
                 ),
+                None if dt_wall > 0.0 => {
+                    let scale = first_sample_scale(dt_wall, (now_ft - r.create_time) as f64 / 1e7);
+                    (
+                        ((r.user_time + r.kernel_time).max(0) as f64 * scale) as i64,
+                        (r.cycle_time as f64 * scale) as u64,
+                    )
+                }
                 None => (0, 0),
             };
             sum_time += dt;
@@ -969,6 +985,17 @@ pub fn kernel_state(_pid: u32) -> Option<char> {
 #[cfg(windows)]
 pub fn nudge_parent(_ppid: u32) -> KillOutcome {
     KillOutcome::Invalid
+}
+
+/// Fração do CPU acumulado de um processo novo que cabe na janela desta amostra: 1 se
+/// nasceu dentro dela, `janela / idade` se é mais velho (média de vida escalada).
+#[cfg(windows)]
+fn first_sample_scale(window: f64, age: f64) -> f64 {
+    if age.is_finite() && age > window && window > 0.0 {
+        window / age
+    } else {
+        1.0
+    }
 }
 
 /// FILETIME atual (100 ns desde 1601-01-01 UTC).

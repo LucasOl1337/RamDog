@@ -98,7 +98,7 @@ enum Row {
         collapsed: bool,
     },
     /// Cabeçalho de um app: índice em `App::groups`. O conteúdo não fica aqui de
-    /// propósito — as somas são recalculadas a cada quadro, inclusive quando a ordem
+    /// propósito — as somas são recalculadas a cada amostra, inclusive quando a ordem
     /// está congelada porque o mouse está em cima da tabela.
     AppHeader {
         gi: usize,
@@ -109,6 +109,88 @@ enum Row {
         kind: SysRow,
         bytes: u64,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RowCacheAction {
+    Rebuild,
+    ReconcileSnapshot,
+    Reuse,
+}
+
+/// Decide quanto trabalho estrutural a tabela precisa fazer neste quadro.
+///
+/// Esta função fica separada do desenho para o contrato de cache ser testável: um
+/// evento visual (hover, tooltip, movimento do mouse) não pode reordenar nem revarrer
+/// centenas de processos quando nenhum dado mudou.
+fn row_cache_action(
+    has_cache: bool,
+    rows_dirty: bool,
+    snapshot_dirty: bool,
+    key_changed: bool,
+    hovering: bool,
+    order_frozen: bool,
+) -> RowCacheAction {
+    if !has_cache || rows_dirty || key_changed {
+        RowCacheAction::Rebuild
+    } else if snapshot_dirty {
+        if hovering {
+            RowCacheAction::ReconcileSnapshot
+        } else {
+            RowCacheAction::Rebuild
+        }
+    } else if order_frozen && !hovering {
+        // Uma amostra chegou enquanto o mouse protegia a ordem. Ao sair da tabela,
+        // aplicamos a ordenação nova uma única vez.
+        RowCacheAction::Rebuild
+    } else {
+        RowCacheAction::Reuse
+    }
+}
+
+#[cfg(test)]
+mod row_cache_tests {
+    use super::{row_cache_action, RowCacheAction};
+
+    #[test]
+    fn stable_visual_frame_reuses_cached_rows_even_outside_the_table() {
+        assert_eq!(
+            row_cache_action(true, false, false, false, false, false),
+            RowCacheAction::Reuse,
+        );
+    }
+
+    #[test]
+    fn new_snapshot_is_reconciled_once_while_hovering() {
+        assert_eq!(
+            row_cache_action(true, false, true, false, true, false),
+            RowCacheAction::ReconcileSnapshot,
+        );
+    }
+
+    #[test]
+    fn new_snapshot_reorders_once_when_not_hovering() {
+        assert_eq!(
+            row_cache_action(true, false, true, false, false, false),
+            RowCacheAction::Rebuild,
+        );
+    }
+
+    #[test]
+    fn leaving_a_frozen_table_applies_the_pending_order_once() {
+        assert_eq!(
+            row_cache_action(true, false, false, false, false, true),
+            RowCacheAction::Rebuild,
+        );
+    }
+
+    #[test]
+    fn hover_without_new_data_is_a_cache_hit() {
+        assert_eq!(
+            row_cache_action(true, false, false, false, true, true),
+            RowCacheAction::Reuse,
+        );
+    }
 }
 
 /// Um app na visão Lista: todos os processos do mesmo executável somados numa linha.
@@ -207,6 +289,22 @@ struct MemBreakdown {
     kernel_ok: bool,
 }
 
+/// Agregados que dependem da amostra inteira. A UI pode repintar dezenas de vezes por
+/// movimento do mouse; nenhum desses valores precisa ser refeito até chegar outra amostra
+/// (ou mudar a métrica de memória/classificação).
+#[derive(Default)]
+struct UiDerived {
+    breakdown: MemBreakdown,
+    pressure: pressure::Snapshot,
+    thieves: Vec<pressure::Thief>,
+    cpu_split: Option<CpuSplit>,
+    cat_totals: HashMap<Category, (u64, usize)>,
+    private_cat_totals: HashMap<Category, (u64, usize)>,
+    linux_memory_summary: String,
+    linux_memory_available: usize,
+    metric_total: u64,
+}
+
 pub struct App {
     #[cfg(target_os = "linux")]
     gpu_index: usize,
@@ -272,7 +370,15 @@ pub struct App {
     /// Ordem das linhas congelada enquanto o mouse está sobre a tabela (evita matar a linha errada).
     cached_rows: Option<Vec<Row>>,
     cached_key: u64,
+    /// Chegou uma amostra nova; a estrutura da tabela precisa ser atualizada uma vez.
+    /// Separado de `rows_dirty`, que representa mudança de filtro/visão do usuário.
+    snapshot_dirty: bool,
     rows_dirty: bool,
+    /// Quantidade que passa pelos filtros, recalculada junto com o cache de linhas.
+    /// Evita duas varreduras de todos os processos em cada repaint visual.
+    shown_count: usize,
+    derived: UiDerived,
+    derived_dirty: bool,
     table_rect: Option<egui::Rect>,
     order_frozen: bool,
     drains: Drains,
@@ -364,7 +470,11 @@ impl App {
             scroll_to_selected: false,
             cached_rows: None,
             cached_key: 0,
+            snapshot_dirty: false,
             rows_dirty: true,
+            shown_count: 0,
+            derived: UiDerived::default(),
+            derived_dirty: true,
             table_rect: None,
             order_frozen: false,
             drains: Drains::new(),
@@ -433,6 +543,8 @@ impl App {
         }
         self.refresh_services();
         self.rebuild_indexes();
+        self.snapshot_dirty = true;
+        self.derived_dirty = true;
         if let Some(pid) = self.selected {
             if let Some(&i) = self.by_pid.get(&pid) {
                 self.selected_keep = Some((self.procs[i].clone(), self.cat(pid)));
@@ -590,7 +702,7 @@ impl App {
     /// Sempre sobre memória **privada**, independentemente da métrica escolhida na coluna:
     /// o working set conta a mesma página compartilhada em cada processo que a mapeia, então
     /// somá-lo daria mais que a RAM instalada. O resto sai por diferença.
-    fn breakdown(&self) -> MemBreakdown {
+    fn calculate_breakdown(&self) -> MemBreakdown {
         let used = self.mem.used_phys();
         let private: u64 = self.procs.iter().map(|p| p.private_ws).sum();
         let (paged, nonpaged) = if self.kernel.ok {
@@ -829,7 +941,9 @@ impl App {
                             self.subtree_cpu.get(b).copied().unwrap_or(pb.cpu_pct),
                         )
                     } else {
-                        (pa.cpu_pct, pb.cpu_pct)
+                        // Filhos já encerrados contam: o shell que disparou dez `rg` de
+                        // 0,3 s é quem explica o CPU, e sem isso ele ficava no fim da lista.
+                        (pa.cpu_pct + pa.cpu_children_pct, pb.cpu_pct + pb.cpu_children_pct)
                     };
                     ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
                 }
@@ -889,7 +1003,7 @@ impl App {
             .unwrap_or(0)
     }
 
-    fn pressure_snap(&self) -> pressure::Snapshot {
+    fn calculate_pressure_snap(&self) -> pressure::Snapshot {
         pressure::Snapshot {
             load1: self.sys.load1,
             ncpu: self.ncpu as u32,
@@ -900,8 +1014,7 @@ impl App {
         }
     }
 
-    fn thieves(&self) -> Vec<pressure::Thief> {
-        let game = self.pressure_snap().game_open;
+    fn calculate_thieves(&self, game: bool) -> Vec<pressure::Thief> {
         let mut out: Vec<pressure::Thief> = self
             .procs
             .iter()
@@ -1252,9 +1365,9 @@ impl App {
         }
     }
 
-    /// Atualiza as somas dos grupos sem mexer na ordem — é o que roda enquanto a tabela
-    /// está congelada porque o mouse está em cima dela. Congelar a ordem é proposital;
-    /// congelar os números junto não seria.
+    /// Atualiza as somas dos grupos sem mexer na ordem quando chega uma amostra enquanto
+    /// o mouse está sobre a tabela. Congelar a ordem é proposital; congelar os números
+    /// junto não seria.
     fn refresh_groups(&mut self) {
         if self.groups.is_empty() {
             return;
@@ -1301,12 +1414,21 @@ impl App {
             _ => false,
         };
         let key = self.rows_key();
-        let can_freeze = hovering && !self.rows_dirty && key == self.cached_key;
-        if can_freeze {
-            if self.cached_rows.is_some() {
+        let action = row_cache_action(
+            self.cached_rows.is_some(),
+            self.rows_dirty,
+            self.snapshot_dirty,
+            key != self.cached_key,
+            hovering,
+            self.order_frozen,
+        );
+        match action {
+            RowCacheAction::Reuse => self.cached_rows.clone().unwrap_or_default(),
+            RowCacheAction::ReconcileSnapshot => {
                 // mantém a ordem; remove só o que morreu ou deixou de passar no filtro
                 let search = self.search.trim().to_lowercase();
                 let mut keep: HashSet<u32> = self.procs.iter().filter(|p| self.passes(p, &search)).map(|p| p.pid).collect();
+                self.shown_count = keep.len();
                 if self.cfg.view == ViewMode::Tree {
                     let hits: Vec<u32> = keep.iter().copied().collect();
                     for h in hits {
@@ -1337,16 +1459,22 @@ impl App {
                     })
                     .collect();
                 self.order_frozen = true;
+                self.snapshot_dirty = false;
                 self.cached_rows = Some(rows.clone());
-                return rows;
+                rows
+            }
+            RowCacheAction::Rebuild => {
+                let rows = self.build_rows();
+                let search = self.search.trim().to_lowercase();
+                self.shown_count = self.procs.iter().filter(|p| self.passes(p, &search)).count();
+                self.cached_rows = Some(rows.clone());
+                self.cached_key = key;
+                self.snapshot_dirty = false;
+                self.rows_dirty = false;
+                self.order_frozen = false;
+                rows
             }
         }
-        let rows = self.build_rows();
-        self.cached_rows = Some(rows.clone());
-        self.cached_key = key;
-        self.rows_dirty = false;
-        self.order_frozen = false;
-        rows
     }
 
     // ---------- ações ----------
@@ -1562,6 +1690,7 @@ impl App {
         }
         self.cfg_dirty = true;
         self.rebuild_indexes();
+        self.derived_dirty = true;
         self.rows_dirty = true;
     }
 
@@ -1600,13 +1729,13 @@ impl App {
     /// Totais por categoria na métrica escolhida — alimenta os chips de filtro, que precisam
     /// bater com o que a coluna RAM mostra em cada linha.
     fn cat_totals(&self) -> HashMap<Category, (u64, usize)> {
-        self.cat_totals_with(self.cfg.mem_metric)
+        self.derived.cat_totals.clone()
     }
 
     /// Totais por categoria numa métrica específica. O medidor do topo pede sempre
     /// `Private`, porque lá as faixas precisam caber dentro do "em uso" — com working set a
     /// soma das categorias passa da largura da barra.
-    fn cat_totals_with(&self, m: MemMetric) -> HashMap<Category, (u64, usize)> {
+    fn calculate_cat_totals(&self, m: MemMetric) -> HashMap<Category, (u64, usize)> {
         let mut totals: HashMap<Category, (u64, usize)> = HashMap::new();
         for p in &self.procs {
             let e = totals.entry(self.cat(p.pid)).or_default();
@@ -1640,7 +1769,7 @@ impl App {
         }
         let b = self.breakdown();
         let total = self.mem.total_phys.max(1);
-        let cats = self.cat_totals_with(MemMetric::Private);
+        let cats = &self.derived.private_cat_totals;
         let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, TOP_BAR_H), egui::Sense::hover());
         let p = ui.painter();
         p.rect_filled(rect, 3.0, Color32::from_rgb(30, 34, 41));
@@ -2773,7 +2902,22 @@ impl App {
                                     } else {
                                         ui.label(num(txt).color(c))
                                     };
-                                    if cpu_shown >= 0.05 || p.cpu_raw_pct >= 0.05 {
+                                    // Filhos que já morreram dentro da janela: o `rg` de 2 s que a
+                                    // lista nunca viu. Sem isso o Claude mostrava 0,3% enquanto
+                                    // os filhos dele comiam 15% da máquina.
+                                    if p.cpu_children_pct >= 0.5 && !disputa_on {
+                                        ui.label(
+                                            RichText::new(format!("+{:.0}%", p.cpu_children_pct))
+                                                .monospace()
+                                                .size(10.5)
+                                                .color(Color32::from_rgb(255, 171, 145)),
+                                        )
+                                        .on_hover_text(format!(
+                                            "+{:.1}% em filhos que nasceram e morreram entre duas amostras (creditado a este processo pelo kernel).",
+                                            p.cpu_children_pct
+                                        ));
+                                    }
+                                    if cpu_shown >= 0.05 || p.cpu_raw_pct >= 0.05 || p.cpu_children_pct >= 0.05 {
                                         let mut tip = if tree && has_children {
                                             format!(
                                                 "deste processo: {:.1}%\ncom os filhos: {:.1}% = {:.1} núcleos\n",
@@ -2789,6 +2933,12 @@ impl App {
                                                 p.cpu_raw_pct
                                             )
                                         };
+                                        if p.cpu_children_pct >= 0.05 {
+                                            tip.push_str(&format!(
+                                                "filhos já encerrados neste intervalo: +{:.1}%\n",
+                                                p.cpu_children_pct
+                                            ));
+                                        }
                                         tip.push_str(&format!(
                                             "\n100% = a máquina inteira ({} núcleos). 1 núcleo cheio vira {:.1}%.",
                                             self.ncpu,
@@ -3699,7 +3849,7 @@ impl App {
     /// base é sempre a memória privada; com working set na coluna a soma passaria de 100% por
     /// dupla contagem do compartilhado, então o excedente é mostrado à parte, nomeado.
     #[cfg(target_os = "linux")]
-    fn linux_memory_summary(&self) -> String {
+    fn calculate_linux_memory_summary(&self) -> String {
         let measured: Vec<_> = self.procs.iter().filter_map(|p| p.linux_memory).collect();
         let uss: u64 = measured.iter().map(|m| m.0).sum();
         let pss: u64 = measured.iter().map(|m| m.1).sum();
@@ -3709,7 +3859,7 @@ impl App {
     fn ui_accounting(&mut self, ui: &mut egui::Ui) {
         #[cfg(target_os = "linux")]
         if cfg!(target_os = "linux") {
-            let available = self.procs.iter().filter(|p| p.linux_memory.is_some()).count();
+            let available = self.derived.linux_memory_available;
             ui.label(RichText::new(format!("RAM {} em uso · memória detalhada: {available}/{} processos", fmt_gb(self.mem.used_phys()), self.procs.len())).small().color(MUTED))
                 .on_hover_text(self.linux_memory_summary());
             return;
@@ -3756,7 +3906,7 @@ impl App {
             );
         }
         if self.cfg.mem_metric != MemMetric::Private {
-            let shown: u64 = self.procs.iter().map(|p| self.mem_of(p)).sum();
+            let shown = self.derived.metric_total;
             tip.push_str(&format!(
                 "\nA coluna RAM está em {} e soma {} — acima do privado porque cada página \
                  compartilhada conta em todo processo que a mapeia.",
@@ -3809,10 +3959,12 @@ impl eframe::App for App {
             self.cfg.view=views[step%views.len()];self.cfg.mini=step%10==8;
             self.cfg.mem_metric=MemMetric::ALL[step%MemMetric::ALL.len()];
             self.cfg.group_apps=step%2==0;self.rows_dirty=true;
+            self.derived_dirty=true;
             self.selected=self.procs.iter().find(|p|p.pid==std::process::id()).map(|p|p.pid);
             if start.elapsed().as_secs()>=90 {crate::linux::log("SMOKE PASS: 90s, todas as abas, mini e métricas");ctx.send_viewport_cmd(egui::ViewportCommand::Close);}
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
+        self.refresh_derived_if_dirty();
         // Fora do ingest: ele retorna cedo quando não há amostra nova, e a verificação
         // de assinatura chega no seu próprio ritmo.
         self.drain_sigs();
@@ -3871,8 +4023,7 @@ impl eframe::App for App {
         }
         egui::TopBottomPanel::bottom("statusbar").frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(16, 4))).show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let shown = self.procs.iter().filter(|p| self.passes(p, &self.search.trim().to_lowercase())).count();
-                ui.label(RichText::new(format!("{} processos ({} exibidos)", self.procs.len(), shown)).weak().small());
+                ui.label(RichText::new(format!("{} processos ({} exibidos)", self.procs.len(), self.shown_count)).weak().small());
                 ui.separator();
                 let locked_n = self.cfg.locked.len();
                 ui.label(RichText::new(format!("{locked_n} protegidos")).weak().small())
@@ -4219,8 +4370,7 @@ impl App {
             let title = if v == ViewMode::List { "Processos" } else { v.label() };
             ui.label(RichText::new(title).size(17.0).strong());
             if !v.is_addon() {
-                let shown = self.procs.iter().filter(|p| self.passes(p, &self.search.trim().to_lowercase())).count();
-                ui.label(RichText::new(format!("{} · {} na tela", self.procs.len(), shown)).color(MUTED).size(12.5));
+                ui.label(RichText::new(format!("{} · {} na tela", self.procs.len(), self.shown_count)).color(MUTED).size(12.5));
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().button_padding = Vec2::new(12.0, 5.0);
@@ -4311,19 +4461,30 @@ impl App {
             let ncpu = self.ncpu;
             let press = self.pressure_snap();
             let cpu_color = if press.load_hot() { Color32::from_rgb(255, 150, 90) } else { C_CPU };
-            let cpu_sub = match self.sys.load1 {
-                Some(l) => format!("load {} · {ncpu} threads", pt_num(l as f64, 2)),
-                None => format!("{ncpu} threads"),
+            let split = self.cpu_split();
+            let unlisted = split.and_then(|s| s.unlisted_chip());
+            let cpu_sub = match (self.sys.load1, unlisted.is_some()) {
+                (Some(l), false) => format!("load {} · {ncpu} threads", pt_num(l as f64, 2)),
+                (Some(l), true) => format!("load {}", pt_num(l as f64, 2)),
+                (None, _) => format!("{ncpu} threads"),
             };
-            let cpu_tip = match (self.sys.load1, self.sys.load5, self.sys.load15) {
+            let mut cpu_tip = match (self.sys.load1, self.sys.load5, self.sys.load15) {
                 (Some(a), Some(b), Some(c)) => format!(
                     "Uso de CPU (todos os núcleos).\nLoad 1/5/15 min: {a:.2} / {b:.2} / {c:.2}\nLoad acima de {ncpu} significa fila cheia — processo com pouca RAM some na lista ordenada por memória."
                 ),
                 _ => "Uso de CPU (todos os núcleos)".into(),
             };
+            if let Some(s) = split {
+                cpu_tip.push_str("\n\n");
+                cpu_tip.push_str(&s.explain());
+            }
             Self::resource_card(ui, w, "CPU", cpu_pct, cpu_color, &self.hist_cpu, &cpu_tip, |ui| {
                 Self::temp_label(ui, cpu_temp);
                 ui.label(RichText::new(cpu_sub).color(if press.load_hot() { Color32::from_rgb(255, 171, 145) } else { MUTED }).size(11.5));
+                if let Some((chip, tip)) = unlisted {
+                    ui.label(RichText::new(chip).color(Color32::from_rgb(255, 171, 145)).size(11.5))
+                        .on_hover_text(tip);
+                }
             });
 
             let used = self.mem.used_phys();
@@ -4406,6 +4567,7 @@ impl App {
             if gpu_index != self.gpu_index {
                 self.gpu_index = gpu_index;
                 self.sys.gpu = self.sys.gpu_linux.cards.get(gpu_index).cloned();
+                self.derived_dirty = true;
             }
 
             let disk_pct = self.sys.disk_pct;
@@ -4635,6 +4797,7 @@ impl App {
                 if metric != self.cfg.mem_metric {
                     self.cfg.mem_metric = metric;
                     self.cfg_dirty = true;
+                    self.derived_dirty = true;
                     self.rows_dirty = true;
                 }
                 ui.label(RichText::new(self.cfg.mem_metric.tip()).color(MUTED).size(11.5));
@@ -4702,6 +4865,76 @@ impl App {
         self.show_prefs = open;
     }
 
+    /// Quanto do medidor do topo a lista consegue explicar. `None` sem leitura de CPU.
+    fn calculate_cpu_split(&self) -> Option<CpuSplit> {
+        let total = self.sys.cpu_pct?;
+        let mut listed = 0.0f32;
+        let mut children = 0.0f32;
+        for p in &self.procs {
+            listed += p.cpu_raw_pct;
+            children += p.cpu_children_pct;
+        }
+        Some(CpuSplit { total, listed, children })
+    }
+
+    fn refresh_derived_if_dirty(&mut self) {
+        if !self.derived_dirty {
+            return;
+        }
+        let pressure = self.calculate_pressure_snap();
+        let thieves = self.calculate_thieves(pressure.game_open);
+        let breakdown = self.calculate_breakdown();
+        let cpu_split = self.calculate_cpu_split();
+        let cat_totals = self.calculate_cat_totals(self.cfg.mem_metric);
+        let private_cat_totals = self.calculate_cat_totals(MemMetric::Private);
+        let metric_total = self.procs.iter().map(|p| self.mem_of(p)).sum();
+        #[cfg(target_os = "linux")]
+        let linux_memory_summary = self.calculate_linux_memory_summary();
+        #[cfg(not(target_os = "linux"))]
+        let linux_memory_summary = String::new();
+        #[cfg(target_os = "linux")]
+        let linux_memory_available = self
+            .procs
+            .iter()
+            .filter(|p| p.linux_memory.is_some())
+            .count();
+        #[cfg(not(target_os = "linux"))]
+        let linux_memory_available = 0;
+        self.derived = UiDerived {
+            breakdown,
+            pressure,
+            thieves,
+            cpu_split,
+            cat_totals,
+            private_cat_totals,
+            linux_memory_summary,
+            linux_memory_available,
+            metric_total,
+        };
+        self.derived_dirty = false;
+    }
+
+    fn breakdown(&self) -> MemBreakdown {
+        self.derived.breakdown
+    }
+
+    fn pressure_snap(&self) -> pressure::Snapshot {
+        self.derived.pressure
+    }
+
+    fn thieves(&self) -> Vec<pressure::Thief> {
+        self.derived.thieves.clone()
+    }
+
+    fn cpu_split(&self) -> Option<CpuSplit> {
+        self.derived.cpu_split
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux_memory_summary(&self) -> &str {
+        &self.derived.linux_memory_summary
+    }
+
     fn push_hist(&mut self) {
         let push = |h: &mut VecDeque<f32>, v: Option<f32>| {
             let v = v.or_else(|| h.back().copied()).unwrap_or(0.0);
@@ -4715,6 +4948,61 @@ impl App {
         push(&mut self.hist_ram, Some(self.mem.used_phys() as f32 / total as f32 * 100.0));
         push(&mut self.hist_gpu, self.sys.gpu.as_ref().and_then(|g| g.util_pct));
         push(&mut self.hist_disk, self.sys.disk_pct);
+    }
+}
+
+/// Medidor do topo (o que o kernel cobrou de todos os núcleos) contra a soma da lista.
+/// A diferença é o que nenhuma linha mostra: processo que nasceu e morreu entre duas
+/// amostras, interrupções e trabalho do kernel fora de qualquer PID.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CpuSplit {
+    total: f32,
+    /// Σ `cpu_raw_pct` dos processos vivos agora, na mesma janela do medidor.
+    listed: f32,
+    /// Σ `cpu_children_pct`: filhos já encerrados, creditados ao pai. Parte do `unlisted`.
+    children: f32,
+}
+
+impl CpuSplit {
+    /// O que o medidor cobrou e a lista não mostra. Nunca negativo: a lista pode passar do
+    /// medidor por 1–2 pontos porque as duas janelas não fecham no mesmo microssegundo.
+    fn unlisted(&self) -> f32 {
+        (self.total - self.listed).max(0.0)
+    }
+
+    /// Chip vermelho no card só quando a diferença engana de verdade: pelo menos 3 pontos
+    /// e um quinto do medidor. Fora disso, a conta fecha no arredondamento e a linha some.
+    fn unlisted_chip(&self) -> Option<(String, String)> {
+        let u = self.unlisted();
+        if u < 3.0 || u < self.total * 0.2 {
+            return None;
+        }
+        Some((format!("fora da lista {}", App::fmt_pct(u)), self.explain()))
+    }
+
+    fn explain(&self) -> String {
+        let u = self.unlisted();
+        let kids = self.children.min(u);
+        let rest = u - kids;
+        let mut t = format!(
+            "Na lista agora: {} (soma de todos os processos, mesmo os que arredondam pra 0,0%).\nFora da lista: {}",
+            App::fmt_pct(self.listed),
+            App::fmt_pct(u),
+        );
+        if kids >= 0.05 {
+            t.push_str(&format!(
+                "\n  · {} em processos que nasceram e morreram entre duas amostras (rg, git, cc, shells). O pai mostra isso como “+filhos” na coluna CPU.",
+                App::fmt_pct(kids)
+            ));
+        }
+        if rest >= 0.05 {
+            t.push_str(&format!(
+                "\n  · {} em interrupções, trabalho do kernel sem PID e processos curtos ainda sem pai que os recolhesse.",
+                App::fmt_pct(rest)
+            ));
+        }
+        t.push_str("\n\nIntervalo menor (a cada 1s) pega mais processo curto na lista.");
+        t
     }
 }
 
@@ -4829,6 +5117,11 @@ fn setup_style(ctx: &egui::Context) {
         s.spacing.menu_margin = egui::Margin::same(8);
         s.interaction.selectable_labels = false;
         s.interaction.tooltip_delay = 0.35;
+        // O RamDog é um painel de dados, não uma cena animada. A animação padrão
+        // do egui agenda vários quadros extras em cada hover/scrollbar; no Linux com
+        // OpenGL isso transforma um movimento curto do mouse em uma rajada de GPU.
+        // Transições instantâneas preservam a interação e pintam só o quadro útil.
+        s.animation_time = 0.0;
     });
 }
 
