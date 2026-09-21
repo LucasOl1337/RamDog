@@ -969,7 +969,7 @@ pub fn enable_debug_privilege() {
 #[path = "procs_unix.rs"]
 mod procs_unix;
 #[cfg(not(windows))]
-pub use procs_unix::{enable_debug_privilege, is_admin, kernel_state, kill, mem_status, nudge_parent, terminate, Sampler};
+pub use procs_unix::{comm_of, enable_debug_privilege, is_admin, kernel_state, kill, live_state, mem_status, nudge_parent, terminate, Sampler};
 
 #[cfg(windows)]
 pub fn terminate(pid: u32) -> KillOutcome {
@@ -985,6 +985,16 @@ pub fn kernel_state(_pid: u32) -> Option<char> {
 #[cfg(windows)]
 pub fn nudge_parent(_ppid: u32) -> KillOutcome {
     KillOutcome::Invalid
+}
+
+#[cfg(windows)]
+pub fn live_state(_pid: u32) -> Option<(char, u32)> {
+    None
+}
+
+#[cfg(windows)]
+pub fn comm_of(_pid: u32) -> Option<String> {
+    None
 }
 
 /// Fração do CPU acumulado de um processo novo que cabe na janela desta amostra: 1 se

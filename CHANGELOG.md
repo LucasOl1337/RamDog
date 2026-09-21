@@ -2,6 +2,21 @@
 
 As mudanças são registradas por versão. As notas descrevem funcionalidades disponíveis e suas limitações; testes de hardware não equivalem a cobertura de todos os drivers e desktops.
 
+## [0.11.1] - 2026-09-21
+
+Finalizar deixa de bater em parede quando o pai não recolhe, e a última coluna responde "quem abriu isso" em vez de despejar argumentos.
+
+### Adicionado
+
+- Coluna **Quem abriu** no lugar de **Comando**: a cadeia de quem chamou quem, da raiz até o pai (`foot › bash › claude`, `Hermes (gateway) › python3`, `agent-bench · padrao › python3`). Compositor e `systemd` ficam de fora como raiz; unidade do systemd, agente e host deduzidos do ambiente entram na frente quando a cadeia não os mostra. Clique na célula seleciona o pai; o hover traz a cadeia com PIDs e a linha de comando inteira. Botão direito no título troca de volta para **Comando** (persistido).
+- Painel de detalhes de um zumbi: diz que já morreu e não ocupa memória, quem está segurando, e dá os dois botões que existem de verdade: **Pedir ao pai para recolher** e **Finalizar pai: nome (PID)**. O menu de contexto ganha o mesmo item.
+
+### Corrigido
+
+- Finalizar um processo cujo pai não chama `wait` (script Python com `Popen` sem `wait`, ponte que abandona o filho) dizia `1 finalizado(s)` e a linha ficava para sempre; o clique seguinte caía num aviso de zumbi que só citava o Shift. Agora o RamDog espera o kernel recolher (até 400 ms), cutuca o pai com SIGCHLD e, se a linha ficar, diz na hora quem está segurando e que não há memória presa. Processo que já era zumbi na lista (árvore ou app agrupado) nem recebe sinal: vai direto para esse acerto.
+- Zumbi reparentado depois que o pai original morreu era atribuído ao pai da amostra antiga; o pai agora é lido do kernel no clique.
+- Linux: a última coluna da tabela não acompanhava a janela ao maximizar (o egui_extras congela a largura do "resto" quando a coluna é redimensionável). Agora ela acompanha; a borda da coluna Tempo continua arrastável.
+
 ## [0.11.0] - 2026-09-19
 
 A conta do CPU fecha, a faixa Disputa aponta quem está atrapalhando o jogo ou a máquina, e a origem reconhece serviços do systemd.

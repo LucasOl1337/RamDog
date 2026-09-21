@@ -533,11 +533,37 @@ pub fn nudge_parent(ppid: u32) -> KillOutcome {
 
 /// Estado do kernel agora (`Z` = zombie), sem esperar a próxima amostra.
 pub fn kernel_state(pid: u32) -> Option<char> {
+    live_state(pid).map(|(state, _)| state)
+}
+
+/// Estado e pai agora, direto do kernel: `(estado, ppid)`. `None` = o PID já sumiu.
+///
+/// O PPID da amostra pode estar velho: quando o pai morre, o kernel reparenta o zumbi
+/// para o init ou para o subreaper mais próximo, e é esse novo pai que recolhe (ou não).
+pub fn live_state(pid: u32) -> Option<(char, u32)> {
     #[cfg(target_os = "linux")]
     {
         let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         let rest = &text[text.rfind(')')? + 1..];
-        rest.split_whitespace().next()?.chars().next()
+        let mut it = rest.split_whitespace();
+        let state = it.next()?.chars().next()?;
+        let ppid = it.next()?.parse().ok()?;
+        Some((state, ppid))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// Nome curto (`comm`) de um PID agora, mesmo que ele nunca tenha entrado numa amostra.
+pub fn comm_of(pid: u32) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let text = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+        let name = text.trim();
+        (!name.is_empty()).then(|| name.to_string())
     }
     #[cfg(not(target_os = "linux"))]
     {
