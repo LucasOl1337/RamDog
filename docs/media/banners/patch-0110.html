@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>RamDog v0.11.0 — notas da atualização</title>
+<style>
+  @font-face { font-family: "Adwaita Sans"; src: local("Adwaita Sans"); }
+  :root {
+    --bg0: #160D31; --bg1: #28184D;
+    --txt: #F4EFFA; --sub: #BCB1D2; --line: rgba(188,177,210,.22);
+    --new: #FFC61A; --imp: #2DD29A; --fix: #30BCEF; --sys: #AA88FA;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  html { background: #000; }
+  body {
+    width: 1200px;
+    color: var(--txt);
+    font-family: "Adwaita Sans", "Inter", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { position: relative; padding: 56px 64px 48px; background: linear-gradient(160deg, var(--bg0) 0%, var(--bg1) 100%); }
+  .corner { position: absolute; width: 34px; height: 34px; border: 2px solid rgba(188,177,210,.35); }
+  .corner.tl { top: 20px; left: 20px; border-right: 0; border-bottom: 0; }
+  .corner.tr { top: 20px; right: 20px; border-left: 0; border-bottom: 0; }
+  .corner.bl { bottom: 20px; left: 20px; border-right: 0; border-top: 0; }
+  .corner.br { bottom: 20px; right: 20px; border-left: 0; border-top: 0; }
+  .stripe { position: absolute; top: 0; right: 120px; width: 2px; height: 300px; background: linear-gradient(180deg, rgba(188,177,210,.25), transparent); transform: rotate(35deg); transform-origin: top; }
+  .stripe.s2 { right: 60px; height: 220px; }
+  header { display: flex; justify-content: space-between; align-items: flex-start; }
+  .brand { display: flex; align-items: center; gap: 16px; }
+  .brand h1 { margin: 0; font-size: 48px; font-weight: 800; letter-spacing: -1px; }
+  .pill { padding: 6px 22px; border-radius: 999px; font-size: 24px; font-weight: 700; color: #fff; background: linear-gradient(90deg, #FF6A3D, #AA88FA); }
+  .who { text-align: right; }
+  .who .org { color: var(--sys); font-weight: 800; letter-spacing: 3px; font-size: 18px; }
+  .who .date { color: var(--txt); font-size: 20px; margin-top: 6px; }
+  .kicker { margin-top: 10px; color: var(--new); font-weight: 800; letter-spacing: 4px; font-size: 20px; }
+  .lede { margin-top: 30px; color: var(--sub); font-size: 22px; }
+  section { border-top: 1px solid var(--line); margin-top: 34px; padding-top: 30px; }
+  section:first-of-type { border-top: 0; }
+  .head { display: flex; justify-content: space-between; align-items: center; }
+  .head .t { display: flex; align-items: center; gap: 16px; font-weight: 800; letter-spacing: 3px; font-size: 24px; }
+  .head .bar { width: 5px; height: 28px; border-radius: 3px; }
+  .head .n { color: var(--sub); font-size: 20px; }
+  ul { list-style: none; margin: 20px 0 0; padding: 0; }
+  li { display: grid; grid-template-columns: 26px 1fr auto; align-items: baseline; column-gap: 12px; padding: 13px 0; }
+  li .dot { width: 12px; height: 12px; border-radius: 50%; position: relative; top: -1px; }
+  li .txt { font-size: 24px; }
+  li .txt b { font-weight: 700; color: var(--txt); }
+  li .txt span { color: var(--txt); opacity: .9; }
+  li .area { color: var(--sub); font-weight: 700; letter-spacing: 2px; font-size: 16px; padding-left: 24px; white-space: nowrap; }
+  .new .bar, .new .dot { background: var(--new); } .new .txt span { color: var(--new); } .new .t { color: var(--new); }
+  .imp .bar, .imp .dot { background: var(--imp); } .imp .txt span { color: var(--imp); } .imp .t { color: var(--imp); }
+  .fix .bar, .fix .dot { background: var(--fix); } .fix .txt span { color: var(--fix); } .fix .t { color: var(--fix); }
+  .sys .bar, .sys .dot { background: var(--sys); } .sys .txt span { color: var(--sys); } .sys .t { color: var(--sys); }
+  footer { border-top: 1px solid var(--line); margin-top: 34px; padding-top: 28px; }
+  footer .tag { color: var(--new); font-weight: 700; font-size: 24px; }
+  footer .more { color: var(--sub); font-size: 20px; margin-top: 10px; }
+  footer .mark { color: var(--sub); font-weight: 800; letter-spacing: 4px; font-size: 16px; margin-top: 26px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+  <div class="stripe"></div><div class="stripe s2"></div>
+
+  <header>
+    <div>
+      <div class="brand"><h1>RamDog</h1><span class="pill">v0.11.0</span></div>
+      <div class="kicker">NOTAS DA ATUALIZAÇÃO</div>
+    </div>
+    <div class="who">
+      <div class="org">LUCASOL</div>
+      <div class="date">18 de setembro de 2026</div>
+    </div>
+  </header>
+
+  <div class="lede">A conta do CPU fecha · Disputa aponta quem atrapalha · origem lê o systemd</div>
+
+  <section class="new">
+    <div class="head"><div class="t"><span class="bar"></span>NOVIDADES</div><div class="n">4 itens</div></div>
+    <ul>
+      <li><i class="dot"></i><div class="txt"><b>Faixa Disputa</b> — <span>jogo com GPU parada, load alto, emulador sem janela</span></div><div class="area">PROCESSOS</div></li>
+      <li><i class="dot"></i><div class="txt"><b>Chip Disputa</b> — <span>coluna CPU em núcleos equivalentes (14×) com o % ao lado</span></div><div class="area">PROCESSOS</div></li>
+      <li><i class="dot"></i><div class="txt"><b>GPU no CPU</b> — <span>navegador em renderização por software sobe no ranking</span></div><div class="area">DISPUTA</div></li>
+      <li><i class="dot"></i><div class="txt"><b>Load e swap nos cards</b> — <span>load 1/5/15 e swap usado; o card acende</span></div><div class="area">LINUX/MACOS</div></li>
+    </ul>
+  </section>
+
+  <section class="imp">
+    <div class="head"><div class="t"><span class="bar"></span>MELHORIAS</div><div class="n">2 itens</div></div>
+    <ul>
+      <li><i class="dot"></i><div class="txt"><b>Origem pelo systemd</b> — <span>serviço aparece como Hermes (gateway), Claude Desktop</span></div><div class="area">LINUX</div></li>
+      <li><i class="dot"></i><div class="txt"><b>Fora da lista N%</b> — <span>o card de CPU mostra o que a lista não explica</span></div><div class="area">LINUX</div></li>
+    </ul>
+  </section>
+
+  <section class="fix">
+    <div class="head"><div class="t"><span class="bar"></span>CORREÇÕES</div><div class="n">5 itens</div></div>
+    <ul>
+      <li><i class="dot"></i><div class="txt"><b>Processo curto aparece</b> — <span>entra com a taxa real, não com 0,0%</span></div><div class="area">LINUX/WINDOWS</div></li>
+      <li><i class="dot"></i><div class="txt"><b>Filhos encerrados contam</b> — <span>+N% no pai, limitado ao que o medidor não explica</span></div><div class="area">LINUX</div></li>
+      <li><i class="dot"></i><div class="txt"><b>Zumbi não finge que morreu</b> — <span>o X pede ao pai pra recolher; Shift+X mata o pai</span></div><div class="area">ENCERRAR</div></li>
+      <li><i class="dot"></i><div class="txt"><b>Steam é Steam</b> — <span>cliente relançado por atalho não vira o jogo</span></div><div class="area">ORIGEM</div></li>
+      <li><i class="dot"></i><div class="txt"><b>Ícone certo</b> — <span>o .desktop com o nome do programa ganha do atalho com URL</span></div><div class="area">LINUX</div></li>
+    </ul>
+  </section>
+
+  <footer>
+    <div class="tag">O número do topo e a lista agora falam da mesma coisa.</div>
+    <div class="more">Notas completas em github.com/LucasOl1337/RamDog/releases/tag/v0.11.0</div>
+    <div class="mark">RAMDOG · OMARCHY / HYPRLAND</div>
+  </footer>
+</div>
+</body>
+</html>
