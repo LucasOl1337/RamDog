@@ -7,6 +7,8 @@
 //! O texto é curto de propósito — cabe numa linha do painel de detalhes. Nada aqui é
 //! consultado por amostra; é uma tabela estática, custo zero em tempo de execução.
 
+use crate::config::Locale;
+
 /// O que acontece se o processo for encerrado.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Risk {
@@ -21,9 +23,20 @@ pub enum Risk {
 impl Risk {
     pub fn label(self) -> &'static str {
         match self {
-            Risk::Safe => "seguro encerrar",
-            Risk::Respawns => "reabre sozinho",
-            Risk::Fatal => "NÃO encerrar",
+            Risk::Safe => "safe to terminate",
+            Risk::Respawns => "respawns automatically",
+            Risk::Fatal => "DO NOT terminate",
+        }
+    }
+
+    pub fn label_for(self, locale: Locale) -> &'static str {
+        match locale {
+            Locale::Portuguese => match self {
+                Risk::Safe => "seguro encerrar",
+                Risk::Respawns => "reinicia sozinho",
+                Risk::Fatal => "NÃO encerrar",
+            },
+            Locale::English => self.label(),
         }
     }
 
@@ -45,9 +58,20 @@ impl Risk {
 
     pub fn tip(self) -> &'static str {
         match self {
-            Risk::Safe => "Encerrar não quebra o Windows. Você só perde o trabalho não salvo desse programa.",
-            Risk::Respawns => "O Windows reinicia este processo automaticamente. Matar libera a RAM por alguns segundos e ele volta.",
-            Risk::Fatal => "Processo crítico: encerrar causa tela azul (CRITICAL_PROCESS_DIED) ou derruba sua sessão na hora.",
+            Risk::Safe => "Terminating it will not break Windows. You only lose unsaved work in this program.",
+            Risk::Respawns => "Windows restarts this process automatically. Terminating it frees RAM for a few seconds, then it returns.",
+            Risk::Fatal => "Critical process: terminating it causes a blue screen (CRITICAL_PROCESS_DIED) or immediately ends your session.",
+        }
+    }
+
+    pub fn tip_for(self, locale: Locale) -> &'static str {
+        match locale {
+            Locale::Portuguese => match self {
+                Risk::Safe => "Encerrar não quebra o Windows. Você só perde trabalho não salvo neste programa.",
+                Risk::Respawns => "O Windows reinicia este processo automaticamente. A RAM é liberada por alguns segundos e ele volta.",
+                Risk::Fatal => "Processo crítico: encerrá-lo causa tela azul (CRITICAL_PROCESS_DIED) ou encerra sua sessão imediatamente.",
+            },
+            Locale::English => self.tip(),
         }
     }
 }
@@ -57,11 +81,51 @@ pub struct Known {
     pub what: &'static str,
     /// Por que ele está aberto agora — a pergunta que ninguém responde.
     pub why: &'static str,
+    what_pt: Option<&'static str>,
+    why_pt: Option<&'static str>,
     pub risk: Risk,
 }
 
 const fn k(what: &'static str, why: &'static str, risk: Risk) -> Known {
-    Known { what, why, risk }
+    Known {
+        what,
+        why,
+        what_pt: None,
+        why_pt: None,
+        risk,
+    }
+}
+
+const fn bilingual(
+    what: &'static str,
+    why: &'static str,
+    what_pt: &'static str,
+    why_pt: &'static str,
+    risk: Risk,
+) -> Known {
+    Known {
+        what,
+        why,
+        what_pt: Some(what_pt),
+        why_pt: Some(why_pt),
+        risk,
+    }
+}
+
+impl Known {
+    pub fn what_for(&self, locale: Locale) -> &'static str {
+        match locale {
+            Locale::Portuguese => self.what_pt.unwrap_or(self.what),
+            Locale::English => self.what,
+        }
+    }
+
+    pub fn why_for(&self, locale: Locale) -> &'static str {
+        match locale {
+            Locale::Portuguese => self.why_pt.unwrap_or(self.why),
+            Locale::English => self.why,
+        }
+    }
 }
 
 /// Ficha do processo pelo nome do executável (minúsculo, com ou sem `.exe`).
@@ -70,304 +134,332 @@ pub fn lookup(name_lower: &str) -> Option<Known> {
     Some(match b {
         // ── Núcleo da sessão: matar qualquer um destes derruba o Windows ──────────────
         "system" => k(
-            "O próprio kernel do Windows e os drivers, agrupados num processo fictício.",
-            "Existe desde o boot. Não é um programa: é o Windows.",
+            "The Windows kernel and drivers, grouped into a fictional process.",
+            "It exists since boot. It is not a program: it is Windows.",
             Risk::Fatal,
         ),
         "registry" => k(
-            "Guarda o Registro do Windows carregado em memória.",
-            "Sempre aberto — todo o sistema lê configuração daqui.",
+            "Stores the Windows Registry loaded in memory.",
+            "Always open — the entire system reads configuration from it.",
             Risk::Fatal,
         ),
         "memory compression" => k(
-            "Comprime páginas de RAM pouco usadas em vez de mandá-las para o disco.",
-            "Cresce quando a RAM aperta. É economia, não desperdício.",
+            "Compresses rarely used RAM pages instead of sending them to disk.",
+            "Grows when RAM is tight. It saves memory; it is not waste.",
             Risk::Fatal,
         ),
         "secure system" | "lsaiso" => k(
-            "Isolamento por virtualização (VBS/Credential Guard) — protege credenciais do resto do sistema.",
-            "Ligado porque a Segurança Baseada em Virtualização está ativa nesta máquina.",
+            "Virtualization-based isolation (VBS/Credential Guard) — protects credentials from the rest of the system.",
+            "Enabled because Virtualization-based Security is active on this machine.",
             Risk::Fatal,
         ),
         "smss" => k(
-            "Gerenciador de Sessões: o primeiro processo de modo usuário do boot.",
-            "Cria cada sessão e depois sai — por isso costuma aparecer como pai já encerrado.",
+            "Session Manager: the first user-mode process during boot.",
+            "Creates each session and then exits — which is why it often appears as an already-exited parent.",
             Risk::Fatal,
         ),
         "csrss" => k(
-            "Subsistema de tempo de execução do Win32: console, criação e término de processos.",
-            "Um por sessão, desde o login. Sempre haverá pelo menos dois.",
+            "Win32 runtime subsystem: consoles, process creation, and process termination.",
+            "One per session, since login. There will always be at least two.",
             Risk::Fatal,
         ),
         "wininit" => k(
-            "Inicialização da sessão 0: sobe services.exe, lsass.exe e o gerenciador de sessão.",
-            "É o avô de todo serviço do Windows. Ele mesmo usa poucos MB — o número grande na árvore é a soma dos filhos.",
+            "Session 0 initialization: starts services.exe, lsass.exe, and the session manager.",
+            "It is the grandparent of every Windows service. It uses little memory itself — the large tree value is the sum of its children.",
             Risk::Fatal,
         ),
         "winlogon" => k(
-            "Cuida do login, do bloqueio de tela e do Ctrl+Alt+Del.",
-            "Um por sessão interativa, desde que você ligou o PC.",
+            "Handles login, screen locking, and Ctrl+Alt+Del.",
+            "One per interactive session, since you powered on the PC.",
             Risk::Fatal,
         ),
         "services" => k(
-            "Gerenciador de Controle de Serviços: inicia, para e supervisiona todo serviço do Windows.",
-            "Pai de quase todo svchost.exe — daí a RAM enorme na visão de árvore.",
+            "Service Control Manager: starts, stops, and supervises every Windows service.",
+            "Parent of almost every svchost.exe — hence the large RAM value in the tree view.",
             Risk::Fatal,
         ),
         "lsass" => k(
-            "Autoridade de Segurança Local: valida senhas, tokens e políticas de segurança.",
-            "Sempre aberto. É também o alvo favorito de roubo de credenciais.",
+            "Local Security Authority: validates passwords, tokens, and security policies.",
+            "Always open. It is also a favorite target for credential theft.",
             Risk::Fatal,
         ),
         "fontdrvhost" => k(
-            "Hospeda o driver de fontes fora do kernel, isolado por segurança.",
-            "Sobe junto com a sessão gráfica.",
+            "Hosts the font driver outside the kernel, isolated for security.",
+            "Starts with the graphical session.",
             Risk::Fatal,
         ),
         "dwm" => k(
-            "Gerenciador de Janelas: compõe tudo o que você vê na tela, com transparência e sombras.",
-            "Sem ele não há área de trabalho. A RAM dele é quase toda buffer de vídeo.",
+            "Desktop Window Manager: composites everything you see, including transparency and shadows.",
+            "Without it there is no desktop. Its RAM is mostly video buffers.",
             Risk::Fatal,
         ),
         "logonui" => k(
-            "Desenha a tela de login e a de bloqueio.",
-            "Aparece quando a sessão está trancada.",
+            "Draws the login and lock screens.",
+            "Appears when the session is locked.",
             Risk::Fatal,
         ),
 
         // ── Reabrem sozinhos ─────────────────────────────────────────────────────────
         "explorer" => k(
-            "A área de trabalho, a barra de tarefas e as janelas de pasta.",
-            "Também hospeda ícones da bandeja e extensões de shell de outros programas — por isso incha com o tempo.",
+            "The desktop, taskbar, and folder windows.",
+            "It also hosts tray icons and shell extensions from other programs — so it grows over time.",
             Risk::Respawns,
         ),
         "svchost" => k(
-            "Casca genérica que hospeda serviços do Windows: sozinho o nome não diz nada.",
-            "O que importa é qual serviço está dentro — o RamDog mostra isso na ficha.",
+            "A generic shell that hosts Windows services: the name alone says nothing.",
+            "What matters is which service is inside — RamDog shows that in the details.",
             Risk::Respawns,
         ),
         "sihost" => k(
-            "Infraestrutura do shell: menu de contexto, notificações, ações da barra de tarefas.",
-            "Um por sessão de usuário.",
+            "Shell infrastructure: context menus, notifications, and taskbar actions.",
+            "One per user session.",
             Risk::Respawns,
         ),
         "ctfmon" => k(
-            "Entrada de texto: teclado virtual, idiomas, reconhecimento de escrita.",
-            "Sobe assim que qualquer campo de texto existe.",
+            "Text input: virtual keyboard, languages, and handwriting recognition.",
+            "Starts as soon as any text field exists.",
             Risk::Respawns,
         ),
         "runtimebroker" => k(
-            "Fiscaliza as permissões dos aplicativos da Store (câmera, microfone, arquivos).",
-            "Um por app moderno aberto. Muitos ao mesmo tempo é normal.",
+            "Monitors Store app permissions (camera, microphone, files).",
+            "One per modern app that is open. Several at once is normal.",
             Risk::Respawns,
         ),
         "wmiprvse" => k(
-            "Provedor WMI: responde consultas de inventário e monitoramento sobre a máquina.",
-            "Sobe sob demanda e some sozinho depois de alguns minutos ocioso. Antivírus e o próprio RamDog fazem essas consultas.",
+            "WMI provider: answers inventory and monitoring queries about the machine.",
+            "Starts on demand and exits after a few idle minutes. Antivirus software and RamDog make these queries.",
             Risk::Respawns,
         ),
         "searchhost" | "searchapp" => k(
-            "A busca do menu Iniciar e a caixa de pesquisa da barra de tarefas.",
-            "Fica pré-carregado para abrir instantâneo quando você aperta a tecla Windows.",
+            "Start menu search and the taskbar search box.",
+            "Preloaded so it opens instantly when you press the Windows key.",
             Risk::Respawns,
         ),
         "searchindexer" => k(
-            "Indexa arquivos e e-mails para a busca responder rápido.",
-            "Trabalha em rajadas depois de mexer em muitos arquivos.",
+            "Indexes files and email so search responds quickly.",
+            "Works in bursts after many files change.",
             Risk::Respawns,
         ),
         "startmenuexperiencehost" => k(
-            "Desenha o menu Iniciar.",
-            "Pré-carregado por velocidade, mesmo com o menu fechado.",
+            "Draws the Start menu.",
+            "Preloaded for speed, even when the menu is closed.",
             Risk::Respawns,
         ),
         "shellexperiencehost" => k(
-            "Central de notificações, relógio e partes visuais da barra de tarefas.",
-            "Sempre presente na sessão gráfica.",
+            "Notification center, clock, and visual parts of the taskbar.",
+            "Always present in the graphical session.",
             Risk::Respawns,
         ),
         "textinputhost" => k(
-            "Teclado virtual, painel de emoji e sugestões de texto.",
-            "Pré-carregado para o painel de emoji (Win+.) abrir sem atraso.",
+            "Virtual keyboard, emoji panel, and text suggestions.",
+            "Preloaded so the emoji panel (Win+.) opens without delay.",
             Risk::Respawns,
         ),
         "applicationframehost" => k(
-            "Fornece a moldura da janela para aplicativos da Store.",
-            "Um por app moderno aberto.",
+            "Provides the window frame for Store apps.",
+            "One per modern app that is open.",
             Risk::Respawns,
         ),
         "dllhost" => k(
-            "Hospeda componentes COM que não têm processo próprio, como miniaturas de arquivos.",
-            "Aparece e some conforme o Explorer precisa gerar previews.",
+            "Hosts COM components without their own process, such as file thumbnails.",
+            "Appears and exits as Explorer needs to generate previews.",
             Risk::Respawns,
         ),
         "taskhostw" => k(
-            "Executa as tarefas agendadas que são bibliotecas em vez de programas.",
-            "Sobe quando o Agendador de Tarefas dispara algo.",
+            "Runs scheduled tasks that are libraries rather than programs.",
+            "Starts when Task Scheduler triggers something.",
             Risk::Respawns,
         ),
         "spoolsv" => k(
-            "Fila de impressão.",
-            "Sempre aberto, mesmo sem impressora instalada.",
+            "Print spooler.",
+            "Always open, even without a printer installed.",
             Risk::Respawns,
         ),
         "audiodg" => k(
-            "Isola os efeitos de áudio dos drivers fora do serviço de som.",
-            "Sobe quando algo toca som.",
+            "Isolates driver audio effects from the sound service.",
+            "Starts when something plays audio.",
             Risk::Respawns,
         ),
         "conhost" | "openconsole" => k(
-            "Janela de console clássica para programas de linha de comando.",
-            "Um por programa de terminal antigo em execução.",
+            "Classic console window for command-line programs.",
+            "One per legacy terminal program that is running.",
             Risk::Respawns,
         ),
         "systemsettings" => k(
-            "O aplicativo Configurações do Windows.",
-            "Fica em segundo plano suspenso depois de fechado.",
+            "The Windows Settings app.",
+            "Remains suspended in the background after it is closed.",
             Risk::Respawns,
         ),
         "appactions" => k(
-            "Ações de aplicativo sugeridas pelo Windows (compartilhar, abrir com).",
-            "Componente do shell, sobe sob demanda.",
+            "App actions suggested by Windows (share, open with).",
+            "Shell component, starts on demand.",
             Risk::Respawns,
         ),
         "widgets" | "widgetservice" => k(
-            "Painel de widgets (clima, notícias) da barra de tarefas.",
-            "Pode ser desligado nas configurações da barra de tarefas.",
+            "Taskbar widgets panel (weather, news).",
+            "Can be disabled in taskbar settings.",
             Risk::Respawns,
         ),
         "phoneexperiencehost" => k(
-            "Aplicativo Vincular ao Celular.",
-            "Sobe sozinho se você já vinculou um telefone.",
+            "Phone Link app.",
+            "Starts automatically if you have linked a phone.",
             Risk::Respawns,
         ),
         "wudfhost" => k(
-            "Hospeda drivers de modo usuário (impressoras, biométricos, periféricos USB).",
-            "Um por classe de dispositivo conectado.",
+            "Hosts user-mode drivers (printers, biometrics, USB peripherals).",
+            "One per connected device class.",
             Risk::Respawns,
         ),
         // ── Defender e segurança ─────────────────────────────────────────────────────
         "msmpeng" => k(
-            "Motor do Microsoft Defender: varre arquivos em tempo real.",
-            "Sempre aberto. A RAM sobe durante builds e downloads grandes — excluir pastas de projeto reduz muito.",
+            "Microsoft Defender engine: scans files in real time.",
+            "Always open. RAM rises during builds and large downloads — excluding project folders helps a lot.",
             Risk::Respawns,
         ),
         "nissrv" => k(
-            "Inspeção de rede do Defender.",
-            "Complemento do MsMpEng.",
+            "Defender network inspection.",
+            "Companion to MsMpEng.",
             Risk::Respawns,
         ),
         "securityhealthservice" | "securityhealthsystray" => k(
-            "Central de Segurança do Windows: o ícone do escudo e o painel de status.",
-            "Serviço permanente do sistema.",
+            "Windows Security Center: the shield icon and status panel.",
+            "Permanent system service.",
             Risk::Respawns,
         ),
         "mpdefendercoreservice" => k(
-            "Serviço central do Defender, separado do motor de varredura.",
-            "Parte da proteção em tempo real.",
+            "Defender core service, separate from the scanning engine.",
+            "Part of real-time protection.",
             Risk::Respawns,
         ),
 
         // ── Atualização e nuvem ──────────────────────────────────────────────────────
         "onedrive" => k(
-            "Sincroniza pastas com o OneDrive.",
-            "Inicia com o Windows. Pode ser desativado se você não usa a nuvem da Microsoft.",
+            "Syncs folders with OneDrive.",
+            "Starts with Windows. Can be disabled if you do not use Microsoft's cloud.",
             Risk::Safe,
         ),
         "usocoreworker" | "mousocoreworker" => k(
-            "Orquestrador do Windows Update.",
-            "Sobe para checar, baixar ou preparar atualizações. Some depois.",
+            "Windows Update orchestrator.",
+            "Starts to check, download, or prepare updates. Exits afterward.",
             Risk::Respawns,
         ),
         "tiworker" | "trustedinstaller" => k(
-            "Instalador de módulos do Windows: aplica atualizações e componentes.",
-            "Come CPU em rajadas depois de uma atualização. É temporário.",
+            "Windows Modules Installer: applies updates and components.",
+            "Uses CPU in bursts after an update. It is temporary.",
             Risk::Respawns,
         ),
         "compattelrunner" => k(
-            "Telemetria de compatibilidade de aplicativos.",
-            "Roda por tarefa agendada, em segundo plano.",
+            "Application compatibility telemetry.",
+            "Runs as a scheduled task in the background.",
             Risk::Safe,
         ),
 
         // ── Programas comuns ─────────────────────────────────────────────────────────
         "chrome" | "msedge" | "firefox" | "brave" | "opera" | "vivaldi" => k(
-            "Navegador. Cada aba, extensão e site tem seu próprio processo, por isolamento.",
-            "A soma dos filhos é o consumo real — um processo sozinho não diz nada.",
+            "Browser. Each tab, extension, and site has its own isolated process.",
+            "The sum of the children is the real usage — one process alone says little.",
             Risk::Safe,
         ),
         "code" | "cursor" | "devenv" | "rider64" | "idea64" | "pycharm64" => k(
-            "Editor de código. Servidores de linguagem e extensões rodam em processos separados.",
-            "Os filhos costumam pesar mais que a janela em si.",
+            "Code editor. Language servers and extensions run in separate processes.",
+            "The children usually use more resources than the window itself.",
             Risk::Safe,
         ),
         "node" => k(
-            "Runtime JavaScript: servidor de desenvolvimento, ferramenta de build ou agente.",
-            "Olhe a linha de comando na ficha para saber qual projeto o abriu.",
+            "JavaScript runtime: development server, build tool, or agent.",
+            "Check the command line in the details to see which project started it.",
             Risk::Safe,
         ),
         "python" | "python3" | "pythonw" => k(
-            "Interpretador Python: script, servidor ou ferramenta.",
-            "A linha de comando na ficha diz qual script está rodando.",
+            "Python interpreter: script, server, or tool.",
+            "The command line in the details says which script is running.",
             Risk::Safe,
         ),
         "rustc" | "cargo" | "rust-analyzer" => k(
-            "Ferramenta da toolchain Rust: compilação ou análise de código no editor.",
-            "Aparece durante build ou com um projeto Rust aberto no editor.",
+            "Rust toolchain tool: compilation or code analysis in the editor.",
+            "Appears during a build or with a Rust project open in the editor.",
             Risk::Safe,
         ),
         "steam" | "steamwebhelper" => k(
-            "Cliente Steam. O steamwebhelper desenha a interface, que é um navegador embutido.",
-            "Inicia com o Windows por padrão; dá para desligar nas opções da Steam.",
+            "Steam client. steamwebhelper draws the interface as an embedded browser.",
+            "Starts with Windows by default; it can be disabled in Steam settings.",
             Risk::Safe,
         ),
         "discord" | "spotify" | "slack" | "teams" | "ms-teams" | "whatsapp" | "telegram" => k(
-            "Aplicativo de desktop construído sobre um navegador embutido (Electron).",
-            "Costuma iniciar junto com o Windows e ficar na bandeja.",
+            "Desktop app built on an embedded browser (Electron).",
+            "Usually starts with Windows and stays in the system tray.",
             Risk::Safe,
         ),
         "nvcontainer" | "nvdisplay.container" => k(
-            "Contêiner de serviços da NVIDIA: telemetria, overlay e controle do driver.",
-            "Instalado junto com o driver de vídeo.",
+            "NVIDIA service container: telemetry, overlay, and driver control.",
+            "Installed with the graphics driver.",
             Risk::Respawns,
         ),
 
         // ── Linux ────────────────────────────────────────────────────────────────────
-        "systemd" | "init" => k(
+        "systemd" | "init" => bilingual(
+            "PID 1: starts the rest of the system, services, and the session.",
+            "Always open since boot. Terminating it takes down the machine.",
             "PID 1: sobe o resto do sistema, serviços e a sessão.",
             "Sempre aberto desde o boot. Encerrar derruba a máquina.",
             Risk::Fatal,
         ),
-        "kthreadd" => k(
+        "kthreadd" => bilingual(
+            "Parent of all Linux kernel threads.",
+            "It is not a user program. Terminating it is not an option.",
             "Pai de todas as kernel threads do Linux.",
             "Não é um programa de usuário. Encerrar não é opção.",
             Risk::Fatal,
         ),
-        "dbus-daemon" | "dbus-broker" => k(
+        "dbus-daemon" | "dbus-broker" => bilingual(
+            "Message bus: desktop apps and services communicate through it.",
+            "Without it, the graphical session loses half its daemons.",
             "Barramento de mensagens: apps e serviços do desktop falam por aqui.",
             "Sem ele a sessão gráfica perde metade dos daemons.",
             Risk::Fatal,
         ),
-        "gnome-shell" | "kwin_wayland" | "kwin_x11" | "xorg" | "xwayland" => k(
+        "gnome-shell" | "kwin_wayland" | "kwin_x11" | "xorg" | "xwayland" => bilingual(
+            "Session compositor / graphics server.",
+            "Terminating it closes the graphical session immediately.",
             "Compositor / servidor gráfico da sessão.",
             "Encerrar fecha a sessão gráfica na hora.",
             Risk::Fatal,
         ),
-        "pipewire" | "pipewire-pulse" | "wireplumber" | "pulseaudio" => k(
+        "pipewire" | "pipewire-pulse" | "wireplumber" | "pulseaudio" => bilingual(
+            "Session audio (and sometimes video).",
+            "The session usually reopens it; audio is silent in the meantime.",
             "Áudio (e às vezes vídeo) da sessão.",
             "A sessão reabre sozinha na maioria dos desktops; você fica mudo no meio tempo.",
             Risk::Respawns,
         ),
-        "networkmanager" | "wpa_supplicant" | "iwd" | "systemd-networkd" => k(
+        "networkmanager" | "wpa_supplicant" | "iwd" | "systemd-networkd" => bilingual(
+            "Network stack: Wi-Fi, wired networking, and VPN.",
+            "System service. Terminating it cuts the network until systemd restarts it.",
             "Pilha de rede: Wi-Fi, cabo, VPN.",
             "Serviço de sistema. Encerrar corta a rede até o systemd religar.",
             Risk::Respawns,
         ),
-        "sshd" | "sshd-session" => k(
+        "sshd" | "sshd-session" => bilingual(
+            "SSH server: accepts remote logins.",
+            "Terminating the current session disconnects you; systemd restarts the service itself.",
             "Servidor SSH: aceita logins remotos.",
             "Matar a sessão atual te desconecta; o serviço em si o systemd religa.",
             Risk::Safe,
         ),
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{lookup, Risk};
+    use crate::config::Locale;
+
+    #[test]
+    fn linux_catalog_has_english_text() {
+        let known = lookup("systemd").expect("systemd catalog entry");
+        assert!(known.what_for(Locale::English).starts_with("PID 1:"));
+        assert!(known.what_for(Locale::Portuguese).contains("sobe"));
+        assert_eq!(Risk::Fatal.label_for(Locale::English), "DO NOT terminate");
+    }
 }

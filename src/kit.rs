@@ -24,7 +24,10 @@ pub fn toolbar<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R 
 }
 
 pub fn button(text: &str) -> egui::Button<'static> {
-    egui::Button::new(RichText::new(text.to_owned()).size(12.5)).fill(SURFACE_HI).stroke(Stroke::NONE).corner_radius(ROW_R)
+    egui::Button::new(RichText::new(text.to_owned()).size(12.5))
+        .fill(SURFACE_HI)
+        .stroke(Stroke::NONE)
+        .corner_radius(ROW_R)
 }
 
 pub fn primary(text: &str) -> egui::Button<'static> {
@@ -35,10 +38,14 @@ pub fn primary(text: &str) -> egui::Button<'static> {
 }
 
 pub fn danger(text: &str) -> egui::Button<'static> {
-    egui::Button::new(RichText::new(text.to_owned()).size(12.5).color(Color32::WHITE))
-        .fill(Color32::from_rgb(170, 50, 50))
-        .stroke(Stroke::NONE)
-        .corner_radius(ROW_R)
+    egui::Button::new(
+        RichText::new(text.to_owned())
+            .size(12.5)
+            .color(Color32::WHITE),
+    )
+    .fill(Color32::from_rgb(170, 50, 50))
+    .stroke(Stroke::NONE)
+    .corner_radius(ROW_R)
 }
 
 /// Uma linha da lista em caixa (estilo boxed-list): fundo da janela dentro do card.

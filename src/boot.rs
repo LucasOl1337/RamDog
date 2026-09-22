@@ -11,11 +11,13 @@ use std::time::{Duration, Instant};
 
 use egui::{Color32, RichText, TextureHandle};
 use egui_extras::{Column, TableBuilder};
-use windows::core::{BSTR, Interface, IUnknown, PCWSTR};
+use serde_json::json;
+use windows::core::{IUnknown, Interface, BSTR, PCWSTR};
 
 use windows::Win32::Storage::FileSystem::WIN32_FIND_DATAW;
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, STGM_READ,
+    CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+    STGM_READ,
 };
 use windows::Win32::System::Registry::{
     HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, REG_EXPAND_SZ, REG_SZ,
@@ -23,10 +25,10 @@ use windows::Win32::System::Registry::{
 use windows::Win32::System::Services::{
     CloseServiceHandle, EnumServicesStatusExW, OpenSCManagerW, OpenServiceW, QueryServiceConfig2W,
     QueryServiceConfigW, ENUM_SERVICE_STATUS_PROCESSW, QUERY_SERVICE_CONFIGW, SC_ENUM_PROCESS_INFO,
-    SC_HANDLE, SC_MANAGER_CONNECT, SC_MANAGER_ENUMERATE_SERVICE, SERVICE_AUTO_START, SERVICE_BOOT_START,
-    SERVICE_CONFIG_DELAYED_AUTO_START_INFO, SERVICE_DELAYED_AUTO_START_INFO, SERVICE_DEMAND_START,
-    SERVICE_DISABLED, SERVICE_DRIVER, SERVICE_QUERY_CONFIG, SERVICE_QUERY_STATUS, SERVICE_RUNNING,
-    SERVICE_STATE_ALL, SERVICE_SYSTEM_START, SERVICE_WIN32,
+    SC_HANDLE, SC_MANAGER_CONNECT, SC_MANAGER_ENUMERATE_SERVICE, SERVICE_AUTO_START,
+    SERVICE_BOOT_START, SERVICE_CONFIG_DELAYED_AUTO_START_INFO, SERVICE_DELAYED_AUTO_START_INFO,
+    SERVICE_DEMAND_START, SERVICE_DISABLED, SERVICE_DRIVER, SERVICE_QUERY_CONFIG,
+    SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_STATE_ALL, SERVICE_SYSTEM_START, SERVICE_WIN32,
 };
 use windows::Win32::System::TaskScheduler::{
     IRegisteredTaskCollection, ITaskFolder, ITaskService, TaskScheduler, TASK_ENUM_HIDDEN,
@@ -35,7 +37,7 @@ use windows::Win32::System::Variant::{VARIANT, VT_I4};
 use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
 
 use crate::app::{ACCENT, ACCENT_BG, LINE, MUTED, SURFACE, SURFACE_HI};
-use crate::config::{BootGroup, Config};
+use crate::config::{BootGroup, Config, Locale};
 use crate::icons::IconBank;
 use crate::procs::{self, ProcInfo};
 use crate::sys::{self, SvcStart, SysResult};
@@ -73,28 +75,36 @@ impl Kind {
     ];
 
     fn label(self) -> &'static str {
+        self.label_for(Locale::Portuguese)
+    }
+
+    fn label_for(self, locale: Locale) -> &'static str {
         match self {
-            Kind::Run => "Registro",
-            Kind::Folder => "Pasta Iniciar",
-            Kind::Task => "Tarefa",
-            Kind::Service => "Serviço",
+            Kind::Run => locale.text("Registro", "Registry"),
+            Kind::Folder => locale.text("Pasta Iniciar", "Startup folder"),
+            Kind::Task => locale.text("Tarefa", "Task"),
+            Kind::Service => locale.text("Serviço", "Service"),
             Kind::Driver => "Driver",
             Kind::Uwp => "App UWP",
             Kind::Winlogon => "Winlogon",
-            Kind::Other => "Outro",
+            Kind::Other => locale.text("Outro", "Other"),
         }
     }
 
     fn chip(self) -> &'static str {
+        self.chip_for(Locale::Portuguese)
+    }
+
+    fn chip_for(self, locale: Locale) -> &'static str {
         match self {
-            Kind::Run => "Registro",
-            Kind::Folder => "Pasta",
-            Kind::Task => "Tarefas",
-            Kind::Service => "Serviços",
-            Kind::Driver => "Drivers",
+            Kind::Run => locale.text("Registro", "Registry"),
+            Kind::Folder => locale.text("Pasta", "Folder"),
+            Kind::Task => locale.text("Tarefas", "Tasks"),
+            Kind::Service => locale.text("Serviços", "Services"),
+            Kind::Driver => locale.text("Drivers", "Drivers"),
             Kind::Uwp => "UWP",
             Kind::Winlogon => "Winlogon",
-            Kind::Other => "Outros",
+            Kind::Other => locale.text("Outros", "Other"),
         }
     }
 
@@ -140,20 +150,40 @@ impl Phase {
     }
 
     fn title(self) -> &'static str {
+        self.title_for(Locale::Portuguese)
+    }
+
+    fn title_for(self, locale: Locale) -> &'static str {
         match self {
-            Phase::Kernel => "Antes do Windows",
-            Phase::Machine => "Com a máquina",
-            Phase::Logon => "Ao entrar na conta",
-            Phase::Desktop => "Seus programas",
+            Phase::Kernel => locale.text("Antes do Windows", "Before Windows"),
+            Phase::Machine => locale.text("Com a máquina", "With the machine"),
+            Phase::Logon => locale.text("Ao entrar na conta", "At sign-in"),
+            Phase::Desktop => locale.text("Seus programas", "Your programs"),
         }
     }
 
     fn hint(self) -> &'static str {
+        self.hint_for(Locale::Portuguese)
+    }
+
+    fn hint_for(self, locale: Locale) -> &'static str {
         match self {
-            Phase::Kernel => "drivers e kernel: carregam antes de existir tela de logon",
-            Phase::Machine => "serviços e tarefas de boot: sobem sozinhos, mesmo sem ninguém logado",
-            Phase::Logon => "dispara no logon, antes da área de trabalho aparecer",
-            Phase::Desktop => "abre depois da área de trabalho — é aqui que mora o atraso do seu login",
+            Phase::Kernel => locale.text(
+                "drivers e kernel: carregam antes de existir tela de logon",
+                "drivers and kernel: load before the sign-in screen exists",
+            ),
+            Phase::Machine => locale.text(
+                "serviços e tarefas de boot: sobem sozinhos, mesmo sem ninguém logado",
+                "boot services and tasks: start even when nobody is signed in",
+            ),
+            Phase::Logon => locale.text(
+                "dispara no logon, antes da área de trabalho aparecer",
+                "starts at sign-in, before the desktop appears",
+            ),
+            Phase::Desktop => locale.text(
+                "abre depois da área de trabalho — é aqui que mora o atraso do seu login",
+                "opens after the desktop — this is where sign-in delays live",
+            ),
         }
     }
 
@@ -197,18 +227,35 @@ impl Status {
     }
 
     fn title(self) -> &'static str {
+        self.title_for(Locale::Portuguese)
+    }
+
+    fn title_for(self, locale: Locale) -> &'static str {
         match self {
-            Status::On => "SOBE COM O PC",
-            Status::Off => "NÃO SOBE",
-            Status::Broken => "QUEBRADAS",
+            Status::On => locale.text("SOBE COM O PC", "STARTS WITH THE PC"),
+            Status::Off => locale.text("NÃO SOBE", "DOES NOT START"),
+            Status::Broken => locale.text("QUEBRADAS", "BROKEN"),
         }
     }
 
     fn hint(self) -> &'static str {
+        self.hint_for(Locale::Portuguese)
+    }
+
+    fn hint_for(self, locale: Locale) -> &'static str {
         match self {
-            Status::On => "dispara sozinho toda vez que o Windows liga",
-            Status::Off => "continua instalado, mas o Windows não dispara mais",
-            Status::Broken => "a partida aponta para um arquivo que não existe mais",
+            Status::On => locale.text(
+                "dispara sozinho toda vez que o Windows liga",
+                "starts automatically whenever Windows boots",
+            ),
+            Status::Off => locale.text(
+                "continua instalado, mas o Windows não dispara mais",
+                "remains installed, but Windows no longer starts it",
+            ),
+            Status::Broken => locale.text(
+                "a partida aponta para um arquivo que não existe mais",
+                "startup points to a file that no longer exists",
+            ),
         }
     }
 
@@ -255,17 +302,25 @@ impl Grp {
     }
 
     fn title(self) -> String {
+        self.title_for(Locale::Portuguese)
+    }
+
+    fn title_for(self, locale: Locale) -> String {
         match self {
-            Grp::St(s) => s.title().to_string(),
-            Grp::Ph(p) => p.title().to_string(),
-            Grp::Kd(k) => k.label().to_string(),
+            Grp::St(s) => s.title_for(locale).to_string(),
+            Grp::Ph(p) => p.title_for(locale).to_string(),
+            Grp::Kd(k) => k.label_for(locale).to_string(),
         }
     }
 
     fn hint(self) -> &'static str {
+        self.hint_for(Locale::Portuguese)
+    }
+
+    fn hint_for(self, locale: Locale) -> &'static str {
         match self {
-            Grp::St(s) => s.hint(),
-            Grp::Ph(p) => p.hint(),
+            Grp::St(s) => s.hint_for(locale),
+            Grp::Ph(p) => p.hint_for(locale),
             Grp::Kd(_) => "",
         }
     }
@@ -310,11 +365,25 @@ enum Line {
 
 #[derive(Clone)]
 enum Target {
-    Run { machine: bool, wow64: bool, name: String },
-    Folder { common: bool, file_name: String, path: PathBuf },
-    Task { path: String },
-    Service { name: String },
-    Uwp { key: String },
+    Run {
+        machine: bool,
+        wow64: bool,
+        name: String,
+    },
+    Folder {
+        common: bool,
+        file_name: String,
+        path: PathBuf,
+    },
+    Task {
+        path: String,
+    },
+    Service {
+        name: String,
+    },
+    Uwp {
+        key: String,
+    },
     ReadOnly,
 }
 
@@ -345,7 +414,10 @@ enum Action {
     /// Alinha várias entradas de uma vez ao estado guardado num preset.
     Preset(String, Vec<(Entry, bool)>),
     /// Cria um atalho na pasta Iniciar do usuário apontando para um executável.
-    AddStartup { exe: String, label: String },
+    AddStartup {
+        exe: String,
+        label: String,
+    },
 }
 
 struct Pending {
@@ -427,7 +499,11 @@ impl Boot {
             entries: Vec::new(),
             resolved: HashMap::new(),
             last_refresh: None,
-            kinds: Kind::ALL.iter().copied().filter(|k| *k != Kind::Driver).collect(),
+            kinds: Kind::ALL
+                .iter()
+                .copied()
+                .filter(|k| *k != Kind::Driver)
+                .collect(),
             hide_microsoft: false,
             status_filter: None,
             only_running: false,
@@ -449,6 +525,29 @@ impl Boot {
         }
     }
 
+    pub fn snapshot_json(&mut self) -> serde_json::Value {
+        self.refresh();
+        json!({
+            "supported": true,
+            "entries": self.entries.iter().map(|entry| json!({
+                "id": entry.id,
+                "name": entry.name,
+                "command": entry.command,
+                "kind": entry.kind.label(),
+                "phase": entry.phase.title(),
+                "machine": entry.machine,
+                "enabled": entry.enabled,
+                "missing": entry.missing,
+                "can_toggle": entry.can_toggle,
+                "can_remove": entry.can_remove,
+                "microsoft": entry.microsoft,
+                "origin": entry.origin,
+                "running_hint": entry.running_hint,
+                "status": Status::of(entry).title(),
+            })).collect::<Vec<_>>(),
+        })
+    }
+
     fn refresh(&mut self) {
         self.entries = collect();
         self.resolved = self
@@ -460,7 +559,10 @@ impl Boot {
     }
 
     fn maybe_refresh(&mut self) {
-        let due = self.last_refresh.map(|t| t.elapsed() > Duration::from_secs(8)).unwrap_or(true);
+        let due = self
+            .last_refresh
+            .map(|t| t.elapsed() > Duration::from_secs(8))
+            .unwrap_or(true);
         if due {
             self.refresh();
         }
@@ -481,18 +583,27 @@ impl Boot {
     }
 
     fn maybe_refresh_usage(&mut self, tracker: &usage::Tracker) {
-        let due = self.usage_at.map(|t| t.elapsed() > Duration::from_secs(60)).unwrap_or(true);
+        let due = self
+            .usage_at
+            .map(|t| t.elapsed() > Duration::from_secs(60))
+            .unwrap_or(true);
         if due {
             self.refresh_usage(tracker);
         }
     }
 
     fn usage_of(&self, exe_lower: Option<&String>) -> RowUsage {
-        let Some(key) = exe_lower else { return RowUsage::default() };
+        let Some(key) = exe_lower else {
+            return RowUsage::default();
+        };
         match self.rank_idx.get(key) {
             Some(i) => {
                 let r = &self.rank[*i];
-                RowUsage { focus: r.focus_secs, open: r.open_secs, last: r.last_used }
+                RowUsage {
+                    focus: r.focus_secs,
+                    open: r.open_secs,
+                    last: r.last_used,
+                }
             }
             None => RowUsage::default(),
         }
@@ -520,6 +631,7 @@ impl Boot {
         let mut out = Vec::new();
         let mut queued: Vec<Action> = Vec::new();
         let mut confirm: Option<Pending> = None;
+        let locale = cfg.locale;
 
         let running = running_exes(procs);
         let q = search.trim().to_lowercase();
@@ -529,7 +641,11 @@ impl Boot {
             .iter()
             .filter(|e| self.kinds.contains(&e.kind))
             .filter(|e| !self.hide_microsoft || !e.microsoft)
-            .filter(|e| self.status_filter.map(|s| Status::of(e) == s).unwrap_or(true))
+            .filter(|e| {
+                self.status_filter
+                    .map(|s| Status::of(e) == s)
+                    .unwrap_or(true)
+            })
             .filter(|e| {
                 if !self.only_running {
                     return true;
@@ -543,7 +659,7 @@ impl Boot {
                 e.name.to_lowercase().contains(&q)
                     || e.command.to_lowercase().contains(&q)
                     || e.origin.to_lowercase().contains(&q)
-                    || e.kind.label().to_lowercase().contains(&q)
+                    || e.kind.label_for(locale).to_lowercase().contains(&q)
             })
             .cloned()
             .collect();
@@ -609,21 +725,21 @@ impl Boot {
 
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Partida").strong().size(16.0));
+            ui.label(RichText::new(locale.text("Partida", "Startup")).strong().size(16.0));
             ui.label(
-                RichText::new("— tudo que o Windows dispara no boot e no logon, sem o recorte do Gerenciador de Tarefas")
+                RichText::new(locale.text("— tudo que o Windows dispara no boot e no logon, sem o recorte do Gerenciador de Tarefas", "— everything Windows starts at boot and sign-in, beyond Task Manager's limited list"))
                     .color(MUTED),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Atualizar").on_hover_text("Relê registro, pasta Iniciar, tarefas e serviços").clicked() {
+                if ui.small_button(locale.text("Atualizar", "Refresh")).on_hover_text(locale.text("Relê registro, pasta Iniciar, tarefas e serviços", "Rereads the registry, Startup folder, tasks, and services")).clicked() {
                     self.last_refresh = None;
                 }
-                let scan = egui::Button::new(RichText::new("⌕ Scan de uso").color(Color32::WHITE).strong())
+                let scan = egui::Button::new(RichText::new(locale.text("⌕ Scan de uso", "⌕ Usage scan")).color(Color32::WHITE).strong())
                     .fill(ACCENT_BG)
                     .stroke(egui::Stroke::new(1.0_f32, ACCENT));
                 if ui
                     .add(scan)
-                    .on_hover_text("Mede quais programas você mais usa (tempo em foco + tempo aberto) e sugere o que vale colocar na partida")
+                    .on_hover_text(locale.text("Mede quais programas você mais usa (tempo em foco + tempo aberto) e sugere o que vale colocar na partida", "Measures which programs you use most (focused + open time) and suggests what belongs in startup"))
                     .clicked()
                 {
                     self.refresh_usage(tracker);
@@ -631,7 +747,7 @@ impl Boot {
                 }
                 if self.busy > 0 {
                     ui.spinner();
-                    ui.label(RichText::new(format!("{} ação(ões) aguardando UAC", self.busy)).color(MUTED).small());
+                    ui.label(RichText::new(format!("{} {}", self.busy, locale.text("ação(ões) aguardando UAC", "action(s) waiting for UAC"))).color(MUTED).small());
                 }
             });
         });
@@ -645,18 +761,25 @@ impl Boot {
                 let n = self.entries.iter().filter(|e| Status::of(e) == st).count();
                 let sel = self.status_filter == Some(st);
                 let c = st.color();
-                let text = RichText::new(format!("{}  {}  {n}", st.glyph(), st.title()))
+                let text = RichText::new(format!("{}  {}  {n}", st.glyph(), st.title_for(locale)))
                     .size(12.0)
                     .strong()
-                    .color(if n == 0 && !sel { MUTED.gamma_multiply(0.7) } else { c });
+                    .color(if n == 0 && !sel {
+                        MUTED.gamma_multiply(0.7)
+                    } else {
+                        c
+                    });
                 let btn = egui::Button::new(text)
                     .fill(if sel { c.gamma_multiply(0.22) } else { SURFACE })
                     .stroke(egui::Stroke::new(1.0_f32, if sel { c } else { LINE }));
                 if ui
                     .add(btn)
-                    .on_hover_text(format!("{}
+                    .on_hover_text(format!(
+                        "{}
 
-Clique para ver só estas.", st.hint()))
+Clique para ver só estas.",
+                        st.hint_for(locale)
+                    ))
                     .clicked()
                 {
                     self.status_filter = if sel { None } else { Some(st) };
@@ -664,9 +787,12 @@ Clique para ver só estas.", st.hint()))
             }
             let total = self.entries.len();
             ui.label(
-                RichText::new(format!("de {total} entradas · {} visíveis agora", filtered.len()))
-                    .small()
-                    .color(MUTED),
+                RichText::new(format!(
+                    "de {total} entradas · {} visíveis agora",
+                    filtered.len()
+                ))
+                .small()
+                .color(MUTED),
             );
         });
         ui.add_space(6.0);
@@ -676,14 +802,18 @@ Clique para ver só estas.", st.hint()))
             for k in Kind::ALL {
                 let n = self.entries.iter().filter(|e| e.kind == k).count();
                 let on = self.kinds.contains(&k);
-                let label = format!("{} {n}", k.chip());
-                let text = RichText::new(label).size(12.0).color(if on { k.color() } else { MUTED });
+                let label = format!("{} {n}", k.chip_for(locale));
+                let text =
+                    RichText::new(label)
+                        .size(12.0)
+                        .color(if on { k.color() } else { MUTED });
                 let btn = if on {
-                    egui::Button::new(text).stroke(egui::Stroke::new(1.0_f32, k.color().gamma_multiply(0.55)))
+                    egui::Button::new(text)
+                        .stroke(egui::Stroke::new(1.0_f32, k.color().gamma_multiply(0.55)))
                 } else {
                     egui::Button::new(text).fill(Color32::TRANSPARENT)
                 };
-                if ui.add(btn).on_hover_text(k.label()).clicked() {
+                if ui.add(btn).on_hover_text(k.label_for(locale)).clicked() {
                     if on && self.kinds.len() > 1 {
                         self.kinds.remove(&k);
                     } else {
@@ -693,15 +823,23 @@ Clique para ver só estas.", st.hint()))
             }
         });
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Separar por:").small().color(MUTED));
+            ui.label(
+                RichText::new(locale.text("Separar por:", "Group by:"))
+                    .small()
+                    .color(MUTED),
+            );
             let cur = cfg.boot_group;
             let mut pick: Option<BootGroup> = None;
             egui::ComboBox::from_id_salt("boot_group")
-                .selected_text(RichText::new(cur.label()).size(12.0))
+                .selected_text(RichText::new(cur.label_for(locale)).size(12.0))
                 .width(168.0)
                 .show_ui(ui, |ui| {
                     for g in BootGroup::ALL {
-                        if ui.selectable_label(cur == g, g.label()).on_hover_text(g.tip()).clicked() {
+                        if ui
+                            .selectable_label(cur == g, g.label_for(locale))
+                            .on_hover_text(g.tip_for(locale))
+                            .clicked()
+                        {
                             pick = Some(g);
                         }
                     }
@@ -714,7 +852,11 @@ Clique para ver só estas.", st.hint()))
                 }
             }
             if cur != BootGroup::Flat {
-                if ui.small_button("⊟").on_hover_text("Recolher todos os grupos").clicked() {
+                if ui
+                    .small_button("⊟")
+                    .on_hover_text(locale.text("Recolher todos os grupos", "Collapse all groups"))
+                    .clicked()
+                {
                     // Vale varrer tudo, não só o que está filtrado: chave sobrando no conjunto
                     // não atrapalha, chave faltando deixaria um grupo aberto sem motivo.
                     for e in &self.entries {
@@ -728,13 +870,23 @@ Clique para ver só estas.", st.hint()))
                         }
                     }
                 }
-                if ui.small_button("⊞").on_hover_text("Abrir todos os grupos").clicked() {
+                if ui
+                    .small_button("⊞")
+                    .on_hover_text(locale.text("Abrir todos os grupos", "Expand all groups"))
+                    .clicked()
+                {
                     self.collapsed.clear();
                 }
             }
             ui.separator();
-            ui.checkbox(&mut self.hide_microsoft, "esconder Microsoft");
-            ui.checkbox(&mut self.only_running, "só as que estão rodando");
+            ui.checkbox(
+                &mut self.hide_microsoft,
+                locale.text("esconder Microsoft", "hide Microsoft"),
+            );
+            ui.checkbox(
+                &mut self.only_running,
+                locale.text("só as que estão rodando", "running only"),
+            );
             ui.separator();
             self.presets_bar(ui, &mut confirm, cfg, &mut out);
         });
@@ -748,7 +900,7 @@ Clique para ver só estas.", st.hint()))
         let mut sort_click: Option<SortKey> = None;
 
         if self.scan_open {
-            self.scan_panel(ui, &mut add);
+            self.scan_panel(ui, &mut add, locale);
             ui.add_space(4.0);
         }
 
@@ -756,13 +908,27 @@ Clique para ver só estas.", st.hint()))
         let sort_desc = self.sort_desc;
         let head = |ui: &mut egui::Ui, text: &str, key: SortKey, click: &mut Option<SortKey>| {
             let arrow = if sort == key {
-                if sort_desc { " ▼" } else { " ▲" }
+                if sort_desc {
+                    " ▼"
+                } else {
+                    " ▲"
+                }
             } else {
                 ""
             };
             let color = if sort == key { ACCENT } else { MUTED };
-            let b = egui::Button::new(RichText::new(format!("{text}{arrow}")).small().color(color).strong()).frame(false);
-            if ui.add(b).on_hover_text("Ordenar por esta coluna").clicked() {
+            let b = egui::Button::new(
+                RichText::new(format!("{text}{arrow}"))
+                    .small()
+                    .color(color)
+                    .strong(),
+            )
+            .frame(false);
+            if ui
+                .add(b)
+                .on_hover_text(locale.text("Ordenar por esta coluna", "Sort by this column"))
+                .clicked()
+            {
                 *click = Some(key);
             }
         };
@@ -783,7 +949,9 @@ Clique para ver só estas.", st.hint()))
                 filtered.iter().map(|e| grp_path(gb, e)).collect();
             let tally = |r: std::ops::Range<usize>| -> (usize, usize) {
                 let run = r.clone().filter(|&j| row_running[j]).count();
-                let on = r.filter(|&j| filtered[j].enabled && !filtered[j].missing).count();
+                let on = r
+                    .filter(|&j| filtered[j].enabled && !filtered[j].missing)
+                    .count();
                 (run, on)
             };
             let mut i = 0usize;
@@ -855,33 +1023,33 @@ Clique para ver só estas.", st.hint()))
         if filtered.is_empty() {
             ui.add_space(24.0);
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new("Nenhuma entrada bate com os filtros de agora").color(MUTED));
+                ui.label(RichText::new(locale.text("Nenhuma entrada bate com os filtros de agora", "No entries match the current filters")).color(MUTED));
                 ui.label(
-                    RichText::new("Tire o filtro de estado lá em cima, ligue mais tipos ou limpe a busca.")
+                    RichText::new(locale.text("Tire o filtro de estado lá em cima, ligue mais tipos ou limpe a busca.", "Clear the state filter above, enable more source types, or clear the search."))
                         .small()
                         .color(MUTED),
                 );
             });
         } else {
-        // Onde a faixa de cabeçalho começa e termina. A faixa é pintada da última coluna,
-        // que desenha depois de todas as outras e não tem recorte próprio.
-        let band_x = ui.available_rect_before_wrap().x_range();
-        let mut toggle_group: Option<String> = None;
-        let heights: Vec<f32> = lines
-            .iter()
-            .map(|l| match l {
-                Line::Head(h) => {
-                    if heads[*h].depth == 0 {
-                        30.0
-                    } else {
-                        24.0
+            // Onde a faixa de cabeçalho começa e termina. A faixa é pintada da última coluna,
+            // que desenha depois de todas as outras e não tem recorte próprio.
+            let band_x = ui.available_rect_before_wrap().x_range();
+            let mut toggle_group: Option<String> = None;
+            let heights: Vec<f32> = lines
+                .iter()
+                .map(|l| match l {
+                    Line::Head(h) => {
+                        if heads[*h].depth == 0 {
+                            30.0
+                        } else {
+                            24.0
+                        }
                     }
-                }
-                Line::Item(_) => 26.0,
-            })
-            .collect();
+                    Line::Item(_) => 26.0,
+                })
+                .collect();
 
-        TableBuilder::new(ui)
+            TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
             .sense(egui::Sense::click())
@@ -897,15 +1065,15 @@ Clique para ver só estas.", st.hint()))
             .header(22.0, |mut h| {
                 h.col(|ui| {
                     ui.label(RichText::new("▲").small().strong().color(Status::On.color()))
-                        .on_hover_text("Marcado = sobe com o PC. Desmarcar tira da partida sem desinstalar nada.");
+                        .on_hover_text(locale.text("Marcado = sobe com o PC. Desmarcar tira da partida sem desinstalar nada.", "Checked = starts with the PC. Unchecking removes it from startup without uninstalling anything."));
                 });
-                h.col(|ui| head(ui, "Nome", SortKey::Name, &mut sort_click));
-                h.col(|ui| head(ui, "Tipo", SortKey::Kind, &mut sort_click));
-                h.col(|ui| head(ui, "Escopo", SortKey::Scope, &mut sort_click));
-                h.col(|ui| { ui.label(RichText::new("Comando").small().color(MUTED).strong()); });
-                h.col(|ui| head(ui, "Agora", SortKey::State, &mut sort_click));
-                h.col(|ui| head(ui, "Uso", SortKey::Usage, &mut sort_click));
-                h.col(|ui| { ui.label(RichText::new("Ações").small().color(MUTED).strong()); });
+                h.col(|ui| head(ui, locale.text("Nome", "Name"), SortKey::Name, &mut sort_click));
+                h.col(|ui| head(ui, locale.text("Tipo", "Type"), SortKey::Kind, &mut sort_click));
+                h.col(|ui| head(ui, locale.text("Escopo", "Scope"), SortKey::Scope, &mut sort_click));
+                h.col(|ui| { ui.label(RichText::new(locale.text("Comando", "Command")).small().color(MUTED).strong()); });
+                h.col(|ui| head(ui, locale.text("Agora", "Now"), SortKey::State, &mut sort_click));
+                h.col(|ui| head(ui, locale.text("Uso", "Usage"), SortKey::Usage, &mut sort_click));
+                h.col(|ui| { ui.label(RichText::new(locale.text("Ações", "Actions")).small().color(MUTED).strong()); });
             })
             .body(|body| {
                 body.heterogeneous_rows(heights.into_iter(), |mut row| {
@@ -951,11 +1119,11 @@ Clique para ver só estas.", st.hint()))
                                 let t = p.text(
                                     egui::pos2(x + 16.0, cy),
                                     egui::Align2::LEFT_CENTER,
-                                    h.grp.title(),
+                                    h.grp.title_for(locale),
                                     egui::FontId::proportional(if deep { 13.0 } else { 12.0 }),
                                     c,
                                 );
-                                let hint = h.grp.hint();
+                                let hint = h.grp.hint_for(locale);
                                 if !hint.is_empty() {
                                     p.text(
                                         egui::pos2(t.right() + 10.0, cy),
@@ -965,15 +1133,16 @@ Clique para ver só estas.", st.hint()))
                                         MUTED,
                                     );
                                 }
-                                let plural = if h.total == 1 { "entrada" } else { "entradas" };
-                                let counts = if matches!(h.grp, Grp::St(_)) {
-                                    format!("{} {plural} · {} rodando agora", h.total, h.running)
-                                } else if deep {
-                                    format!("{}/{} sobem com o PC · {} rodando", h.on, h.total, h.running)
+                                let counts = if locale == Locale::Portuguese {
+                                    let plural = if h.total == 1 { "entrada" } else { "entradas" };
+                                    if matches!(h.grp, Grp::St(_)) { format!("{} {plural} · {} rodando agora", h.total, h.running) }
+                                    else if deep { format!("{}/{} sobem com o PC · {} rodando", h.on, h.total, h.running) }
+                                    else { format!("{} {plural} · {} rodando", h.total, h.running) }
                                 } else {
-                                    // Já está dentro de um bloco de estado: repetir "23/23 sobem"
-                                    // seria dizer duas vezes a mesma coisa.
-                                    format!("{} {plural} · {} rodando", h.total, h.running)
+                                    let plural = if h.total == 1 { "entry" } else { "entries" };
+                                    if matches!(h.grp, Grp::St(_)) { format!("{} {plural} · {} running now", h.total, h.running) }
+                                    else if deep { format!("{}/{} start with the PC · {} running", h.on, h.total, h.running) }
+                                    else { format!("{} {plural} · {} running", h.total, h.running) }
                                 };
                                 p.text(
                                     egui::pos2(band.right() - 10.0, cy),
@@ -999,9 +1168,9 @@ Clique para ver só estas.", st.hint()))
                                     if ui
                                         .checkbox(&mut on, "")
                                         .on_hover_text(if e.enabled {
-                                            "Sobe com o PC — desmarque para tirar da partida"
+                                            locale.text("Sobe com o PC — desmarque para tirar da partida", "Starts with the PC — uncheck to remove from startup")
                                         } else {
-                                            "Não sobe — marque para voltar a subir com o PC"
+                                            locale.text("Não sobe — marque para voltar a subir com o PC", "Does not start — check to start with the PC again")
                                         })
                                         .changed()
                                     {
@@ -1010,7 +1179,7 @@ Clique para ver só estas.", st.hint()))
                                 } else {
                                     let mut dummy = e.enabled;
                                     ui.add_enabled(false, egui::Checkbox::new(&mut dummy, ""))
-                                        .on_hover_text("Esta origem não se liga nem desliga por aqui");
+                                        .on_hover_text(locale.text("Esta origem não se liga nem desliga por aqui", "This source cannot be toggled here"));
                                 }
                             });
                             row.col(|ui| {
@@ -1035,19 +1204,19 @@ Clique para ver só estas.", st.hint()))
                                 ui.add(egui::Label::new(RichText::new(&e.name).strong().color(name_c)).truncate());
                             });
                             row.col(|ui| {
-                                ui.label(RichText::new(e.kind.label()).small().color(e.kind.color()))
+                                ui.label(RichText::new(e.kind.label_for(locale)).small().color(e.kind.color()))
                                     .on_hover_text(&e.origin);
                             });
                             row.col(|ui| {
                                 ui.label(
-                                    RichText::new(if e.machine { "máquina" } else { "usuário" })
+                                    RichText::new(if e.machine { locale.text("máquina", "machine") } else { locale.text("usuário", "user") })
                                         .small()
                                         .color(MUTED),
                                 )
                                 .on_hover_text(if e.machine {
-                                    "Vale para todas as contas do PC — mexer pede admin"
+                                    locale.text("Vale para todas as contas do PC — mexer pede admin", "Applies to every account on the PC — changing it requires admin rights")
                                 } else {
-                                    "Só para a sua conta"
+                                    locale.text("Só para a sua conta", "Only your account")
                                 });
                             });
                             row.col(|ui| {
@@ -1056,18 +1225,18 @@ Clique para ver só estas.", st.hint()))
                             });
                             row.col(|ui| {
                                 let (txt, c) = if e.missing {
-                                    ("ausente", Status::Broken.color())
+                                    (locale.text("ausente", "missing"), Status::Broken.color())
                                 } else if is_run {
-                                    ("rodando", Color32::from_rgb(120, 200, 140))
+                                    (locale.text("rodando", "running"), Color32::from_rgb(120, 200, 140))
                                 } else {
-                                    ("parado", MUTED)
+                                    (locale.text("parado", "stopped"), MUTED)
                                 };
                                 ui.label(RichText::new(txt).small().color(c)).on_hover_text(if e.missing {
-                                    "O arquivo apontado não existe mais"
+                                    locale.text("O arquivo apontado não existe mais", "The referenced file no longer exists")
                                 } else if is_run {
-                                    "Tem processo deste executável rodando agora"
+                                    locale.text("Tem processo deste executável rodando agora", "A process for this executable is running now")
                                 } else {
-                                    "Nenhum processo deste executável rodando agora"
+                                    locale.text("Nenhum processo deste executável rodando agora", "No process for this executable is running now")
                                 });
                             });
                             row.col(|ui| {
@@ -1077,12 +1246,9 @@ Clique para ver só estas.", st.hint()))
                                 } else {
                                     let strong = u.total() >= 3600;
                                     let c = if strong { Color32::from_rgb(120, 200, 140) } else { MUTED };
-                                    ui.label(RichText::new(usage::fmt_secs(u.total())).small().color(c)).on_hover_text(format!(
-                                        "Em foco: {}\nAberto (medido pelo RamDog): {}\nÚltima vez: {}",
-                                        usage::fmt_secs(u.focus),
-                                        usage::fmt_secs(u.open),
-                                        usage::fmt_ago(u.last)
-                                    ));
+                                    ui.label(RichText::new(usage::fmt_secs(u.total())).small().color(c)).on_hover_text(
+                                        if locale == Locale::Portuguese { format!("Em foco: {}\nAberto (medido pelo RamDog): {}\nÚltima vez: {}", usage::fmt_secs(u.focus), usage::fmt_secs(u.open), usage::fmt_ago(u.last)) } else { format!("Focused: {}\nOpen (measured by RamDog): {}\nLast used: {}", usage::fmt_secs(u.focus), usage::fmt_secs(u.open), usage::fmt_ago(u.last)) }
+                                    );
                                 }
                             });
                             row.col(|ui| {
@@ -1090,12 +1256,12 @@ Clique para ver só estas.", st.hint()))
                                 if is_run {
                                     if let Some(name) = exe_name_from_cmd(&e.command) {
                                         let pids: Vec<u32> = procs.iter().filter(|p| p.name_lower == name).map(|p| p.pid).collect();
-                                        if !pids.is_empty() && ui.small_button("Finalizar").clicked() {
+                                        if !pids.is_empty() && ui.small_button(locale.text("Finalizar", "Terminate")).clicked() {
                                             kill = Some(pids);
                                         }
                                     }
                                 }
-                                if e.can_remove && ui.add(egui::Button::new(RichText::new("Remover").color(Color32::from_rgb(232, 120, 100))).small()).clicked() {
+                                if e.can_remove && ui.add(egui::Button::new(RichText::new(locale.text("Remover", "Remove")).color(Color32::from_rgb(232, 120, 100))).small()).clicked() {
                                     remove = Some(e.clone());
                                 }
                             });
@@ -1108,11 +1274,11 @@ Clique para ver só estas.", st.hint()))
                 });
             });
 
-        if let Some(k) = toggle_group {
-            if !self.collapsed.remove(&k) {
-                self.collapsed.insert(k);
+            if let Some(k) = toggle_group {
+                if !self.collapsed.remove(&k) {
+                    self.collapsed.insert(k);
+                }
             }
-        }
         }
 
         if let Some(k) = sort_click {
@@ -1135,8 +1301,21 @@ Clique para ver só estas.", st.hint()))
         }
         if let Some(e) = remove {
             confirm = Some(Pending {
-                title: format!("Remover {} da partida?", e.name),
-                lines: vec![e.origin.clone(), e.command.clone(), "O programa continua instalado. Só deixa de subir com o PC.".into()],
+                title: if locale == Locale::Portuguese {
+                    format!("Remover {} da partida?", e.name)
+                } else {
+                    format!("Remove {} from startup?", e.name)
+                },
+                lines: vec![
+                    e.origin.clone(),
+                    e.command.clone(),
+                    locale
+                        .text(
+                            "O programa continua instalado. Só deixa de subir com o PC.",
+                            "The program remains installed; it simply stops starting with the PC.",
+                        )
+                        .into(),
+                ],
                 action: Action::Remove(e),
             });
         }
@@ -1148,14 +1327,22 @@ Clique para ver só estas.", st.hint()))
             self.pending = Some(p);
         }
         for a in queued {
-            self.run(a, is_admin, &mut out);
+            self.run(a, is_admin, locale, &mut out);
         }
 
         if self.pending.is_some() {
             let mut go = false;
             let mut cancel = false;
-            let title = self.pending.as_ref().map(|p| p.title.clone()).unwrap_or_default();
-            let lines = self.pending.as_ref().map(|p| p.lines.clone()).unwrap_or_default();
+            let title = self
+                .pending
+                .as_ref()
+                .map(|p| p.title.clone())
+                .unwrap_or_default();
+            let lines = self
+                .pending
+                .as_ref()
+                .map(|p| p.lines.clone())
+                .unwrap_or_default();
             egui::Modal::new(egui::Id::new("boot_confirm")).show(ui.ctx(), |ui| {
                 ui.set_width(520.0);
                 ui.heading(&title);
@@ -1165,10 +1352,18 @@ Clique para ver só estas.", st.hint()))
                 }
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if ui.add(egui::Button::new(RichText::new("Confirmar").strong()).fill(Color32::from_rgb(160, 60, 55))).clicked() {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new(locale.text("Confirmar", "Confirm")).strong(),
+                            )
+                            .fill(Color32::from_rgb(160, 60, 55)),
+                        )
+                        .clicked()
+                    {
                         go = true;
                     }
-                    if ui.button("Cancelar").clicked() {
+                    if ui.button(locale.text("Cancelar", "Cancel")).clicked() {
                         cancel = true;
                     }
                 });
@@ -1178,7 +1373,7 @@ Clique para ver só estas.", st.hint()))
             }
             if go {
                 if let Some(p) = self.pending.take() {
-                    self.run(p.action, is_admin, &mut out);
+                    self.run(p.action, is_admin, locale, &mut out);
                 }
             }
         }
@@ -1195,16 +1390,16 @@ Clique para ver só estas.", st.hint()))
                         ui.horizontal_wrapped(|ui| {
                             ui.label(RichText::new(&e.name).strong());
                             ui.label(
-                                RichText::new(format!("{} {}", st.glyph(), st.title()))
+                                RichText::new(format!("{} {}", st.glyph(), st.title_for(locale)))
                                     .color(st.color())
                                     .small()
                                     .strong(),
                             );
-                            ui.label(RichText::new(e.kind.label()).color(e.kind.color()).small());
+                            ui.label(RichText::new(e.kind.label_for(locale)).color(e.kind.color()).small());
                             ui.label(RichText::new(&e.origin).weak().small());
                         });
                         ui.label(
-                            RichText::new(format!("{} — {}", e.phase.title(), e.phase.hint()))
+                            RichText::new(format!("{} — {}", e.phase.title_for(locale), e.phase.hint_for(locale)))
                                 .color(e.phase.color())
                                 .small(),
                         );
@@ -1212,7 +1407,7 @@ Clique para ver só estas.", st.hint()))
                         if !e.can_toggle {
                             ui.label(
                                 RichText::new(
-                                    "Só leitura: mexer nesta origem daqui derrubaria o logon ou o boot.",
+                                    locale.text("Só leitura: mexer nesta origem daqui derrubaria o logon ou o boot.", "Read-only: changing this source here could break sign-in or boot."),
                                 )
                                 .color(MUTED)
                                 .small(),
@@ -1234,9 +1429,18 @@ Clique para ver só estas.", st.hint()))
         cfg: &mut Config,
         out: &mut Vec<BootOut>,
     ) {
-        ui.label(RichText::new("Presets:").small().color(MUTED));
+        let locale = cfg.locale;
+        ui.label(
+            RichText::new(locale.text("Presets:", "Presets:"))
+                .small()
+                .color(MUTED),
+        );
         let names: Vec<String> = cfg.boot_presets.keys().cloned().collect();
-        let shown = if self.preset_sel.is_empty() { "—".to_string() } else { self.preset_sel.clone() };
+        let shown = if self.preset_sel.is_empty() {
+            "—".to_string()
+        } else {
+            self.preset_sel.clone()
+        };
         egui::ComboBox::from_id_salt("boot_preset")
             .selected_text(RichText::new(shown).size(12.0))
             .width(140.0)
@@ -1249,40 +1453,109 @@ Clique para ver só estas.", st.hint()))
 
         let has_sel = cfg.boot_presets.contains_key(&self.preset_sel);
         if ui
-            .add_enabled(has_sel, egui::Button::new(RichText::new("Aplicar").small()))
-            .on_hover_text("Liga e desliga as entradas até a partida ficar igual ao preset")
+            .add_enabled(
+                has_sel,
+                egui::Button::new(RichText::new(locale.text("Aplicar", "Apply")).small()),
+            )
+            .on_hover_text(locale.text(
+                "Liga e desliga as entradas até a partida ficar igual ao preset",
+                "Toggles entries until startup matches the preset",
+            ))
             .clicked()
         {
-            let want = cfg.boot_presets.get(&self.preset_sel).cloned().unwrap_or_default();
+            let want = cfg
+                .boot_presets
+                .get(&self.preset_sel)
+                .cloned()
+                .unwrap_or_default();
             let diff = preset_diff(&self.entries, &want);
             if diff.is_empty() {
-                out.push(BootOut::Toast(format!("{}: a partida já está assim", self.preset_sel), false));
+                out.push(BootOut::Toast(
+                    if locale == Locale::Portuguese {
+                        format!("{}: a partida já está assim", self.preset_sel)
+                    } else {
+                        format!("{}: startup already matches", self.preset_sel)
+                    },
+                    false,
+                ));
             } else {
                 let machine = diff.iter().filter(|(e, _)| e.machine).count();
                 let mut lines: Vec<String> = diff
                     .iter()
                     .take(12)
-                    .map(|(e, w)| format!("{} {}", if *w { "ligar" } else { "desligar" }, e.name))
+                    .map(|(e, w)| {
+                        format!(
+                            "{} {}",
+                            if locale == Locale::Portuguese {
+                                if *w {
+                                    "ligar"
+                                } else {
+                                    "desligar"
+                                }
+                            } else {
+                                if *w {
+                                    "enable"
+                                } else {
+                                    "disable"
+                                }
+                            },
+                            e.name
+                        )
+                    })
                     .collect();
                 if diff.len() > 12 {
-                    lines.push(format!("… e mais {}", diff.len() - 12));
+                    lines.push(if locale == Locale::Portuguese {
+                        format!("… e mais {}", diff.len() - 12)
+                    } else {
+                        format!("… and {} more", diff.len() - 12)
+                    });
                 }
                 if machine > 0 {
-                    lines.push(format!("{machine} entrada(s) de máquina — vai pedir UAC uma vez só."));
+                    lines.push(if locale == Locale::Portuguese {
+                        format!("{machine} entrada(s) de máquina — vai pedir UAC uma vez só.")
+                    } else {
+                        format!("{machine} machine entr(y/ies) — one UAC prompt will be required.")
+                    });
                 }
                 *confirm = Some(Pending {
-                    title: format!("Aplicar preset \"{}\" — {} mudança(s)?", self.preset_sel, diff.len()),
+                    title: if locale == Locale::Portuguese {
+                        format!(
+                            "Aplicar preset \"{}\" — {} mudança(s)?",
+                            self.preset_sel,
+                            diff.len()
+                        )
+                    } else {
+                        format!(
+                            "Apply preset \"{}\" — {} change(s)?",
+                            self.preset_sel,
+                            diff.len()
+                        )
+                    },
                     lines,
                     action: Action::Preset(self.preset_sel.clone(), diff),
                 });
             }
         }
         if ui
-            .add_enabled(has_sel, egui::Button::new(RichText::new("Excluir").small().color(Color32::from_rgb(232, 120, 100))))
+            .add_enabled(
+                has_sel,
+                egui::Button::new(
+                    RichText::new(locale.text("Excluir", "Delete"))
+                        .small()
+                        .color(Color32::from_rgb(232, 120, 100)),
+                ),
+            )
             .clicked()
         {
             cfg.boot_presets.remove(&self.preset_sel);
-            out.push(BootOut::Toast(format!("preset \"{}\" excluído", self.preset_sel), false));
+            out.push(BootOut::Toast(
+                if locale == Locale::Portuguese {
+                    format!("preset \"{}\" excluído", self.preset_sel)
+                } else {
+                    format!("preset \"{}\" deleted", self.preset_sel)
+                },
+                false,
+            ));
             self.preset_sel.clear();
             out.push(BootOut::SaveCfg);
         }
@@ -1290,13 +1563,21 @@ Clique para ver só estas.", st.hint()))
         ui.add_space(6.0);
         ui.add(
             egui::TextEdit::singleline(&mut self.preset_name)
-                .hint_text("nome do preset")
+                .hint_text(locale.text("nome do preset", "preset name"))
                 .desired_width(120.0),
         );
         let can_save = !self.preset_name.trim().is_empty() && !self.entries.is_empty();
         if ui
-            .add_enabled(can_save, egui::Button::new(RichText::new("Salvar atual").small()))
-            .on_hover_text("Guarda o estado ligado/desligado de todas as entradas que dá para alternar")
+            .add_enabled(
+                can_save,
+                egui::Button::new(
+                    RichText::new(locale.text("Salvar atual", "Save current")).small(),
+                ),
+            )
+            .on_hover_text(locale.text(
+                "Guarda o estado ligado/desligado de todas as entradas que dá para alternar",
+                "Saves the enabled/disabled state of every switchable entry",
+            ))
             .clicked()
         {
             let name = self.preset_name.trim().to_string();
@@ -1310,13 +1591,25 @@ Clique para ver só estas.", st.hint()))
             cfg.boot_presets.insert(name.clone(), snap);
             self.preset_sel = name.clone();
             self.preset_name.clear();
-            out.push(BootOut::Toast(format!("preset \"{name}\" salvo com {n} entradas"), false));
+            out.push(BootOut::Toast(
+                if locale == Locale::Portuguese {
+                    format!("preset \"{name}\" salvo com {n} entradas")
+                } else {
+                    format!("preset \"{name}\" saved with {n} entries")
+                },
+                false,
+            ));
             out.push(BootOut::SaveCfg);
         }
     }
 
     /// Painel do Scan: os programas mais usados, com ícone, e um botão para pôr na partida.
-    fn scan_panel(&mut self, ui: &mut egui::Ui, add: &mut Option<(String, String)>) {
+    fn scan_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        add: &mut Option<(String, String)>,
+        locale: Locale,
+    ) {
         // Quem já está na partida não precisa de sugestão — só de um selo.
         let already: HashSet<String> = self
             .resolved
@@ -1339,7 +1632,10 @@ Clique para ver só estas.", st.hint()))
         }
 
         let top: Vec<usage::Ranked> = self.rank.iter().take(30).cloned().collect();
-        let icons: Vec<Option<TextureHandle>> = top.iter().map(|r| self.icons.get(&r.path.to_lowercase())).collect();
+        let icons: Vec<Option<TextureHandle>> = top
+            .iter()
+            .map(|r| self.icons.get(&r.path.to_lowercase()))
+            .collect();
         let mut close = false;
 
         egui::Frame::new()
@@ -1348,14 +1644,14 @@ Clique para ver só estas.", st.hint()))
             .inner_margin(egui::Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("O que você mais usa neste PC").strong().size(14.0));
+                    ui.label(RichText::new(locale.text("O que você mais usa neste PC", "What you use most on this PC")).strong().size(14.0));
                     ui.label(
-                        RichText::new("— tempo em foco (histórico do Windows) + tempo aberto medido pelo RamDog")
+                        RichText::new(locale.text("— tempo em foco (histórico do Windows) + tempo aberto medido pelo RamDog", "— focused time (Windows history) + open time measured by RamDog"))
                             .small()
                             .color(MUTED),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("Fechar").clicked() {
+                        if ui.small_button(locale.text("Fechar", "Close")).clicked() {
                             close = true;
                         }
                     });
@@ -1364,8 +1660,7 @@ Clique para ver só estas.", st.hint()))
                 if top.is_empty() {
                     ui.label(
                         RichText::new(
-                            "Nada medido ainda. O histórico do Windows (UserAssist) pode estar limpo — \
-                             deixe o RamDog aberto e a contagem própria começa a preencher a lista.",
+                            locale.text("Nada medido ainda. O histórico do Windows (UserAssist) pode estar limpo — deixe o RamDog aberto e a contagem própria começa a preencher a lista.", "Nothing measured yet. Windows history (UserAssist) may be empty — leave RamDog open and its own measurements will fill the list."),
                         )
                         .color(MUTED),
                     );
@@ -1391,25 +1686,25 @@ Clique para ver só estas.", st.hint()))
                                 92.0,
                                 RichText::new(usage::fmt_secs(r.focus_secs + r.open_secs)).color(Color32::from_rgb(120, 200, 140)),
                             )
-                            .on_hover_text(format!(
-                                "Em foco: {}\nAberto com janela (medido pelo RamDog): {}",
-                                usage::fmt_secs(r.focus_secs),
-                                usage::fmt_secs(r.open_secs)
-                            ));
+                            .on_hover_text(if locale == Locale::Portuguese {
+                                format!("Em foco: {}\nAberto com janela (medido pelo RamDog): {}", usage::fmt_secs(r.focus_secs), usage::fmt_secs(r.open_secs))
+                            } else {
+                                format!("Focused: {}\nOpen with a window (measured by RamDog): {}", usage::fmt_secs(r.focus_secs), usage::fmt_secs(r.open_secs))
+                            });
                             cell(ui, 60.0, RichText::new(format!("{}×", r.launches)).small().color(MUTED))
-                                .on_hover_text("Vezes que o programa foi aberto");
+                                .on_hover_text(locale.text("Vezes que o programa foi aberto", "Times the program was opened"));
                             cell(ui, 96.0, RichText::new(usage::fmt_ago(r.last_used)).small().color(MUTED))
-                                .on_hover_text("Última vez usado");
+                                .on_hover_text(locale.text("Última vez usado", "Last used"));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if on_startup {
                                     ui.label(
-                                        RichText::new("já na partida")
+                                        RichText::new(locale.text("já na partida", "already in startup"))
                                             .small()
                                             .color(Color32::from_rgb(120, 200, 140)),
                                     );
                                 } else if ui
-                                    .add(egui::Button::new(RichText::new("+ Partida").small().color(Color32::WHITE)).fill(ACCENT_BG))
-                                    .on_hover_text("Cria um atalho na pasta Iniciar do seu usuário — sem UAC")
+                                    .add(egui::Button::new(RichText::new(locale.text("+ Partida", "+ Startup")).small().color(Color32::WHITE)).fill(ACCENT_BG))
+                                    .on_hover_text(locale.text("Cria um atalho na pasta Iniciar do seu usuário — sem UAC", "Creates a shortcut in your user's Startup folder — no UAC"))
                                     .clicked()
                                 {
                                     let label = std::path::Path::new(&r.path)
@@ -1428,13 +1723,52 @@ Clique para ver só estas.", st.hint()))
         }
     }
 
-    fn run(&mut self, action: Action, is_admin: bool, out: &mut Vec<BootOut>) {
+    fn run(&mut self, action: Action, is_admin: bool, locale: Locale, out: &mut Vec<BootOut>) {
         match action {
             Action::Toggle(e, enabled) => {
-                let label = format!("{}: {}", e.name, if enabled { "ativar" } else { "desativar" });
+                let label = format!(
+                    "{}: {}",
+                    e.name,
+                    if locale == Locale::Portuguese {
+                        if enabled {
+                            "ativar"
+                        } else {
+                            "desativar"
+                        }
+                    } else {
+                        if enabled {
+                            "enable"
+                        } else {
+                            "disable"
+                        }
+                    }
+                );
                 match apply_toggle(&e, enabled) {
                     Ok(()) => {
-                        out.push(BootOut::Toast(format!("{}: {}", e.name, if enabled { "ativa na partida" } else { "fora da partida" }), false));
+                        out.push(BootOut::Toast(
+                            if locale == Locale::Portuguese {
+                                format!(
+                                    "{}: {}",
+                                    e.name,
+                                    if enabled {
+                                        "ativa na partida"
+                                    } else {
+                                        "fora da partida"
+                                    }
+                                )
+                            } else {
+                                format!(
+                                    "{}: {}",
+                                    e.name,
+                                    if enabled {
+                                        "enabled at startup"
+                                    } else {
+                                        "disabled at startup"
+                                    }
+                                )
+                            },
+                            false,
+                        ));
                         self.last_refresh = None;
                     }
                     Err(err) if e.machine && !is_admin && err.contains("acesso negado") => {
@@ -1445,10 +1779,17 @@ Clique para ver só estas.", st.hint()))
                 }
             }
             Action::Remove(e) => {
-                let label = format!("{}: remover", e.name);
+                let label = format!("{}: {}", e.name, locale.text("remover", "remove"));
                 match apply_remove(&e) {
                     Ok(()) => {
-                        out.push(BootOut::Toast(format!("{}: removido da partida", e.name), false));
+                        out.push(BootOut::Toast(
+                            if locale == Locale::Portuguese {
+                                format!("{}: removido da partida", e.name)
+                            } else {
+                                format!("{}: removed from startup", e.name)
+                            },
+                            false,
+                        ));
                         self.last_refresh = None;
                     }
                     Err(err) if e.machine && !is_admin && err.contains("acesso negado") => {
@@ -1480,21 +1821,44 @@ Clique para ver só estas.", st.hint()))
                 }
                 if !elevate.is_empty() {
                     self.busy += 1;
-                    sys::run_elevated_ps(format!("preset {name}"), elevate.join("; "), self.tx.clone());
+                    sys::run_elevated_ps(
+                        format!("preset {name}"),
+                        elevate.join("; "),
+                        self.tx.clone(),
+                    );
                 }
                 self.last_refresh = None;
-                let mut msg = format!("preset \"{name}\": {ok} aplicada(s)");
+                let mut msg = if locale == Locale::Portuguese {
+                    format!("preset \"{name}\": {ok} aplicada(s)")
+                } else {
+                    format!("preset \"{name}\": {ok} applied")
+                };
                 if !elevate.is_empty() {
-                    msg.push_str(&format!(", {} via UAC", elevate.len()));
+                    msg.push_str(&format!(
+                        ", {} {}",
+                        elevate.len(),
+                        locale.text("via UAC", "via UAC")
+                    ));
                 }
                 if !failed.is_empty() {
-                    msg.push_str(&format!(", {} falharam", failed.len()));
+                    msg.push_str(&format!(
+                        ", {} {}",
+                        failed.len(),
+                        locale.text("falharam", "failed")
+                    ));
                 }
                 out.push(BootOut::Toast(msg, !failed.is_empty()));
             }
             Action::AddStartup { exe, label } => match create_startup_lnk(&exe, &label) {
                 Ok(name) => {
-                    out.push(BootOut::Toast(format!("{name} agora sobe com o PC"), false));
+                    out.push(BootOut::Toast(
+                        if locale == Locale::Portuguese {
+                            format!("{name} agora sobe com o PC")
+                        } else {
+                            format!("{name} now starts with the PC")
+                        },
+                        false,
+                    ));
                     self.last_refresh = None;
                 }
                 Err(err) => out.push(BootOut::Toast(format!("{label}: {err}"), true)),
@@ -1505,7 +1869,10 @@ Clique para ver só estas.", st.hint()))
 
 /// O que precisa mudar para a partida ficar igual ao preset: só entradas que dá para
 /// alternar, que o preset conhece, e cujo estado atual difere do guardado.
-fn preset_diff(entries: &[Entry], want: &std::collections::BTreeMap<String, bool>) -> Vec<(Entry, bool)> {
+fn preset_diff(
+    entries: &[Entry],
+    want: &std::collections::BTreeMap<String, bool>,
+) -> Vec<(Entry, bool)> {
     entries
         .iter()
         .filter(|e| e.can_toggle)
@@ -1533,11 +1900,16 @@ fn resolve_entry(e: &Entry) -> Resolved {
     match &e.target {
         // Atalho com alvo quebrado ainda tem ícone próprio — melhor que uma bolinha.
         Target::Folder { path, .. } => Resolved {
-            icon: exe.clone().or_else(|| Some(path.to_string_lossy().into_owned())),
+            icon: exe
+                .clone()
+                .or_else(|| Some(path.to_string_lossy().into_owned())),
             exe: exe.map(|p| p.to_lowercase()),
         },
         Target::Uwp { .. } => Resolved::default(),
-        _ => Resolved { icon: exe.clone(), exe: exe.map(|p| p.to_lowercase()) },
+        _ => Resolved {
+            icon: exe.clone(),
+            exe: exe.map(|p| p.to_lowercase()),
+        },
     }
 }
 
@@ -1625,9 +1997,12 @@ fn create_startup_lnk(exe: &str, label: &str) -> Result<String, String> {
         return Err(format!("{safe}.lnk já existe na pasta Iniciar"));
     }
     unsafe {
-        let link: IShellLinkW =
-            CoCreateInstance::<Option<&IUnknown>, IShellLinkW>(&ShellLink, None, CLSCTX_INPROC_SERVER)
-                .map_err(|e| e.message())?;
+        let link: IShellLinkW = CoCreateInstance::<Option<&IUnknown>, IShellLinkW>(
+            &ShellLink,
+            None,
+            CLSCTX_INPROC_SERVER,
+        )
+        .map_err(|e| e.message())?;
         let w = sys::wide(exe);
         link.SetPath(PCWSTR(w.as_ptr())).map_err(|e| e.message())?;
         if let Some(parent) = Path::new(exe).parent() {
@@ -1638,13 +2013,14 @@ fn create_startup_lnk(exe: &str, label: &str) -> Result<String, String> {
         let _ = link.SetDescription(PCWSTR(d.as_ptr()));
         let persist: IPersistFile = link.cast().map_err(|e| e.message())?;
         let wf = sys::wide(&file.to_string_lossy());
-        persist.Save(PCWSTR(wf.as_ptr()), true).map_err(|e| e.message())?;
+        persist
+            .Save(PCWSTR(wf.as_ptr()), true)
+            .map_err(|e| e.message())?;
     }
     // Sobra de StartupApproved com o mesmo nome deixaria o atalho novo nascer desligado.
     let _ = sys::reg_delete_value(HKEY_CURRENT_USER, APPROVED_FOLDER, &format!("{safe}.lnk"));
     Ok(safe)
 }
-
 
 // ---------- coleta ----------
 
@@ -1685,26 +2061,87 @@ const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_ONCE: &str = r"Software\Microsoft\Windows\CurrentVersion\RunOnce";
 const RUN_WOW: &str = r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run";
 const RUN_ONCE_WOW: &str = r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce";
-const APPROVED_RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
-const APPROVED_RUN32: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run32";
-const APPROVED_FOLDER: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder";
+const APPROVED_RUN: &str =
+    r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+const APPROVED_RUN32: &str =
+    r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run32";
+const APPROVED_FOLDER: &str =
+    r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder";
 const POLICIES_RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\Run";
 
 fn collect_run(out: &mut Vec<Entry>) {
     let sets = [
-        (HKEY_CURRENT_USER, RUN, APPROVED_RUN, false, false, "HKCU Run"),
-        (HKEY_LOCAL_MACHINE, RUN, APPROVED_RUN, true, false, "HKLM Run"),
-        (HKEY_LOCAL_MACHINE, RUN_WOW, APPROVED_RUN32, true, true, "HKLM Run (32-bit)"),
-        (HKEY_CURRENT_USER, RUN_ONCE, APPROVED_RUN, false, false, "HKCU RunOnce"),
-        (HKEY_LOCAL_MACHINE, RUN_ONCE, APPROVED_RUN, true, false, "HKLM RunOnce"),
-        (HKEY_LOCAL_MACHINE, RUN_ONCE_WOW, APPROVED_RUN32, true, true, "HKLM RunOnce (32-bit)"),
-        (HKEY_CURRENT_USER, POLICIES_RUN, APPROVED_RUN, false, false, "HKCU Policy Run"),
-        (HKEY_LOCAL_MACHINE, POLICIES_RUN, APPROVED_RUN, true, false, "HKLM Policy Run"),
+        (
+            HKEY_CURRENT_USER,
+            RUN,
+            APPROVED_RUN,
+            false,
+            false,
+            "HKCU Run",
+        ),
+        (
+            HKEY_LOCAL_MACHINE,
+            RUN,
+            APPROVED_RUN,
+            true,
+            false,
+            "HKLM Run",
+        ),
+        (
+            HKEY_LOCAL_MACHINE,
+            RUN_WOW,
+            APPROVED_RUN32,
+            true,
+            true,
+            "HKLM Run (32-bit)",
+        ),
+        (
+            HKEY_CURRENT_USER,
+            RUN_ONCE,
+            APPROVED_RUN,
+            false,
+            false,
+            "HKCU RunOnce",
+        ),
+        (
+            HKEY_LOCAL_MACHINE,
+            RUN_ONCE,
+            APPROVED_RUN,
+            true,
+            false,
+            "HKLM RunOnce",
+        ),
+        (
+            HKEY_LOCAL_MACHINE,
+            RUN_ONCE_WOW,
+            APPROVED_RUN32,
+            true,
+            true,
+            "HKLM RunOnce (32-bit)",
+        ),
+        (
+            HKEY_CURRENT_USER,
+            POLICIES_RUN,
+            APPROVED_RUN,
+            false,
+            false,
+            "HKCU Policy Run",
+        ),
+        (
+            HKEY_LOCAL_MACHINE,
+            POLICIES_RUN,
+            APPROVED_RUN,
+            true,
+            false,
+            "HKLM Policy Run",
+        ),
     ];
     for (root, run_path, approved_path, machine, wow64, origin) in sets {
         let once = run_path.contains("RunOnce");
         let approved = approved_map(root, approved_path);
-        let Some(k) = sys::reg_open(root, run_path, false) else { continue };
+        let Some(k) = sys::reg_open(root, run_path, false) else {
+            continue;
+        };
         let mut seen = HashSet::new();
         for (name, ty, data) in sys::reg_values(&k) {
             if ty != REG_SZ && ty != REG_EXPAND_SZ {
@@ -1712,9 +2149,16 @@ fn collect_run(out: &mut Vec<Entry>) {
             }
             seen.insert(name.to_lowercase());
             let command = sys::utf16_bytes_to_string(&data);
-            let enabled = approved.get(&name.to_lowercase()).map(|a| a.1).unwrap_or(true);
+            let enabled = approved
+                .get(&name.to_lowercase())
+                .map(|a| a.1)
+                .unwrap_or(true);
             out.push(Entry {
-                id: format!("run:{}:{}:{name}", if machine { "hklm" } else { "hkcu" }, if wow64 { "32" } else { "64" }),
+                id: format!(
+                    "run:{}:{}:{name}",
+                    if machine { "hklm" } else { "hkcu" },
+                    if wow64 { "32" } else { "64" }
+                ),
                 name: name.clone(),
                 command,
                 kind: Kind::Run,
@@ -1726,7 +2170,11 @@ fn collect_run(out: &mut Vec<Entry>) {
                 can_remove: true,
                 microsoft: is_microsoft_cmd(&name, ""),
                 origin: origin.to_string(),
-                target: Target::Run { machine, wow64, name },
+                target: Target::Run {
+                    machine,
+                    wow64,
+                    name,
+                },
                 running_hint: false,
             });
         }
@@ -1738,7 +2186,11 @@ fn collect_run(out: &mut Vec<Entry>) {
                 continue;
             }
             out.push(Entry {
-                id: format!("run-orphan:{}:{}:{key}", if machine { "hklm" } else { "hkcu" }, if wow64 { "32" } else { "64" }),
+                id: format!(
+                    "run-orphan:{}:{}:{key}",
+                    if machine { "hklm" } else { "hkcu" },
+                    if wow64 { "32" } else { "64" }
+                ),
                 name: orig.clone(),
                 command: String::new(),
                 kind: Kind::Run,
@@ -1750,7 +2202,11 @@ fn collect_run(out: &mut Vec<Entry>) {
                 can_remove: true,
                 microsoft: false,
                 origin: format!("{origin} (órfã)"),
-                target: Target::Run { machine, wow64, name: orig.clone() },
+                target: Target::Run {
+                    machine,
+                    wow64,
+                    name: orig.clone(),
+                },
                 running_hint: false,
             });
         }
@@ -1758,8 +2214,12 @@ fn collect_run(out: &mut Vec<Entry>) {
 }
 
 fn collect_folder(out: &mut Vec<Entry>) {
-    let user = std::env::var_os("APPDATA").map(PathBuf::from).map(|p| p.join(r"Microsoft\Windows\Start Menu\Programs\Startup"));
-    let common = std::env::var_os("ProgramData").map(PathBuf::from).map(|p| p.join(r"Microsoft\Windows\Start Menu\Programs\StartUp"));
+    let user = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .map(|p| p.join(r"Microsoft\Windows\Start Menu\Programs\Startup"));
+    let common = std::env::var_os("ProgramData")
+        .map(PathBuf::from)
+        .map(|p| p.join(r"Microsoft\Windows\Start Menu\Programs\StartUp"));
     if let Some(p) = user {
         collect_one_folder(out, &p, false);
     }
@@ -1769,7 +2229,11 @@ fn collect_folder(out: &mut Vec<Entry>) {
 }
 
 fn collect_one_folder(out: &mut Vec<Entry>, dir: &Path, common: bool) {
-    let root = if common { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+    let root = if common {
+        HKEY_LOCAL_MACHINE
+    } else {
+        HKEY_CURRENT_USER
+    };
     let approved = approved_map(root, APPROVED_FOLDER);
     let mut seen = HashSet::new();
     if let Ok(rd) = std::fs::read_dir(dir) {
@@ -1780,10 +2244,16 @@ fn collect_one_folder(out: &mut Vec<Entry>, dir: &Path, common: bool) {
                 continue;
             }
             seen.insert(file_name.to_lowercase());
-            let enabled = approved.get(&file_name.to_lowercase()).map(|a| a.1).unwrap_or(true);
+            let enabled = approved
+                .get(&file_name.to_lowercase())
+                .map(|a| a.1)
+                .unwrap_or(true);
             let command = resolve_startup_file(&path);
             out.push(Entry {
-                id: format!("folder:{}:{file_name}", if common { "common" } else { "user" }),
+                id: format!(
+                    "folder:{}:{file_name}",
+                    if common { "common" } else { "user" }
+                ),
                 name: file_name.clone(),
                 command,
                 kind: Kind::Folder,
@@ -1794,8 +2264,17 @@ fn collect_one_folder(out: &mut Vec<Entry>, dir: &Path, common: bool) {
                 can_toggle: true,
                 can_remove: true,
                 microsoft: false,
-                origin: if common { "pasta Iniciar (todos)" } else { "pasta Iniciar (usuário)" }.into(),
-                target: Target::Folder { common, file_name, path },
+                origin: if common {
+                    "pasta Iniciar (todos)"
+                } else {
+                    "pasta Iniciar (usuário)"
+                }
+                .into(),
+                target: Target::Folder {
+                    common,
+                    file_name,
+                    path,
+                },
                 running_hint: false,
             });
         }
@@ -1805,7 +2284,10 @@ fn collect_one_folder(out: &mut Vec<Entry>, dir: &Path, common: bool) {
             continue;
         }
         out.push(Entry {
-            id: format!("folder-orphan:{}:{key}", if common { "common" } else { "user" }),
+            id: format!(
+                "folder-orphan:{}:{key}",
+                if common { "common" } else { "user" }
+            ),
             name: orig.clone(),
             command: String::new(),
             kind: Kind::Folder,
@@ -1816,8 +2298,17 @@ fn collect_one_folder(out: &mut Vec<Entry>, dir: &Path, common: bool) {
             can_toggle: true,
             can_remove: true,
             microsoft: false,
-            origin: if common { "pasta Iniciar (órfã, todos)" } else { "pasta Iniciar (órfã)" }.into(),
-            target: Target::Folder { common, file_name: orig.clone(), path: dir.join(orig) },
+            origin: if common {
+                "pasta Iniciar (órfã, todos)"
+            } else {
+                "pasta Iniciar (órfã)"
+            }
+            .into(),
+            target: Target::Folder {
+                common,
+                file_name: orig.clone(),
+                path: dir.join(orig),
+            },
             running_hint: false,
         });
     }
@@ -1825,12 +2316,20 @@ fn collect_one_folder(out: &mut Vec<Entry>, dir: &Path, common: bool) {
 
 fn collect_tasks(out: &mut Vec<Entry>) {
     unsafe {
-        let Ok(svc) = CoCreateInstance::<Option<&IUnknown>, ITaskService>(&TaskScheduler, None, CLSCTX_INPROC_SERVER) else { return };
+        let Ok(svc) = CoCreateInstance::<Option<&IUnknown>, ITaskService>(
+            &TaskScheduler,
+            None,
+            CLSCTX_INPROC_SERVER,
+        ) else {
+            return;
+        };
         let empty = VARIANT::default();
         if svc.Connect(&empty, &empty, &empty, &empty).is_err() {
             return;
         }
-        let Ok(root) = svc.GetFolder(&BSTR::from("\\")) else { return };
+        let Ok(root) = svc.GetFolder(&BSTR::from("\\")) else {
+            return;
+        };
         walk_task_folder(&root, out);
     }
 }
@@ -1911,20 +2410,50 @@ fn collect_services(out: &mut Vec<Entry>) {
     collect_scm(out, SERVICE_DRIVER, Kind::Driver);
 }
 
-fn collect_scm(out: &mut Vec<Entry>, ty: windows::Win32::System::Services::ENUM_SERVICE_TYPE, kind: Kind) {
+fn collect_scm(
+    out: &mut Vec<Entry>,
+    ty: windows::Win32::System::Services::ENUM_SERVICE_TYPE,
+    kind: Kind,
+) {
     unsafe {
-        let scm = match OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_ENUMERATE_SERVICE | SC_MANAGER_CONNECT) {
+        let scm = match OpenSCManagerW(
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SC_MANAGER_ENUMERATE_SERVICE | SC_MANAGER_CONNECT,
+        ) {
             Ok(h) => Sc(h),
             Err(_) => return,
         };
         let mut needed = 0u32;
         let mut returned = 0u32;
-        let _ = EnumServicesStatusExW(scm.0, SC_ENUM_PROCESS_INFO, ty, SERVICE_STATE_ALL, None, &mut needed, &mut returned, None, PCWSTR::null());
+        let _ = EnumServicesStatusExW(
+            scm.0,
+            SC_ENUM_PROCESS_INFO,
+            ty,
+            SERVICE_STATE_ALL,
+            None,
+            &mut needed,
+            &mut returned,
+            None,
+            PCWSTR::null(),
+        );
         if needed == 0 {
             return;
         }
         let mut buf = vec![0u8; needed as usize];
-        if EnumServicesStatusExW(scm.0, SC_ENUM_PROCESS_INFO, ty, SERVICE_STATE_ALL, Some(&mut buf), &mut needed, &mut returned, None, PCWSTR::null()).is_err() {
+        if EnumServicesStatusExW(
+            scm.0,
+            SC_ENUM_PROCESS_INFO,
+            ty,
+            SERVICE_STATE_ALL,
+            Some(&mut buf),
+            &mut needed,
+            &mut returned,
+            None,
+            PCWSTR::null(),
+        )
+        .is_err()
+        {
             return;
         }
         let items = buf.as_ptr() as *const ENUM_SERVICE_STATUS_PROCESSW;
@@ -1934,7 +2463,13 @@ fn collect_scm(out: &mut Vec<Entry>, ty: windows::Win32::System::Services::ENUM_
             let display = sys::from_wide(e.lpDisplayName.0);
             let running = e.ServiceStatusProcess.dwCurrentState == SERVICE_RUNNING;
             let w = sys::wide(&name);
-            let Ok(svc) = OpenServiceW(scm.0, PCWSTR(w.as_ptr()), SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS) else { continue };
+            let Ok(svc) = OpenServiceW(
+                scm.0,
+                PCWSTR(w.as_ptr()),
+                SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS,
+            ) else {
+                continue;
+            };
             let sh = Sc(svc);
             let mut need = 0u32;
             let _ = QueryServiceConfigW(sh.0, None, 0, &mut need);
@@ -1948,7 +2483,9 @@ fn collect_scm(out: &mut Vec<Entry>, ty: windows::Win32::System::Services::ENUM_
             }
             let start = (*cfg).dwStartType;
             let delayed = start == SERVICE_AUTO_START && service_delayed(sh.0);
-            let bootish = start == SERVICE_AUTO_START || start == SERVICE_BOOT_START || start == SERVICE_SYSTEM_START;
+            let bootish = start == SERVICE_AUTO_START
+                || start == SERVICE_BOOT_START
+                || start == SERVICE_SYSTEM_START;
             if !bootish && start != SERVICE_DISABLED {
                 continue;
             }
@@ -1975,10 +2512,18 @@ fn collect_scm(out: &mut Vec<Entry>, ty: windows::Win32::System::Services::ENUM_
             };
             out.push(Entry {
                 id: format!("svc:{name}"),
-                name: if display.is_empty() { name.clone() } else { display },
+                name: if display.is_empty() {
+                    name.clone()
+                } else {
+                    display
+                },
                 command: bin.clone(),
                 kind,
-                phase: if kind == Kind::Driver { Phase::Kernel } else { Phase::Machine },
+                phase: if kind == Kind::Driver {
+                    Phase::Kernel
+                } else {
+                    Phase::Machine
+                },
                 machine: true,
                 enabled,
                 missing: false,
@@ -2001,7 +2546,14 @@ fn service_delayed(svc: SC_HANDLE) -> bool {
             return false;
         }
         let mut buf = vec![0u8; need.max(8) as usize];
-        if QueryServiceConfig2W(svc, SERVICE_CONFIG_DELAYED_AUTO_START_INFO, Some(&mut buf), &mut need).is_err() {
+        if QueryServiceConfig2W(
+            svc,
+            SERVICE_CONFIG_DELAYED_AUTO_START_INFO,
+            Some(&mut buf),
+            &mut need,
+        )
+        .is_err()
+        {
             return false;
         }
         let info = buf.as_ptr() as *const SERVICE_DELAYED_AUTO_START_INFO;
@@ -2011,10 +2563,14 @@ fn service_delayed(svc: SC_HANDLE) -> bool {
 
 fn collect_uwp(out: &mut Vec<Entry>) {
     let base = r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\SystemAppData";
-    let Some(root) = sys::reg_open(HKEY_CURRENT_USER, base, false) else { return };
+    let Some(root) = sys::reg_open(HKEY_CURRENT_USER, base, false) else {
+        return;
+    };
     for pkg in sys::reg_subkeys(&root) {
         let st_path = format!("{base}\\{pkg}\\StartupTask");
-        let Some(st) = sys::reg_open(HKEY_CURRENT_USER, &st_path, false) else { continue };
+        let Some(st) = sys::reg_open(HKEY_CURRENT_USER, &st_path, false) else {
+            continue;
+        };
         for task in sys::reg_subkeys(&st) {
             let key = format!("{st_path}\\{task}");
             let state = sys::reg_dword(HKEY_CURRENT_USER, &key, "State").unwrap_or(0);
@@ -2074,7 +2630,11 @@ fn collect_winlogon(out: &mut Vec<Entry>) {
 }
 
 fn collect_other(out: &mut Vec<Entry>) {
-    if let Some(k) = sys::reg_open(HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows", false) {
+    if let Some(k) = sys::reg_open(
+        HKEY_LOCAL_MACHINE,
+        r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows",
+        false,
+    ) {
         for (name, ty, data) in sys::reg_values(&k) {
             if name != "AppInit_DLLs" {
                 continue;
@@ -2104,7 +2664,11 @@ fn collect_other(out: &mut Vec<Entry>) {
             });
         }
     }
-    if let Some(k) = sys::reg_open(HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager", false) {
+    if let Some(k) = sys::reg_open(
+        HKEY_LOCAL_MACHINE,
+        r"SYSTEM\CurrentControlSet\Control\Session Manager",
+        false,
+    ) {
         for (name, ty, data) in sys::reg_values(&k) {
             if name != "BootExecute" {
                 continue;
@@ -2136,7 +2700,9 @@ fn collect_other(out: &mut Vec<Entry>) {
     if let Some(root) = sys::reg_open(HKEY_LOCAL_MACHINE, as_path, false) {
         for guid in sys::reg_subkeys(&root) {
             let key = format!("{as_path}\\{guid}");
-            let Some(k) = sys::reg_open(HKEY_LOCAL_MACHINE, &key, false) else { continue };
+            let Some(k) = sys::reg_open(HKEY_LOCAL_MACHINE, &key, false) else {
+                continue;
+            };
             let mut stub = String::new();
             let mut label = guid.clone();
             for (name, ty, data) in sys::reg_values(&k) {
@@ -2153,7 +2719,12 @@ fn collect_other(out: &mut Vec<Entry>) {
             if stub.is_empty() {
                 continue;
             }
-            let pending = sys::reg_open(HKEY_CURRENT_USER, &format!(r"SOFTWARE\Microsoft\Active Setup\Installed Components\{guid}"), false).is_none();
+            let pending = sys::reg_open(
+                HKEY_CURRENT_USER,
+                &format!(r"SOFTWARE\Microsoft\Active Setup\Installed Components\{guid}"),
+                false,
+            )
+            .is_none();
             out.push(Entry {
                 id: format!("activesetup:{guid}"),
                 name: label,
@@ -2166,7 +2737,12 @@ fn collect_other(out: &mut Vec<Entry>) {
                 can_toggle: false,
                 can_remove: false,
                 microsoft: true,
-                origin: if pending { "Active Setup (pendente neste usuário)" } else { "Active Setup (já rodou neste usuário)" }.into(),
+                origin: if pending {
+                    "Active Setup (pendente neste usuário)"
+                } else {
+                    "Active Setup (já rodou neste usuário)"
+                }
+                .into(),
                 target: Target::ReadOnly,
                 running_hint: false,
             });
@@ -2178,39 +2754,80 @@ fn collect_other(out: &mut Vec<Entry>) {
 
 fn apply_toggle(e: &Entry, enabled: bool) -> Result<(), String> {
     match &e.target {
-        Target::Run { machine, wow64, name } => {
-            let root = if *machine { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+        Target::Run {
+            machine,
+            wow64,
+            name,
+        } => {
+            let root = if *machine {
+                HKEY_LOCAL_MACHINE
+            } else {
+                HKEY_CURRENT_USER
+            };
             let approved = if *wow64 { APPROVED_RUN32 } else { APPROVED_RUN };
             set_approved(root, approved, name, enabled)
         }
-        Target::Folder { common, file_name, .. } => {
-            let root = if *common { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+        Target::Folder {
+            common, file_name, ..
+        } => {
+            let root = if *common {
+                HKEY_LOCAL_MACHINE
+            } else {
+                HKEY_CURRENT_USER
+            };
             set_approved(root, APPROVED_FOLDER, file_name, enabled)
         }
         Target::Task { path } => set_task_enabled(path, enabled),
-        Target::Service { name } => {
-            sys::set_start_type(name, if enabled { SvcStart::Auto } else { SvcStart::Disabled })
+        Target::Service { name } => sys::set_start_type(
+            name,
+            if enabled {
+                SvcStart::Auto
+            } else {
+                SvcStart::Disabled
+            },
+        ),
+        Target::Uwp { key } => {
+            sys::reg_set_dword(HKEY_CURRENT_USER, key, "State", if enabled { 1 } else { 2 })
         }
-        Target::Uwp { key } => sys::reg_set_dword(HKEY_CURRENT_USER, key, "State", if enabled { 1 } else { 2 }),
         Target::ReadOnly => Err("esta entrada não pode ser alternada por aqui".into()),
     }
 }
 
 fn apply_remove(e: &Entry) -> Result<(), String> {
     match &e.target {
-        Target::Run { machine, wow64, name } => {
-            let root = if *machine { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+        Target::Run {
+            machine,
+            wow64,
+            name,
+        } => {
+            let root = if *machine {
+                HKEY_LOCAL_MACHINE
+            } else {
+                HKEY_CURRENT_USER
+            };
             let run = if *wow64 { RUN_WOW } else { RUN };
             let approved = if *wow64 { APPROVED_RUN32 } else { APPROVED_RUN };
             let r1 = sys::reg_delete_value(root, run, name);
             let _ = sys::reg_delete_value(root, approved, name);
-            if e.missing { Ok(()) } else { r1 }
+            if e.missing {
+                Ok(())
+            } else {
+                r1
+            }
         }
-        Target::Folder { path, common, file_name } => {
+        Target::Folder {
+            path,
+            common,
+            file_name,
+        } => {
             if path.exists() {
                 std::fs::remove_file(path).map_err(|e| e.to_string())?;
             }
-            let root = if *common { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+            let root = if *common {
+                HKEY_LOCAL_MACHINE
+            } else {
+                HKEY_CURRENT_USER
+            };
             let _ = sys::reg_delete_value(root, APPROVED_FOLDER, file_name);
             Ok(())
         }
@@ -2218,7 +2835,12 @@ fn apply_remove(e: &Entry) -> Result<(), String> {
     }
 }
 
-fn set_approved(root: windows::Win32::System::Registry::HKEY, path: &str, name: &str, enabled: bool) -> Result<(), String> {
+fn set_approved(
+    root: windows::Win32::System::Registry::HKEY,
+    path: &str,
+    name: &str,
+    enabled: bool,
+) -> Result<(), String> {
     let mut data = [0u8; 12];
     data[0] = if enabled { 2 } else { 3 };
     if !enabled {
@@ -2230,9 +2852,15 @@ fn set_approved(root: windows::Win32::System::Registry::HKEY, path: &str, name: 
 fn set_task_enabled(path: &str, enabled: bool) -> Result<(), String> {
     ensure_com();
     unsafe {
-        let svc: ITaskService = CoCreateInstance::<Option<&IUnknown>, ITaskService>(&TaskScheduler, None, CLSCTX_INPROC_SERVER).map_err(|e| e.message())?;
+        let svc: ITaskService = CoCreateInstance::<Option<&IUnknown>, ITaskService>(
+            &TaskScheduler,
+            None,
+            CLSCTX_INPROC_SERVER,
+        )
+        .map_err(|e| e.message())?;
         let empty = VARIANT::default();
-        svc.Connect(&empty, &empty, &empty, &empty).map_err(|e| e.message())?;
+        svc.Connect(&empty, &empty, &empty, &empty)
+            .map_err(|e| e.message())?;
         let folder = svc.GetFolder(&BSTR::from("\\")).map_err(|e| e.message())?;
         let task = folder.GetTask(&BSTR::from(path)).map_err(|e| e.message())?;
         let flag = if enabled {
@@ -2248,14 +2876,22 @@ fn toggle_ps(e: &Entry, enabled: bool) -> String {
     match &e.target {
         Target::Run { wow64, name, .. } => {
             let key = if *wow64 { APPROVED_RUN32 } else { APPROVED_RUN };
-            let bytes = if enabled { "2,0,0,0,0,0,0,0,0,0,0,0" } else { "3,0,0,0,0,0,0,0,0,0,0,0" };
+            let bytes = if enabled {
+                "2,0,0,0,0,0,0,0,0,0,0,0"
+            } else {
+                "3,0,0,0,0,0,0,0,0,0,0,0"
+            };
             format!(
                 "Set-ItemProperty -Path 'HKLM:\\{key}' -Name {} -Value ([byte[]]({bytes}))",
                 sys::ps_quote(name)
             )
         }
         Target::Folder { file_name, .. } => {
-            let bytes = if enabled { "2,0,0,0,0,0,0,0,0,0,0,0" } else { "3,0,0,0,0,0,0,0,0,0,0,0" };
+            let bytes = if enabled {
+                "2,0,0,0,0,0,0,0,0,0,0,0"
+            } else {
+                "3,0,0,0,0,0,0,0,0,0,0,0"
+            };
             format!(
                 "Set-ItemProperty -Path 'HKLM:\\{APPROVED_FOLDER}' -Name {} -Value ([byte[]]({bytes}))",
                 sys::ps_quote(file_name)
@@ -2267,7 +2903,10 @@ fn toggle_ps(e: &Entry, enabled: bool) -> String {
         }
         Target::Service { name } => {
             let ty = if enabled { "Automatic" } else { "Disabled" };
-            format!("Set-Service -Name {} -StartupType {ty}", sys::ps_quote(name))
+            format!(
+                "Set-Service -Name {} -StartupType {ty}",
+                sys::ps_quote(name)
+            )
         }
         _ => String::new(),
     }
@@ -2283,7 +2922,9 @@ fn remove_ps(e: &Entry) -> String {
                 sys::ps_quote(name)
             )
         }
-        Target::Folder { path, file_name, .. } => {
+        Target::Folder {
+            path, file_name, ..
+        } => {
             format!(
                 "Remove-Item -LiteralPath {} -Force -ErrorAction SilentlyContinue; Remove-ItemProperty -Path 'HKLM:\\{APPROVED_FOLDER}' -Name {} -ErrorAction SilentlyContinue",
                 sys::ps_quote(&path.to_string_lossy()),
@@ -2296,7 +2937,10 @@ fn remove_ps(e: &Entry) -> String {
 
 // ---------- helpers ----------
 
-fn approved_map(root: windows::Win32::System::Registry::HKEY, path: &str) -> HashMap<String, (String, bool)> {
+fn approved_map(
+    root: windows::Win32::System::Registry::HKEY,
+    path: &str,
+) -> HashMap<String, (String, bool)> {
     sys::reg_open(root, path, false)
         .map(|k| {
             sys::reg_values(&k)
@@ -2312,7 +2956,11 @@ fn approved_map(root: windows::Win32::System::Registry::HKEY, path: &str) -> Has
 }
 
 fn resolve_startup_file(path: &Path) -> String {
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     if ext == "lnk" {
         if let Some(s) = resolve_lnk(path) {
             return s;
@@ -2324,7 +2972,12 @@ fn resolve_startup_file(path: &Path) -> String {
 fn resolve_lnk(path: &Path) -> Option<String> {
     ensure_com();
     unsafe {
-        let link: IShellLinkW = CoCreateInstance::<Option<&IUnknown>, IShellLinkW>(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
+        let link: IShellLinkW = CoCreateInstance::<Option<&IUnknown>, IShellLinkW>(
+            &ShellLink,
+            None,
+            CLSCTX_INPROC_SERVER,
+        )
+        .ok()?;
         let persist: IPersistFile = link.cast().ok()?;
         let w = sys::wide(&path.to_string_lossy());
         persist.Load(PCWSTR(w.as_ptr()), STGM_READ).ok()?;
@@ -2369,7 +3022,11 @@ fn xml_tag(xml: &str, tag: &str) -> Option<String> {
     let start = xml.find(&open)? + open.len();
     let end = xml[start..].find(&close)? + start;
     let s = xml[start..end].trim();
-    if s.is_empty() { None } else { Some(s.to_string()) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
 }
 
 fn path_is_user_task(path: &str) -> bool {
@@ -2409,7 +3066,9 @@ fn running_exes(procs: &[ProcInfo]) -> HashSet<String> {
 }
 
 fn exe_running(cmd: &str, running: &HashSet<String>) -> bool {
-    exe_name_from_cmd(cmd).map(|n| running.contains(&n)).unwrap_or(false)
+    exe_name_from_cmd(cmd)
+        .map(|n| running.contains(&n))
+        .unwrap_or(false)
 }
 
 struct Sc(SC_HANDLE);
@@ -2428,19 +3087,34 @@ mod tests {
     #[test]
     fn expande_variavel_de_ambiente_no_meio_do_caminho() {
         let win = std::env::var("WINDIR").unwrap();
-        assert_eq!(expand_env(r"%WINDIR%\explorer.exe"), format!(r"{win}\explorer.exe"));
+        assert_eq!(
+            expand_env(r"%WINDIR%\explorer.exe"),
+            format!(r"{win}\explorer.exe")
+        );
         assert_eq!(expand_env(r"C:\sem\variavel.exe"), r"C:\sem\variavel.exe");
         // Variável que não existe fica como estava, em vez de virar caminho quebrado.
-        assert_eq!(expand_env(r"%NAO_EXISTE_XYZ%\a.exe"), r"%NAO_EXISTE_XYZ%\a.exe");
+        assert_eq!(
+            expand_env(r"%NAO_EXISTE_XYZ%\a.exe"),
+            r"%NAO_EXISTE_XYZ%\a.exe"
+        );
     }
 
     #[test]
     fn tira_o_exe_da_linha_de_comando() {
         let win = std::env::var("WINDIR").unwrap();
         let explorer = format!(r"{win}\explorer.exe");
-        assert_eq!(exe_path_from_cmd(&format!("\"{explorer}\" -algo")), Some(explorer.clone()));
-        assert_eq!(exe_path_from_cmd(&format!(r"\??\{explorer}")), Some(explorer.clone()));
-        assert_eq!(exe_path_from_cmd(r"%WINDIR%\explorer.exe /n"), Some(explorer));
+        assert_eq!(
+            exe_path_from_cmd(&format!("\"{explorer}\" -algo")),
+            Some(explorer.clone())
+        );
+        assert_eq!(
+            exe_path_from_cmd(&format!(r"\??\{explorer}")),
+            Some(explorer.clone())
+        );
+        assert_eq!(
+            exe_path_from_cmd(r"%WINDIR%\explorer.exe /n"),
+            Some(explorer)
+        );
         assert_eq!(exe_path_from_cmd(r"C:\nao\existe\nada.exe"), None);
         assert_eq!(exe_path_from_cmd(""), None);
     }
@@ -2460,7 +3134,10 @@ mod tests {
         assert!(file.exists(), "atalho não apareceu em {}", file.display());
         let alvo = resolve_lnk(&file).expect("ler alvo do atalho");
         println!("atalho {} -> {alvo}", file.display());
-        assert!(alvo.to_lowercase().contains("notepad.exe"), "alvo errado: {alvo}");
+        assert!(
+            alvo.to_lowercase().contains("notepad.exe"),
+            "alvo errado: {alvo}"
+        );
         // Duas vezes o mesmo nome tem de falhar, não sobrescrever atalho do usuário.
         assert!(create_startup_lnk(&exe, label).is_err());
         std::fs::remove_file(&file).expect("limpar atalho de teste");
@@ -2509,11 +3186,20 @@ mod tests {
         let d = preset_diff(&entries, &want);
         let mut got: Vec<(String, bool)> = d.iter().map(|(e, w)| (e.id.clone(), *w)).collect();
         got.sort();
-        assert_eq!(got, vec![("precisa-desligar".to_string(), false), ("precisa-ligar".to_string(), true)]);
+        assert_eq!(
+            got,
+            vec![
+                ("precisa-desligar".to_string(), false),
+                ("precisa-ligar".to_string(), true)
+            ]
+        );
 
         // Preset igual à partida atual: nada a fazer — é o caso do aviso "já está assim".
-        let mesmo: std::collections::BTreeMap<String, bool> =
-            entries.iter().filter(|e| e.can_toggle).map(|e| (e.id.clone(), e.enabled)).collect();
+        let mesmo: std::collections::BTreeMap<String, bool> = entries
+            .iter()
+            .filter(|e| e.can_toggle)
+            .map(|e| (e.id.clone(), e.enabled))
+            .collect();
         assert!(preset_diff(&entries, &mesmo).is_empty());
     }
 
@@ -2524,11 +3210,20 @@ mod tests {
     #[ignore]
     fn preset_real_desta_maquina() {
         let entries = collect();
-        let mut snap: std::collections::BTreeMap<String, bool> =
-            entries.iter().filter(|e| e.can_toggle).map(|e| (e.id.clone(), e.enabled)).collect();
+        let mut snap: std::collections::BTreeMap<String, bool> = entries
+            .iter()
+            .filter(|e| e.can_toggle)
+            .map(|e| (e.id.clone(), e.enabled))
+            .collect();
         println!("{} entradas, {} alternáveis", entries.len(), snap.len());
-        assert!(snap.len() > 5, "partida real veio vazia demais para o teste valer");
-        assert!(preset_diff(&entries, &snap).is_empty(), "retrato do agora tem de dar diff zero");
+        assert!(
+            snap.len() > 5,
+            "partida real veio vazia demais para o teste valer"
+        );
+        assert!(
+            preset_diff(&entries, &snap).is_empty(),
+            "retrato do agora tem de dar diff zero"
+        );
 
         let alvo = entries.iter().find(|e| e.can_toggle).unwrap().id.clone();
         let atual = snap[&alvo];
@@ -2537,6 +3232,10 @@ mod tests {
         assert_eq!(d.len(), 1, "diff devia ter só a entrada virada");
         assert_eq!(d[0].0.id, alvo);
         assert_eq!(d[0].1, !atual);
-        println!("diff = {} -> {}", d[0].0.name, if d[0].1 { "ligar" } else { "desligar" });
+        println!(
+            "diff = {} -> {}",
+            d[0].0.name,
+            if d[0].1 { "ligar" } else { "desligar" }
+        );
     }
 }

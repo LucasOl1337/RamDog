@@ -9,18 +9,18 @@ use std::sync::mpsc::Sender;
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW,
-    RegSetValueExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_SET_VALUE, REG_BINARY, REG_DWORD,
-    REG_OPTION_NON_VOLATILE, REG_VALUE_TYPE,
+    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW,
+    RegQueryValueExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ,
+    KEY_SET_VALUE, REG_BINARY, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_VALUE_TYPE,
 };
 use windows::Win32::System::Services::{
-    ChangeServiceConfigW, CloseServiceHandle, ControlService, EnumServicesStatusExW, OpenSCManagerW, OpenServiceW,
-    QueryServiceConfigW, ENUM_SERVICE_STATUS_PROCESSW, SC_ENUM_PROCESS_INFO, SC_MANAGER_ENUMERATE_SERVICE,
-    SERVICE_STATE_ALL, SERVICE_WIN32,
-    QueryServiceStatus, StartServiceW, QUERY_SERVICE_CONFIGW, SC_MANAGER_CONNECT, SERVICE_AUTO_START,
-    SERVICE_CHANGE_CONFIG, SERVICE_CONTROL_STOP, SERVICE_DEMAND_START, SERVICE_DISABLED, SERVICE_ERROR,
-    SERVICE_NO_CHANGE, SERVICE_QUERY_CONFIG, SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_START, SERVICE_STATUS,
-    SERVICE_STOP, SERVICE_STOPPED, SERVICE_START_TYPE, SERVICE_STATUS_CURRENT_STATE,
+    ChangeServiceConfigW, CloseServiceHandle, ControlService, EnumServicesStatusExW,
+    OpenSCManagerW, OpenServiceW, QueryServiceConfigW, QueryServiceStatus, StartServiceW,
+    ENUM_SERVICE_STATUS_PROCESSW, QUERY_SERVICE_CONFIGW, SC_ENUM_PROCESS_INFO, SC_MANAGER_CONNECT,
+    SC_MANAGER_ENUMERATE_SERVICE, SERVICE_AUTO_START, SERVICE_CHANGE_CONFIG, SERVICE_CONTROL_STOP,
+    SERVICE_DEMAND_START, SERVICE_DISABLED, SERVICE_ERROR, SERVICE_NO_CHANGE, SERVICE_QUERY_CONFIG,
+    SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_START, SERVICE_START_TYPE, SERVICE_STATE_ALL,
+    SERVICE_STATUS, SERVICE_STATUS_CURRENT_STATE, SERVICE_STOP, SERVICE_STOPPED, SERVICE_WIN32,
 };
 use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject, INFINITE};
 use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
@@ -82,7 +82,10 @@ pub const SERVICES: &[SvcEntry] = &[
 pub const PROTECTED_SERVICES: &[(&str, &str)] = &[
     ("WinDefend", "Microsoft Defender Antivirus (MsMpEng.exe)"),
     ("WdNisSvc", "Defender Network Inspection (NisSrv.exe)"),
-    ("MDCoreSvc", "Defender Core Service (MpDefenderCoreService.exe)"),
+    (
+        "MDCoreSvc",
+        "Defender Core Service (MpDefenderCoreService.exe)",
+    ),
 ];
 
 pub(crate) fn wide(s: &str) -> Vec<u16> {
@@ -113,7 +116,8 @@ pub(crate) unsafe fn from_wide(p: *const u16) -> String {
 pub fn services_by_pid() -> HashMap<u32, Vec<(String, String)>> {
     let mut out: HashMap<u32, Vec<(String, String)>> = HashMap::new();
     unsafe {
-        let scm = match OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_ENUMERATE_SERVICE) {
+        let scm = match OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_ENUMERATE_SERVICE)
+        {
             Ok(h) => ScHandle(h),
             Err(_) => return out,
         };
@@ -181,12 +185,26 @@ pub fn query_service(name: &str) -> SvcStatus {
     unsafe {
         let scm = match OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_CONNECT) {
             Ok(h) => ScHandle(h),
-            Err(_) => return SvcStatus { state: SvcState::Missing, start: SvcStart::Unknown },
+            Err(_) => {
+                return SvcStatus {
+                    state: SvcState::Missing,
+                    start: SvcStart::Unknown,
+                }
+            }
         };
         let w = wide(name);
-        let svc = match OpenServiceW(scm.0, PCWSTR(w.as_ptr()), SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG) {
+        let svc = match OpenServiceW(
+            scm.0,
+            PCWSTR(w.as_ptr()),
+            SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG,
+        ) {
             Ok(h) => ScHandle(h),
-            Err(_) => return SvcStatus { state: SvcState::Missing, start: SvcStart::Unknown },
+            Err(_) => {
+                return SvcStatus {
+                    state: SvcState::Missing,
+                    start: SvcStart::Unknown,
+                }
+            }
         };
         let mut st = SERVICE_STATUS::default();
         let state = if QueryServiceStatus(svc.0, &mut st).is_ok() {
@@ -219,12 +237,17 @@ pub fn query_service(name: &str) -> SvcStatus {
 
 fn open_svc_for_change(name: &str, access: u32) -> Result<(ScHandle, ScHandle), String> {
     unsafe {
-        let scm = OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_CONNECT).map_err(|e| e.message())?;
+        let scm = OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_CONNECT)
+            .map_err(|e| e.message())?;
         let scm = ScHandle(scm);
         let w = wide(name);
         let svc = OpenServiceW(scm.0, PCWSTR(w.as_ptr()), access).map_err(|e| {
             let c = e.code().0 as u32 & 0xFFFF;
-            if c == 5 { "acesso negado — precisa de admin".to_string() } else { e.message() }
+            if c == 5 {
+                "acesso negado — precisa de admin".to_string()
+            } else {
+                e.message()
+            }
         })?;
         Ok((scm, ScHandle(svc)))
     }
@@ -293,8 +316,14 @@ pub(crate) fn reg_open(root: HKEY, path: &str, write: bool) -> Option<RegKey> {
     unsafe {
         let mut h = HKEY::default();
         let w = wide(path);
-        let access = if write { KEY_READ | KEY_SET_VALUE } else { KEY_READ };
-        RegOpenKeyExW(root, PCWSTR(w.as_ptr()), None, access, &mut h).ok().ok()?;
+        let access = if write {
+            KEY_READ | KEY_SET_VALUE
+        } else {
+            KEY_READ
+        };
+        RegOpenKeyExW(root, PCWSTR(w.as_ptr()), None, access, &mut h)
+            .ok()
+            .ok()?;
         Some(RegKey(h))
     }
 }
@@ -306,7 +335,16 @@ pub(crate) fn reg_dword(root: HKEY, path: &str, value: &str) -> Option<u32> {
         let mut ty = REG_VALUE_TYPE(0);
         let mut data = [0u8; 4];
         let mut len = 4u32;
-        RegQueryValueExW(k.0, PCWSTR(w.as_ptr()), None, Some(&mut ty), Some(data.as_mut_ptr()), Some(&mut len)).ok().ok()?;
+        RegQueryValueExW(
+            k.0,
+            PCWSTR(w.as_ptr()),
+            None,
+            Some(&mut ty),
+            Some(data.as_mut_ptr()),
+            Some(&mut len),
+        )
+        .ok()
+        .ok()?;
         (ty == REG_DWORD).then(|| u32::from_le_bytes(data))
     }
 }
@@ -336,7 +374,11 @@ pub(crate) fn reg_values(k: &RegKey) -> Vec<(String, REG_VALUE_TYPE, Vec<u8>)> {
                 break;
             }
             data.truncate(data_len as usize);
-            out.push((String::from_utf16_lossy(&name[..name_len as usize]), ty, data));
+            out.push((
+                String::from_utf16_lossy(&name[..name_len as usize]),
+                ty,
+                data,
+            ));
             i += 1;
         }
     }
@@ -350,7 +392,18 @@ pub(crate) fn reg_subkeys(k: &RegKey) -> Vec<String> {
         loop {
             let mut name = vec![0u16; 512];
             let mut len = name.len() as u32;
-            if RegEnumKeyExW(k.0, i, Some(PWSTR(name.as_mut_ptr())), &mut len, None, None, None, None).is_err() {
+            if RegEnumKeyExW(
+                k.0,
+                i,
+                Some(PWSTR(name.as_mut_ptr())),
+                &mut len,
+                None,
+                None,
+                None,
+                None,
+            )
+            .is_err()
+            {
                 break;
             }
             out.push(String::from_utf16_lossy(&name[..len as usize]));
@@ -361,7 +414,10 @@ pub(crate) fn reg_subkeys(k: &RegKey) -> Vec<String> {
 }
 
 pub(crate) fn utf16_bytes_to_string(b: &[u8]) -> String {
-    let w: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let w: Vec<u16> = b
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
     let s = String::from_utf16_lossy(&w);
     s.trim_end_matches('\0').to_string()
 }
@@ -385,20 +441,31 @@ pub(crate) fn reg_create(root: HKEY, path: &str) -> Result<RegKey, String> {
         .ok()
         .map_err(|e| {
             let c = e.code().0 as u32 & 0xFFFF;
-            if c == 5 { "acesso negado — precisa de admin".into() } else { e.message() }
+            if c == 5 {
+                "acesso negado — precisa de admin".into()
+            } else {
+                e.message()
+            }
         })?;
         Ok(RegKey(h))
     }
 }
 
-pub(crate) fn reg_set_binary(root: HKEY, path: &str, name: &str, data: &[u8]) -> Result<(), String> {
+pub(crate) fn reg_set_binary(
+    root: HKEY,
+    path: &str,
+    name: &str,
+    data: &[u8],
+) -> Result<(), String> {
     let k = match reg_open(root, path, true) {
         Some(k) => k,
         None => reg_create(root, path)?,
     };
     unsafe {
         let w = wide(name);
-        RegSetValueExW(k.0, PCWSTR(w.as_ptr()), None, REG_BINARY, Some(data)).ok().map_err(|e| e.message())
+        RegSetValueExW(k.0, PCWSTR(w.as_ptr()), None, REG_BINARY, Some(data))
+            .ok()
+            .map_err(|e| e.message())
     }
 }
 
@@ -410,15 +477,20 @@ pub(crate) fn reg_set_dword(root: HKEY, path: &str, name: &str, value: u32) -> R
     unsafe {
         let w = wide(name);
         let bytes = value.to_le_bytes();
-        RegSetValueExW(k.0, PCWSTR(w.as_ptr()), None, REG_DWORD, Some(&bytes)).ok().map_err(|e| e.message())
+        RegSetValueExW(k.0, PCWSTR(w.as_ptr()), None, REG_DWORD, Some(&bytes))
+            .ok()
+            .map_err(|e| e.message())
     }
 }
 
 pub(crate) fn reg_delete_value(root: HKEY, path: &str, name: &str) -> Result<(), String> {
-    let k = reg_open(root, path, true).ok_or_else(|| "acesso negado — precisa de admin".to_string())?;
+    let k =
+        reg_open(root, path, true).ok_or_else(|| "acesso negado — precisa de admin".to_string())?;
     unsafe {
         let w = wide(name);
-        RegDeleteValueW(k.0, PCWSTR(w.as_ptr())).ok().map_err(|e| e.message())
+        RegDeleteValueW(k.0, PCWSTR(w.as_ptr()))
+            .ok()
+            .map_err(|e| e.message())
     }
 }
 
@@ -436,12 +508,35 @@ pub fn defender_status() -> DefenderStatus {
     let mut d = DefenderStatus::default();
     // Real-Time Protection: valor só existe quando desativado por política; sem valor = ativo.
     d.realtime_disabled = Some(
-        reg_dword(HKEY_LOCAL_MACHINE, &format!("{base}\\Real-Time Protection"), "DisableRealtimeMonitoring") == Some(1)
-            || reg_dword(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", "DisableRealtimeMonitoring") == Some(1),
+        reg_dword(
+            HKEY_LOCAL_MACHINE,
+            &format!("{base}\\Real-Time Protection"),
+            "DisableRealtimeMonitoring",
+        ) == Some(1)
+            || reg_dword(
+                HKEY_LOCAL_MACHINE,
+                "SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+                "DisableRealtimeMonitoring",
+            ) == Some(1),
     );
-    d.tamper_protection = reg_dword(HKEY_LOCAL_MACHINE, &format!("{base}\\Features"), "TamperProtection").map(|v| v == 5);
-    d.scan_cpu_factor = reg_dword(HKEY_LOCAL_MACHINE, &format!("{base}\\Scan"), "AvgCPULoadFactor")
-        .or_else(|| reg_dword(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", "AvgCPULoadFactor"));
+    d.tamper_protection = reg_dword(
+        HKEY_LOCAL_MACHINE,
+        &format!("{base}\\Features"),
+        "TamperProtection",
+    )
+    .map(|v| v == 5);
+    d.scan_cpu_factor = reg_dword(
+        HKEY_LOCAL_MACHINE,
+        &format!("{base}\\Scan"),
+        "AvgCPULoadFactor",
+    )
+    .or_else(|| {
+        reg_dword(
+            HKEY_LOCAL_MACHINE,
+            "SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan",
+            "AvgCPULoadFactor",
+        )
+    });
     d
 }
 
@@ -458,15 +553,74 @@ pub struct AppxEntry {
 }
 
 pub const APPX: &[AppxEntry] = &[
-    AppxEntry { family_prefix: "MicrosoftWindows.Client.WebExperience", label: "Widgets (Web Experience Pack)", why: "O painel de widgets/notícias da barra de tarefas. Mantém Widgets.exe + WebView2 vivos.", procs: &["widgets.exe", "widgetservice.exe"], pkg_name: "MicrosoftWindows.Client.WebExperience" },
-    AppxEntry { family_prefix: "Microsoft.YourPhone", label: "Phone Link (Vincular ao Celular)", why: "Espelhamento do celular. Roda PhoneExperienceHost.exe em segundo plano.", procs: &["phoneexperiencehost.exe", "yourphone.exe"], pkg_name: "Microsoft.YourPhone" },
-    AppxEntry { family_prefix: "Microsoft.XboxGamingOverlay", label: "Xbox Game Bar", why: "Overlay Win+G, gravação de jogos. GameBar.exe + GameBarPresenceWriter.", procs: &["gamebar.exe", "gamebarpresencewriter.exe", "gamebarftserver.exe"], pkg_name: "Microsoft.XboxGamingOverlay" },
-    AppxEntry { family_prefix: "Microsoft.Copilot", label: "Copilot (app)", why: "App Copilot do Windows (WebView2).", procs: &["copilot.exe"], pkg_name: "Microsoft.Copilot" },
-    AppxEntry { family_prefix: "Microsoft.549981C3F5F10", label: "Cortana", why: "Assistente antigo, sem função no Windows 11 atual.", procs: &["cortana.exe", "searchapp.exe"], pkg_name: "Microsoft.549981C3F5F10" },
-    AppxEntry { family_prefix: "MicrosoftTeams", label: "Teams (pessoal, integrado)", why: "Teams \"consumer\" que vem com o Windows e abre sozinho.", procs: &["ms-teams.exe", "msteams.exe"], pkg_name: "MicrosoftTeams" },
-    AppxEntry { family_prefix: "Microsoft.BingNews", label: "Microsoft News", why: "App de notícias com tarefas em segundo plano.", procs: &[], pkg_name: "Microsoft.BingNews" },
-    AppxEntry { family_prefix: "Microsoft.GetHelp", label: "Obter Ajuda", why: "App de suporte da Microsoft.", procs: &[], pkg_name: "Microsoft.GetHelp" },
-    AppxEntry { family_prefix: "Microsoft.MicrosoftSolitaireCollection", label: "Solitaire Collection", why: "Jogos com anúncios pré-instalados.", procs: &[], pkg_name: "Microsoft.MicrosoftSolitaireCollection" },
+    AppxEntry {
+        family_prefix: "MicrosoftWindows.Client.WebExperience",
+        label: "Widgets (Web Experience Pack)",
+        why:
+            "O painel de widgets/notícias da barra de tarefas. Mantém Widgets.exe + WebView2 vivos.",
+        procs: &["widgets.exe", "widgetservice.exe"],
+        pkg_name: "MicrosoftWindows.Client.WebExperience",
+    },
+    AppxEntry {
+        family_prefix: "Microsoft.YourPhone",
+        label: "Phone Link (Vincular ao Celular)",
+        why: "Espelhamento do celular. Roda PhoneExperienceHost.exe em segundo plano.",
+        procs: &["phoneexperiencehost.exe", "yourphone.exe"],
+        pkg_name: "Microsoft.YourPhone",
+    },
+    AppxEntry {
+        family_prefix: "Microsoft.XboxGamingOverlay",
+        label: "Xbox Game Bar",
+        why: "Overlay Win+G, gravação de jogos. GameBar.exe + GameBarPresenceWriter.",
+        procs: &[
+            "gamebar.exe",
+            "gamebarpresencewriter.exe",
+            "gamebarftserver.exe",
+        ],
+        pkg_name: "Microsoft.XboxGamingOverlay",
+    },
+    AppxEntry {
+        family_prefix: "Microsoft.Copilot",
+        label: "Copilot (app)",
+        why: "App Copilot do Windows (WebView2).",
+        procs: &["copilot.exe"],
+        pkg_name: "Microsoft.Copilot",
+    },
+    AppxEntry {
+        family_prefix: "Microsoft.549981C3F5F10",
+        label: "Cortana",
+        why: "Assistente antigo, sem função no Windows 11 atual.",
+        procs: &["cortana.exe", "searchapp.exe"],
+        pkg_name: "Microsoft.549981C3F5F10",
+    },
+    AppxEntry {
+        family_prefix: "MicrosoftTeams",
+        label: "Teams (pessoal, integrado)",
+        why: "Teams \"consumer\" que vem com o Windows e abre sozinho.",
+        procs: &["ms-teams.exe", "msteams.exe"],
+        pkg_name: "MicrosoftTeams",
+    },
+    AppxEntry {
+        family_prefix: "Microsoft.BingNews",
+        label: "Microsoft News",
+        why: "App de notícias com tarefas em segundo plano.",
+        procs: &[],
+        pkg_name: "Microsoft.BingNews",
+    },
+    AppxEntry {
+        family_prefix: "Microsoft.GetHelp",
+        label: "Obter Ajuda",
+        why: "App de suporte da Microsoft.",
+        procs: &[],
+        pkg_name: "Microsoft.GetHelp",
+    },
+    AppxEntry {
+        family_prefix: "Microsoft.MicrosoftSolitaireCollection",
+        label: "Solitaire Collection",
+        why: "Jogos com anúncios pré-instalados.",
+        procs: &[],
+        pkg_name: "Microsoft.MicrosoftSolitaireCollection",
+    },
 ];
 
 /// Pacotes Appx instalados para o usuário atual (só os nomes de família), lido do registro — sem PowerShell.
@@ -499,7 +653,10 @@ fn run_elevated_ps_blocking(script: &str) -> Result<(), String> {
     let wrapped = format!(
         "$ErrorActionPreference='Stop'; try {{ {script}; exit 0 }} catch {{ [Console]::Error.WriteLine($_); exit 1 }}"
     );
-    let args = format!("-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"{}\"", wrapped.replace('"', "\\\""));
+    let args = format!(
+        "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"{}\"",
+        wrapped.replace('"', "\\\"")
+    );
     unsafe {
         let verb = wide("runas");
         let file = wide("powershell.exe");
@@ -515,7 +672,11 @@ fn run_elevated_ps_blocking(script: &str) -> Result<(), String> {
         };
         ShellExecuteExW(&mut sei).map_err(|e| {
             let c = e.code().0 as u32 & 0xFFFF;
-            if c == 1223 { "cancelado no UAC".to_string() } else { e.message() }
+            if c == 1223 {
+                "cancelado no UAC".to_string()
+            } else {
+                e.message()
+            }
         })?;
         if sei.hProcess.is_invalid() {
             return Err("não foi possível iniciar o PowerShell elevado".into());

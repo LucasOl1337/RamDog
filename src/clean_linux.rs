@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use egui::{Color32, RichText};
 
 use crate::app::{fmt_bytes, fmt_bytes_short, ACCENT, LINE, MUTED, SURFACE};
+use crate::config::Locale;
 use crate::identity;
 use crate::linux::{self, Job};
 use crate::procs::ProcInfo;
@@ -53,8 +54,14 @@ pub fn meminfo() -> Mem {
 fn parse_meminfo(text: &str) -> Mem {
     let mut m = Mem::default();
     for line in text.lines() {
-        let Some((key, rest)) = line.split_once(':') else { continue };
-        let kb: u64 = rest.split_whitespace().next().and_then(|v| v.parse().ok()).unwrap_or(0);
+        let Some((key, rest)) = line.split_once(':') else {
+            continue;
+        };
+        let kb: u64 = rest
+            .split_whitespace()
+            .next()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
         let b = kb * 1024;
         match key {
             "MemTotal" => m.total = b,
@@ -88,7 +95,10 @@ pub enum Kind {
 
 impl Kind {
     fn needs_root(self) -> bool {
-        matches!(self, Kind::Pacman | Kind::Journal | Kind::Coredump | Kind::Orphans)
+        matches!(
+            self,
+            Kind::Pacman | Kind::Journal | Kind::Coredump | Kind::Orphans
+        )
     }
     fn helper_op(self) -> &'static str {
         match self {
@@ -111,6 +121,55 @@ pub struct Target {
     pub items: u64,
 }
 
+impl Target {
+    fn name_for(&self, locale: Locale) -> String {
+        match self.kind {
+            Kind::UserDir => self.name.clone(),
+            Kind::Trash => locale.text("Lixeira", "Trash").to_string(),
+            Kind::Pacman => locale.text("Cache do pacman", "Pacman cache").to_string(),
+            Kind::Journal => locale
+                .text("Journal do systemd", "systemd journal")
+                .to_string(),
+            Kind::Coredump => "Coredumps".to_string(),
+            Kind::Orphans => {
+                if locale == Locale::Portuguese {
+                    self.name.clone()
+                } else {
+                    format!("Orphan packages ({})", self.items)
+                }
+            }
+        }
+    }
+
+    fn detail_for(&self, locale: Locale) -> String {
+        match self.kind {
+            Kind::UserDir => self
+                .name
+                .rsplit('/')
+                .next()
+                .map(|name| cache_hint_for(name, locale).to_string())
+                .unwrap_or_else(|| self.detail.clone()),
+            Kind::Trash => locale.text(
+                "arquivos apagados pelo gerenciador de arquivos; sem volta depois daqui",
+                "files deleted by the file manager; there is no undo after this",
+            ).to_string(),
+            Kind::Pacman => locale.text(
+                "paccache: mantém a versão instalada de cada pacote e apaga as antigas e as desinstaladas",
+                "paccache: keeps the installed version of each package and removes older and uninstalled versions",
+            ).to_string(),
+            Kind::Journal => locale.text(
+                "logs antigos; encolhe para 64 MB, o log atual continua",
+                "old logs; shrinks to 64 MB while keeping the current log",
+            ).to_string(),
+            Kind::Coredump => locale.text(
+                "despejos de programas que travaram; só servem para depurar (coredumpctl)",
+                "dumps from crashed programs; useful only for debugging (coredumpctl)",
+            ).to_string(),
+            Kind::Orphans => self.detail.clone(),
+        }
+    }
+}
+
 #[derive(Default, Clone, Debug)]
 pub struct Report {
     pub targets: Vec<Target>,
@@ -122,11 +181,15 @@ fn home() -> PathBuf {
 }
 
 fn cache_home() -> PathBuf {
-    std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".cache"))
+    std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".cache"))
 }
 
 fn data_home() -> PathBuf {
-    std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".local/share"))
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".local/share"))
 }
 
 /// Tamanho em disco (blocos, como o `du`) e número de arquivos, sem seguir symlinks.
@@ -135,7 +198,9 @@ pub fn du(path: &Path) -> (u64, u64) {
     let mut items = 0u64;
     let mut stack = vec![path.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for e in rd.flatten() {
             let Ok(md) = e.metadata() else { continue };
             // `DirEntry::metadata` não segue symlink: um link para /usr não conta como /usr.
@@ -163,8 +228,15 @@ pub fn remove_contents(dir: &Path) -> Result<(u64, u64, u64), String> {
     let mut failed = 0u64;
     for e in rd.flatten() {
         let p = e.path();
-        let Ok(md) = e.metadata() else { failed += 1; continue };
-        let (b, n) = if md.is_dir() && !md.file_type().is_symlink() { du(&p) } else { (md.blocks() * 512, 1) };
+        let Ok(md) = e.metadata() else {
+            failed += 1;
+            continue;
+        };
+        let (b, n) = if md.is_dir() && !md.file_type().is_symlink() {
+            du(&p)
+        } else {
+            (md.blocks() * 512, 1)
+        };
         let r = if md.is_dir() && !md.file_type().is_symlink() {
             std::fs::remove_dir_all(&p)
         } else {
@@ -183,7 +255,9 @@ pub fn remove_contents(dir: &Path) -> Result<(u64, u64, u64), String> {
 fn journal_bytes() -> Option<u64> {
     // "Archived and active journals take up 376.6M in the file system."
     let out = linux::command("journalctl", &["--disk-usage"]).ok()?;
-    let word = out.split_whitespace().find(|w| w.ends_with(['B', 'K', 'M', 'G', 'T']))?;
+    let word = out
+        .split_whitespace()
+        .find(|w| w.ends_with(['B', 'K', 'M', 'G', 'T']))?;
     let (num, unit) = word.split_at(word.len() - 1);
     let num: f64 = num.parse().ok()?;
     // systemd formata em múltiplos de 1024, mesmo escrevendo "M".
@@ -200,28 +274,78 @@ fn journal_bytes() -> Option<u64> {
 fn orphan_packages() -> Vec<String> {
     // `pacman -Qtdq` sai com 1 quando não há órfãos; isso não é erro.
     match linux::command("pacman", &["-Qtdq"]) {
-        Ok(out) => out.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect(),
+        Ok(out) => out
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect(),
         Err(_) => Vec::new(),
     }
 }
 
 /// Pastas de cache que são de um app específico e voltam sozinhas quando ele roda.
 fn cache_hint(name: &str) -> &'static str {
+    cache_hint_for(name, Locale::Portuguese)
+}
+
+fn cache_hint_for(name: &str, locale: Locale) -> &'static str {
     let n = name.to_ascii_lowercase();
-    if n.contains("chromium") || n.contains("chrome") || n.contains("brave") || n.contains("firefox") || n.contains("mozilla") {
-        "cache do navegador; se ele estiver aberto, parte é recriada na hora"
+    if n.contains("chromium")
+        || n.contains("chrome")
+        || n.contains("brave")
+        || n.contains("firefox")
+        || n.contains("mozilla")
+    {
+        locale.text(
+            "cache do navegador; se ele estiver aberto, parte é recriada na hora",
+            "browser cache; part of it is recreated while the browser is open",
+        )
     } else if n == "yay" || n == "paru" {
-        "clones de AUR; o helper baixa de novo no próximo build"
-    } else if n == "pip" || n == "uv" || n == "pypoetry" || n == "npm" || n == "pnpm" || n == "yarn" || n == "go-build" || n == "cargo" {
-        "cache de pacotes de linguagem; o próximo install baixa de novo"
+        locale.text(
+            "clones de AUR; o helper baixa de novo no próximo build",
+            "AUR clones; the helper downloads them again on the next build",
+        )
+    } else if n == "pip"
+        || n == "uv"
+        || n == "pypoetry"
+        || n == "npm"
+        || n == "pnpm"
+        || n == "yarn"
+        || n == "go-build"
+        || n == "cargo"
+    {
+        locale.text(
+            "cache de pacotes de linguagem; o próximo install baixa de novo",
+            "language package cache; the next install downloads it again",
+        )
     } else if n == "thumbnails" {
-        "miniaturas do gerenciador de arquivos; refeitas ao abrir as pastas"
-    } else if n.contains("mesa") || n.contains("nvidia") || n.contains("shader") || n.contains("radv") {
-        "cache de shaders; jogos podem engasgar no primeiro minuto depois de limpar"
-    } else if n.contains("huggingface") || n.contains("torch") || n.contains("whisper") || n.contains("models") {
-        "modelos de IA baixados; volta a baixar (pode ser gigas)"
+        locale.text(
+            "miniaturas do gerenciador de arquivos; refeitas ao abrir as pastas",
+            "file-manager thumbnails; rebuilt when folders are opened",
+        )
+    } else if n.contains("mesa")
+        || n.contains("nvidia")
+        || n.contains("shader")
+        || n.contains("radv")
+    {
+        locale.text(
+            "cache de shaders; jogos podem engasgar no primeiro minuto depois de limpar",
+            "shader cache; games may stutter for the first minute after cleaning",
+        )
+    } else if n.contains("huggingface")
+        || n.contains("torch")
+        || n.contains("whisper")
+        || n.contains("models")
+    {
+        locale.text(
+            "modelos de IA baixados; volta a baixar (pode ser gigas)",
+            "downloaded AI models; they will be downloaded again (possibly gigabytes)",
+        )
     } else {
-        "cache; o app recria o que precisar"
+        locale.text(
+            "cache; o app recria o que precisar",
+            "cache; the app recreates what it needs",
+        )
     }
 }
 
@@ -294,7 +418,8 @@ pub fn scan() -> Result<Report, String> {
                 kind: Kind::Coredump,
                 name: "Coredumps".into(),
                 path: core,
-                detail: "despejos de programas que travaram; só servem para depurar (coredumpctl)".into(),
+                detail: "despejos de programas que travaram; só servem para depurar (coredumpctl)"
+                    .into(),
                 bytes,
                 items,
             });
@@ -332,18 +457,36 @@ fn run_helper(op: &str) -> Result<String, String> {
         Some(126) | Some(127) => Err("Autenticação cancelada ou negada".into()),
         _ => {
             let why = String::from_utf8_lossy(&output.stderr);
-            let why = if why.trim().is_empty() { String::from_utf8_lossy(&output.stdout) } else { why };
-            Err(format!("helper ({}): {}", output.status, why.trim().chars().take(400).collect::<String>()))
+            let why = if why.trim().is_empty() {
+                String::from_utf8_lossy(&output.stdout)
+            } else {
+                why
+            };
+            Err(format!(
+                "helper ({}): {}",
+                output.status,
+                why.trim().chars().take(400).collect::<String>()
+            ))
         }
     }
 }
 
 /// Executa uma limpeza e devolve a frase para o toast.
 pub fn apply(t: &Target) -> Result<String, String> {
+    apply_for(t, Locale::Portuguese)
+}
+
+pub fn apply_for(t: &Target, locale: Locale) -> Result<String, String> {
     match t.kind {
         Kind::UserDir => {
             let (freed, removed, failed) = remove_contents(&t.path)?;
-            Ok(done_msg(&t.name, freed, removed, failed))
+            Ok(done_msg_for(
+                &t.name_for(locale),
+                freed,
+                removed,
+                failed,
+                locale,
+            ))
         }
         Kind::Trash => {
             let mut freed = 0;
@@ -358,16 +501,35 @@ pub fn apply(t: &Target) -> Result<String, String> {
                     failed += x;
                 }
             }
-            Ok(done_msg("Lixeira", freed, removed, failed))
+            Ok(done_msg_for(
+                &t.name_for(locale),
+                freed,
+                removed,
+                failed,
+                locale,
+            ))
         }
         k => run_helper(k.helper_op()),
     }
 }
 
 fn done_msg(name: &str, freed: u64, removed: u64, failed: u64) -> String {
-    let mut s = format!("{name}: {} liberados, {removed} itens", fmt_bytes(freed));
+    done_msg_for(name, freed, removed, failed, Locale::Portuguese)
+}
+
+fn done_msg_for(name: &str, freed: u64, removed: u64, failed: u64, locale: Locale) -> String {
+    let mut s = if locale == Locale::Portuguese {
+        format!("{name}: {} liberados, {removed} itens", fmt_bytes(freed))
+    } else {
+        format!("{name}: {} freed, {removed} items", fmt_bytes(freed))
+    };
     if failed > 0 {
-        s.push_str(&format!(", {failed} em uso ou sem permissão"));
+        let failed_text = if locale == Locale::Portuguese {
+            format!(", {failed} em uso ou sem permissão")
+        } else {
+            format!(", {failed} still in use or without permission")
+        };
+        s.push_str(&failed_text);
     }
     s
 }
@@ -386,10 +548,15 @@ pub fn helper(op: &str) -> Result<(), String> {
         "dropcaches" => {
             let before = meminfo();
             unsafe { libc::sync() };
-            std::fs::write("/proc/sys/vm/drop_caches", "3\n").map_err(|e| format!("drop_caches: {e}"))?;
+            std::fs::write("/proc/sys/vm/drop_caches", "3\n")
+                .map_err(|e| format!("drop_caches: {e}"))?;
             let _ = std::fs::write("/proc/sys/vm/compact_memory", "1\n");
             let after = meminfo();
-            format!("cache do kernel solto: {} → {} livres", fmt_bytes(before.free), fmt_bytes(after.free))
+            format!(
+                "cache do kernel solto: {} → {} livres",
+                fmt_bytes(before.free),
+                fmt_bytes(after.free)
+            )
         }
         "paccache" => {
             let before = du(Path::new("/var/cache/pacman/pkg")).0;
@@ -397,13 +564,19 @@ pub fn helper(op: &str) -> Result<(), String> {
             let b = linux::command("paccache", &["-ruk0"])?;
             let after = du(Path::new("/var/cache/pacman/pkg")).0;
             let _ = (a, b);
-            format!("cache do pacman: {} liberados", fmt_bytes(before.saturating_sub(after)))
+            format!(
+                "cache do pacman: {} liberados",
+                fmt_bytes(before.saturating_sub(after))
+            )
         }
         "journal" => {
             let before = journal_bytes().unwrap_or(0);
             linux::command("journalctl", &["--vacuum-size=64M"])?;
             let after = journal_bytes().unwrap_or(0);
-            format!("journal: {} liberados", fmt_bytes(before.saturating_sub(after)))
+            format!(
+                "journal: {} liberados",
+                fmt_bytes(before.saturating_sub(after))
+            )
         }
         "coredump" => {
             let dir = Path::new("/var/lib/systemd/coredump");
@@ -432,9 +605,16 @@ pub fn helper(op: &str) -> Result<(), String> {
                     .output()
                     .map_err(|e| format!("pacman: {e}"))?;
                 if !output.status.success() {
-                    return Err(format!("pacman -Rns: {}", String::from_utf8_lossy(&output.stderr).trim()));
+                    return Err(format!(
+                        "pacman -Rns: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    ));
                 }
-                format!("{} pacote(s) órfão(s) removidos: {}", orphans.len(), orphans.join(", "))
+                format!(
+                    "{} pacote(s) órfão(s) removidos: {}",
+                    orphans.len(),
+                    orphans.join(", ")
+                )
             }
         }
         other => return Err(format!("operação desconhecida: {other}")),
@@ -510,16 +690,27 @@ impl Clean {
             }
             let id = identity::of(p);
             // Zombie não soma no app: é uma linha própria, com o pai apontado.
-            let key = if zombie { format!("zombie:{}", p.pid) } else { id.key.clone() };
+            let key = if zombie {
+                format!("zombie:{}", p.pid)
+            } else {
+                id.key.clone()
+            };
             let is_locked = locked(p);
             let parent = if zombie {
-                by_pid.get(&p.raw_ppid).filter(|pp| !locked(pp) && pp.pid > 1).map(|pp| (pp.pid, identity::of(pp).label))
+                by_pid
+                    .get(&p.raw_ppid)
+                    .filter(|pp| !locked(pp) && pp.pid > 1)
+                    .map(|pp| (pp.pid, identity::of(pp).label))
             } else {
                 None
             };
             let row = groups.entry(key.clone()).or_insert_with(|| AppRow {
                 key,
-                label: if zombie { format!("{} (zombie)", p.name) } else { id.label.clone() },
+                label: if zombie {
+                    format!("{} (zombie)", p.name)
+                } else {
+                    id.label.clone()
+                },
                 pids: Vec::new(),
                 ram: 0,
                 cpu: 0.0,
@@ -556,6 +747,7 @@ impl Clean {
         procs: &[ProcInfo],
         mem: &dyn Fn(&ProcInfo) -> u64,
         locked: &dyn Fn(&ProcInfo) -> bool,
+        locale: Locale,
     ) -> Vec<CleanOut> {
         let mut out = Vec::new();
         self.scan.poll();
@@ -583,21 +775,24 @@ impl Clean {
             out.push(CleanOut::Toast(msg, err));
         }
 
-        crate::kit::intro(ui, "O que sobrou rodando sem ninguém usar, e o que está ocupando disco sem precisar. Nada aqui é apagado sem um clique de confirmação; encerrar processo é na hora, como na lista.");
+        crate::kit::intro(ui, locale.text("O que sobrou rodando sem ninguém usar, e o que está ocupando disco sem precisar. Nada aqui é apagado sem um clique de confirmação; encerrar processo é na hora, como na lista.", "What is still running unused, and what is occupying disk unnecessarily. Nothing is deleted without a confirmation click; terminating a process is immediate, like in the list."));
         ui.add_space(8.0);
 
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            self.ui_memory(ui, procs);
-            ui.add_space(10.0);
-            self.ui_processes(ui, procs, mem, locked, &mut out);
-            ui.add_space(10.0);
-            self.ui_disk(ui);
-        });
-        ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                self.ui_memory(ui, procs, locale);
+                ui.add_space(10.0);
+                self.ui_processes(ui, procs, mem, locked, locale, &mut out);
+                ui.add_space(10.0);
+                self.ui_disk(ui, locale);
+            });
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs(1));
         out
     }
 
-    fn ui_memory(&mut self, ui: &mut egui::Ui, _procs: &[ProcInfo]) {
+    fn ui_memory(&mut self, ui: &mut egui::Ui, _procs: &[ProcInfo], locale: Locale) {
         // A leitura de meminfo é barata; refaz a cada frame para a barra acompanhar o kill.
         let m = meminfo();
         section(ui, "RAM", |ui| {
@@ -610,27 +805,60 @@ impl Clean {
             p.rect_filled(rect, 3.0, SURFACE);
             let x_used = rect.left() + rect.width() * used as f32 / total as f32;
             let x_cache = x_used + rect.width() * drop as f32 / total as f32;
-            p.rect_filled(egui::Rect::from_min_max(rect.min, egui::pos2(x_used, rect.max.y)), 3.0, ACCENT);
             p.rect_filled(
-                egui::Rect::from_min_max(egui::pos2(x_used, rect.min.y), egui::pos2(x_cache, rect.max.y)),
+                egui::Rect::from_min_max(rect.min, egui::pos2(x_used, rect.max.y)),
+                3.0,
+                ACCENT,
+            );
+            p.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(x_used, rect.min.y),
+                    egui::pos2(x_cache, rect.max.y),
+                ),
                 0.0,
                 ACCENT.gamma_multiply(0.35),
             );
-            p.rect_stroke(rect, 3.0, egui::Stroke::new(1.0_f32, LINE), egui::StrokeKind::Inside);
+            p.rect_stroke(
+                rect,
+                3.0,
+                egui::Stroke::new(1.0_f32, LINE),
+                egui::StrokeKind::Inside,
+            );
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(format!("{} em uso", fmt_bytes(used))).color(ACCENT).strong());
+                ui.label(
+                    RichText::new(format!(
+                        "{} {}",
+                        fmt_bytes(used),
+                        locale.text("em uso", "in use")
+                    ))
+                    .color(ACCENT)
+                    .strong(),
+                );
                 ui.label(RichText::new("·").color(MUTED));
-                ui.label(format!("{} de cache do kernel", fmt_bytes(drop)));
+                ui.label(format!(
+                    "{} {}",
+                    fmt_bytes(drop),
+                    locale.text("de cache do kernel", "kernel cache")
+                ));
                 ui.label(RichText::new("·").color(MUTED));
-                ui.label(format!("{} disponíveis de {}", fmt_bytes(m.available), fmt_bytes(m.total)));
+                ui.label(format!(
+                    "{} {} {}",
+                    fmt_bytes(m.available),
+                    locale.text("disponíveis de", "available of"),
+                    fmt_bytes(m.total)
+                ));
                 if m.swap_total > 0 {
                     ui.label(RichText::new("·").color(MUTED));
-                    ui.label(format!("swap {} / {}", fmt_bytes(m.swap_total - m.swap_free), fmt_bytes(m.swap_total)));
+                    ui.label(format!(
+                        "swap {} / {}",
+                        fmt_bytes(m.swap_total - m.swap_free),
+                        fmt_bytes(m.swap_total)
+                    ));
                 }
             });
             ui.horizontal(|ui| {
-                let b = ui.add_enabled(!self.drop.busy(), crate::kit::button("Soltar cache do kernel"));
-                if b.on_hover_text("sync + drop_caches + compact_memory. Pede senha.\n\nO kernel já solta esse cache sozinho quando um app precisa; isso aqui só antecipa. Vale antes de um jogo ou pra ver a RAM \"de verdade\". Arquivos recém-usados voltam a ser lidos do disco.").clicked() {
+                let b = ui.add_enabled(!self.drop.busy(), crate::kit::button(locale.text("Soltar cache do kernel", "Drop kernel cache")));
+                if b.on_hover_text(locale.text("sync + drop_caches + compact_memory. Pede senha.\n\nO kernel já solta esse cache sozinho quando um app precisa; isso aqui só antecipa. Vale antes de um jogo ou pra ver a RAM \"de verdade\". Arquivos recém-usados voltam a ser lidos do disco.", "sync + drop_caches + compact_memory. Requires a password.\n\nThe kernel releases this cache automatically when an app needs it; this only brings it forward. Useful before a game or to see \"real\" RAM. Recently used files will be read from disk again.")).clicked() {
                     self.drop.start(drop_caches);
                 }
                 self.drop.status(ui);
@@ -644,6 +872,7 @@ impl Clean {
         procs: &[ProcInfo],
         mem: &dyn Fn(&ProcInfo) -> u64,
         locked: &dyn Fn(&ProcInfo) -> bool,
+        locale: Locale,
         out: &mut Vec<CleanOut>,
     ) {
         let rows = self.rows(procs, mem, locked);
@@ -651,48 +880,61 @@ impl Clean {
         self.selected.retain(|k, _| alive.contains(k.as_str()));
         let sel_pids: Vec<u32> = rows
             .iter()
-            .filter(|r| !r.locked && !r.zombie && self.selected.get(&r.key).copied().unwrap_or(false))
+            .filter(|r| {
+                !r.locked && !r.zombie && self.selected.get(&r.key).copied().unwrap_or(false)
+            })
             .flat_map(|r| r.pids.iter().copied())
             .collect();
         let sel_ram: u64 = rows
             .iter()
-            .filter(|r| !r.locked && !r.zombie && self.selected.get(&r.key).copied().unwrap_or(false))
+            .filter(|r| {
+                !r.locked && !r.zombie && self.selected.get(&r.key).copied().unwrap_or(false)
+            })
             .map(|r| r.ram)
             .sum();
-        let n_leftover = rows.iter().filter(|r| r.zombie || r.leftover.is_some()).count();
-        let title = format!("Processos · {} apps acima de {}", rows.len(), fmt_bytes_short(self.min_ram));
+        let n_leftover = rows
+            .iter()
+            .filter(|r| r.zombie || r.leftover.is_some())
+            .count();
+        let title = format!(
+            "{} · {} {} {}",
+            locale.text("Processos", "Processes"),
+            rows.len(),
+            locale.text("apps acima de", "apps above"),
+            fmt_bytes_short(self.min_ram)
+        );
         section(ui, &title, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Marca o que não está usando e encerra de uma vez. Sobras e zombies vêm primeiro; quem tem janela aberta fica no fim.").color(MUTED));
+                ui.label(RichText::new(locale.text("Marca o que não está usando e encerra de uma vez. Sobras e zombies vêm primeiro; quem tem janela aberta fica no fim.", "Select what is unused and terminate it at once. Leftovers and zombies come first; apps with open windows stay at the end.")).color(MUTED));
             });
             ui.horizontal(|ui| {
-                ui.label("mostrar acima de");
+                ui.label(locale.text("mostrar acima de", "show above"));
                 let mut mb = (self.min_ram >> 20) as u32;
                 if ui.add(egui::DragValue::new(&mut mb).range(0..=8192).suffix(" MB").speed(10)).changed() {
                     self.min_ram = (mb as u64) << 20;
                 }
-                if n_leftover > 0 && ui.add(crate::kit::button(&format!("Marcar sobras ({n_leftover})"))).on_hover_text("Zombies ficam de fora: sinal neles não faz nada, o que resolve é o pai.").clicked() {
+                if n_leftover > 0 && ui.add(crate::kit::button(&format!("{} ({n_leftover})", locale.text("Marcar sobras", "Mark leftovers")))).on_hover_text(locale.text("Zombies ficam de fora: sinal neles não faz nada, o que resolve é o pai.", "Zombies are excluded: signals do nothing; the parent is what fixes it.")).clicked() {
                     for r in &rows {
                         if r.leftover.is_some() && !r.zombie && !r.locked {
                             self.selected.insert(r.key.clone(), true);
                         }
                     }
                 }
-                if ui.add(crate::kit::button("Marcar sem janela")).on_hover_text("Tudo que não tem janela aberta e não é do sistema").clicked() {
+                if ui.add(crate::kit::button(locale.text("Marcar sem janela", "Mark without a window"))).on_hover_text(locale.text("Tudo que não tem janela aberta e não é do sistema", "Everything without an open window that is not a system process")).clicked() {
                     for r in &rows {
                         if !r.has_window && !r.locked && !r.zombie {
                             self.selected.insert(r.key.clone(), true);
                         }
                     }
                 }
-                if ui.add(crate::kit::button("Desmarcar")).clicked() {
+                if ui.add(crate::kit::button(locale.text("Desmarcar", "Clear selection"))).clicked() {
                     self.selected.clear();
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let label = if sel_pids.is_empty() {
-                        "Encerrar selecionados".to_string()
+                        locale.text("Encerrar selecionados", "Terminate selected").to_string()
                     } else {
-                        format!("Encerrar selecionados · {} PIDs · {}", sel_pids.len(), fmt_bytes(sel_ram))
+                        format!("{} · {} PIDs · {}", locale.text("Encerrar selecionados", "Terminate selected"), sel_pids.len(), fmt_bytes(sel_ram))
                     };
                     if ui.add_enabled(!sel_pids.is_empty(), crate::kit::primary(&label)).clicked() {
                         out.push(CleanOut::Kill(sel_pids.clone()));
@@ -702,16 +944,22 @@ impl Clean {
             });
             ui.add_space(4.0);
             if rows.is_empty() {
-                ui.label(RichText::new("Nada acima do corte. Sobe o filtro ou baixa o corte de RAM.").color(MUTED));
+                ui.label(
+                    RichText::new(locale.text(
+                        "Nada acima do corte. Sobe o filtro ou baixa o corte de RAM.",
+                        "Nothing above the threshold. Raise the filter or lower the RAM threshold.",
+                    ))
+                    .color(MUTED),
+                );
                 return;
             }
             egui::Grid::new("clean-procs").num_columns(6).spacing([12.0, 4.0]).striped(true).show(ui, |ui| {
                 ui.label(RichText::new("").small());
-                ui.label(RichText::new("App").color(MUTED).small());
+                ui.label(RichText::new(locale.text("App", "App")).color(MUTED).small());
                 ui.label(RichText::new("PIDs").color(MUTED).small());
                 ui.label(RichText::new("RAM").color(MUTED).small());
                 ui.label(RichText::new("CPU").color(MUTED).small());
-                ui.label(RichText::new("Estado").color(MUTED).small());
+                ui.label(RichText::new(locale.text("Estado", "State")).color(MUTED).small());
                 ui.end_row();
                 for r in &rows {
                     let mut on = self.selected.get(&r.key).copied().unwrap_or(false);
@@ -724,17 +972,17 @@ impl Clean {
                     ui.label(if r.cpu >= 0.05 { format!("{:.1}%", r.cpu) } else { "–".into() });
                     ui.horizontal(|ui| {
                         let (text, color) = if r.locked {
-                            ("protegido", MUTED)
+                            (locale.text("protegido", "protected"), MUTED)
                         } else if r.zombie {
                             ("zombie", Color32::from_rgb(230, 120, 120))
                         } else if r.leftover.is_some() {
-                            ("sobra", Color32::from_rgb(230, 170, 90))
+                            (locale.text("sobra", "leftover"), Color32::from_rgb(230, 170, 90))
                         } else if r.focused {
-                            ("em foco", Color32::from_rgb(120, 200, 140))
+                            (locale.text("em foco", "focused"), Color32::from_rgb(120, 200, 140))
                         } else if r.has_window {
-                            ("janela", Color32::from_rgb(120, 200, 140))
+                            (locale.text("janela", "window"), Color32::from_rgb(120, 200, 140))
                         } else {
-                            ("fundo", MUTED)
+                            (locale.text("fundo", "background"), MUTED)
                         };
                         let l = crate::kit::badge(ui, text, color);
                         if let Some(why) = r.leftover {
@@ -743,15 +991,15 @@ impl Clean {
                         if r.zombie {
                             match &r.parent {
                                 Some((ppid, pname)) => {
-                                    if ui.small_button(format!("encerrar pai · {pname} ({ppid})")).on_hover_text("Zombie não morre com sinal: já está morto. Some quando o pai recolhe o estado ou quando o pai cai.").clicked() {
+                                    if ui.small_button(format!("{} · {pname} ({ppid})", locale.text("encerrar pai", "terminate parent"))).on_hover_text(locale.text("Zombie não morre com sinal: já está morto. Some quando o pai recolhe o estado ou quando o pai cai.", "A zombie does not die from a signal: it is already dead. It disappears when the parent reaps it or exits.")).clicked() {
                                         out.push(CleanOut::Kill(vec![*ppid]));
                                     }
                                 }
                                 None => {
-                                    ui.label(RichText::new("pai protegido").color(MUTED).small());
+                                    ui.label(RichText::new(locale.text("pai protegido", "parent protected")).color(MUTED).small());
                                 }
                             }
-                        } else if !r.locked && ui.small_button("✖").on_hover_text("Encerrar agora").clicked() {
+                        } else if !r.locked && ui.small_button("✖").on_hover_text(locale.text("Encerrar agora", "Terminate now")).clicked() {
                             out.push(CleanOut::Kill(r.pids.clone()));
                         }
                     });
@@ -761,17 +1009,22 @@ impl Clean {
         });
     }
 
-    fn ui_disk(&mut self, ui: &mut egui::Ui) {
+    fn ui_disk(&mut self, ui: &mut egui::Ui, locale: Locale) {
         let total: u64 = self.scan.value.targets.iter().map(|t| t.bytes).sum();
         let title = if self.scan.value.targets.is_empty() {
-            "Disco".to_string()
+            locale.text("Disco", "Disk").to_string()
         } else {
-            format!("Disco · {} recuperáveis", fmt_bytes(total))
+            format!(
+                "{} · {} {}",
+                locale.text("Disco", "Disk"),
+                fmt_bytes(total),
+                locale.text("recuperáveis", "reclaimable")
+            )
         };
         section(ui, &title, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Caches do usuário, lixeira, cache do pacman, journal, coredumps e órfãos. Itens com 🔒 pedem senha (pkexec).").color(MUTED));
-                if ui.add_enabled(!self.scan.busy(), crate::kit::button("Atualizar")).clicked() {
+                ui.label(RichText::new(locale.text("Caches do usuário, lixeira, cache do pacman, journal, coredumps e órfãos. Itens com 🔒 pedem senha (pkexec).", "User caches, trash, pacman cache, journal, coredumps, and orphans. 🔒 items require a password (pkexec).")).color(MUTED));
+                if ui.add_enabled(!self.scan.busy(), crate::kit::button(locale.text("Atualizar", "Refresh"))).clicked() {
                     self.scan.start(scan);
                 }
                 self.scan.status(ui);
@@ -781,7 +1034,13 @@ impl Clean {
                 ui.colored_label(Color32::YELLOW, w);
             }
             if self.scan.value.targets.is_empty() && !self.scan.busy() {
-                ui.label(RichText::new("Nada acima de 1 MB para limpar.").color(MUTED));
+                ui.label(
+                    RichText::new(locale.text(
+                        "Nada acima de 1 MB para limpar.",
+                        "Nothing above 1 MB to clean.",
+                    ))
+                    .color(MUTED),
+                );
                 return;
             }
             ui.add_space(4.0);
@@ -789,47 +1048,112 @@ impl Clean {
             // O Grid dá à coluna de texto só o que sobra depois dos botões; sem largura fixa
             // a descrição vira "cach…".
             let detail_w = (ui.available_width() - 560.0).clamp(200.0, 700.0);
-            egui::Grid::new("clean-disk").num_columns(4).spacing([12.0, 4.0]).striped(true).show(ui, |ui| {
-                ui.label(RichText::new("Alvo").color(MUTED).small());
-                ui.label(RichText::new("Tamanho").color(MUTED).small());
-                ui.label(RichText::new("O que é").color(MUTED).small());
-                ui.label("");
-                ui.end_row();
-                for (i, t) in targets.iter().enumerate() {
-                    let name = if t.kind.needs_root() { format!("🔒 {}", t.name) } else { t.name.clone() };
-                    ui.label(name).on_hover_text(t.path.display().to_string());
-                    ui.label(if t.bytes > 0 { fmt_bytes_short(t.bytes) } else { "–".into() });
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(detail_w, 18.0),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.add(egui::Label::new(RichText::new(&t.detail).color(MUTED)).truncate())
-                                .on_hover_text(&t.detail);
-                        },
+            egui::Grid::new("clean-disk")
+                .num_columns(4)
+                .spacing([12.0, 4.0])
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(locale.text("Alvo", "Target"))
+                            .color(MUTED)
+                            .small(),
                     );
-                    ui.horizontal(|ui| {
-                        if self.pending == Some(i) {
-                            let what = match t.kind {
-                                Kind::Orphans => format!("Remover {} pacote(s)?", t.items),
-                                Kind::Journal => "Encolher para 64 MB?".to_string(),
-                                _ => format!("Apagar {} ({} itens)?", fmt_bytes_short(t.bytes), t.items),
-                            };
-                            ui.label(RichText::new(what).color(Color32::from_rgb(230, 170, 90)));
-                            if ui.add(crate::kit::danger("Sim")).clicked() {
-                                let t = t.clone();
-                                self.action.start(move || apply(&t));
-                                self.pending = None;
-                            }
-                            if ui.add(crate::kit::button("Não")).clicked() {
-                                self.pending = None;
-                            }
-                        } else if ui.add_enabled(!self.action.busy(), crate::kit::button("Limpar")).clicked() {
-                            self.pending = Some(i);
-                        }
-                    });
+                    ui.label(
+                        RichText::new(locale.text("Tamanho", "Size"))
+                            .color(MUTED)
+                            .small(),
+                    );
+                    ui.label(
+                        RichText::new(locale.text("O que é", "Purpose"))
+                            .color(MUTED)
+                            .small(),
+                    );
+                    ui.label("");
                     ui.end_row();
-                }
-            });
+                    for (i, t) in targets.iter().enumerate() {
+                        let localized_name = t.name_for(locale);
+                        let localized_detail = t.detail_for(locale);
+                        let name = if t.kind.needs_root() {
+                            format!("🔒 {localized_name}")
+                        } else {
+                            localized_name
+                        };
+                        ui.label(name).on_hover_text(t.path.display().to_string());
+                        ui.label(if t.bytes > 0 {
+                            fmt_bytes_short(t.bytes)
+                        } else {
+                            "–".into()
+                        });
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(detail_w, 18.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.add(
+                                    egui::Label::new(RichText::new(&localized_detail).color(MUTED))
+                                        .truncate(),
+                                )
+                                .on_hover_text(&localized_detail);
+                            },
+                        );
+                        ui.horizontal(|ui| {
+                            if self.pending == Some(i) {
+                                let what = match t.kind {
+                                    Kind::Orphans => {
+                                        if locale == Locale::Portuguese {
+                                            format!("Remover {} pacote(s)?", t.items)
+                                        } else {
+                                            format!("Remove {} package(s)?", t.items)
+                                        }
+                                    }
+                                    Kind::Journal => locale
+                                        .text("Encolher para 64 MB?", "Shrink to 64 MB?")
+                                        .to_string(),
+                                    _ => {
+                                        if locale == Locale::Portuguese {
+                                            format!(
+                                                "Apagar {} ({} itens)?",
+                                                fmt_bytes_short(t.bytes),
+                                                t.items
+                                            )
+                                        } else {
+                                            format!(
+                                                "Delete {} ({} items)?",
+                                                fmt_bytes_short(t.bytes),
+                                                t.items
+                                            )
+                                        }
+                                    }
+                                };
+                                ui.label(
+                                    RichText::new(what).color(Color32::from_rgb(230, 170, 90)),
+                                );
+                                if ui
+                                    .add(crate::kit::danger(locale.text("Sim", "Yes")))
+                                    .clicked()
+                                {
+                                    let t = t.clone();
+                                    self.action.start(move || apply_for(&t, locale));
+                                    self.pending = None;
+                                }
+                                if ui
+                                    .add(crate::kit::button(locale.text("Não", "No")))
+                                    .clicked()
+                                {
+                                    self.pending = None;
+                                }
+                            } else if ui
+                                .add_enabled(
+                                    !self.action.busy(),
+                                    crate::kit::button(locale.text("Limpar", "Clean")),
+                                )
+                                .clicked()
+                            {
+                                self.pending = Some(i);
+                            }
+                        });
+                        ui.end_row();
+                    }
+                });
         });
     }
 }
@@ -879,7 +1203,10 @@ mod tests {
         assert_eq!(failed, 0);
         assert!(dir.is_dir());
         assert!(std::fs::read_dir(&dir).unwrap().next().is_none());
-        assert!(outside.join("keep").is_file(), "symlink alvo não pode ser apagado");
+        assert!(
+            outside.join("keep").is_file(),
+            "symlink alvo não pode ser apagado"
+        );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&outside);
     }

@@ -12,10 +12,12 @@
 use std::ffi::c_void;
 use std::ptr;
 
+use crate::config::Locale;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Trust {
     #[cfg(target_os = "linux")]
-    Package { name:String, verified:bool },
+    Package { name: String, verified: bool },
     /// Assinatura presente, íntegra e encadeando até uma raiz confiável.
     Valid,
     /// Nenhuma assinatura no arquivo (nem catálogo do Windows).
@@ -35,21 +37,52 @@ pub struct SigInfo {
 
 impl SigInfo {
     pub fn label(&self) -> String {
+        self.label_for(Locale::Portuguese)
+    }
+
+    pub fn label_for(&self, locale: Locale) -> String {
         match &self.trust {
             #[cfg(target_os = "linux")]
-            Trust::Package{name,verified}=>format!("Pacote {name} · {}",if *verified{"SHA-256 confere"}else{"hash indisponível"}),
-            Trust::Valid if self.signer.is_empty() => "assinatura válida".to_string(),
-            Trust::Valid => format!("assinado por {}", self.signer),
-            Trust::Unsigned => "sem assinatura digital".to_string(),
-            Trust::Invalid(why) => format!("assinatura inválida — {why}"),
-            Trust::Unknown(why) => format!("não verificado ({why})"),
+            Trust::Package { name, verified } => format!(
+                "{} {name} · {}",
+                locale.text("Pacote", "Package"),
+                if *verified {
+                    locale.text("SHA-256 confere", "SHA-256 verified")
+                } else {
+                    locale.text("hash indisponível", "hash unavailable")
+                }
+            ),
+            Trust::Valid if self.signer.is_empty() => locale
+                .text("assinatura válida", "Valid signature")
+                .to_string(),
+            Trust::Valid => format!(
+                "{} {}",
+                locale.text("assinado por", "Signed by"),
+                self.signer
+            ),
+            Trust::Unsigned => locale
+                .text("sem assinatura digital", "No digital signature")
+                .to_string(),
+            Trust::Invalid(why) => format!(
+                "{} — {why}",
+                locale.text("assinatura inválida", "Invalid signature")
+            ),
+            Trust::Unknown(why) => {
+                format!("{} ({why})", locale.text("não verificado", "Not verified"))
+            }
         }
     }
 
     pub fn color(&self) -> egui::Color32 {
         match self.trust {
             #[cfg(target_os = "linux")]
-            Trust::Package{verified,..}=>if verified{egui::Color32::from_rgb(90,220,130)}else{egui::Color32::GRAY},
+            Trust::Package { verified, .. } => {
+                if verified {
+                    egui::Color32::from_rgb(90, 220, 130)
+                } else {
+                    egui::Color32::GRAY
+                }
+            }
             Trust::Valid => egui::Color32::from_rgb(90, 220, 130),
             Trust::Unsigned => egui::Color32::from_rgb(230, 190, 80),
             Trust::Invalid(_) => egui::Color32::from_rgb(235, 90, 90),
@@ -58,29 +91,55 @@ impl SigInfo {
     }
 
     pub fn tip(&self) -> &'static str {
+        self.tip_for(Locale::Portuguese)
+    }
+
+    pub fn tip_for(&self, locale: Locale) -> &'static str {
         match self.trust {
             #[cfg(target_os = "linux")]
-            Trust::Package{..}=>"Proveniência do pacote instalado e comparação SHA-256 com a base local do pacman. Não é uma assinatura Authenticode nem revalidação criptográfica do repositório.",
-            Trust::Valid => "O arquivo não foi alterado desde que o fabricante o assinou, e o certificado encadeia até uma raiz confiável desta máquina.",
-            Trust::Unsigned => "Sem assinatura não há como provar quem fez o arquivo nem se ele foi alterado. Normal em ferramentas pequenas e em builds próprios; suspeito num executável que diz ser do Windows.",
-            Trust::Invalid(_) => "A verificação reprovou: o arquivo pode ter sido adulterado, ou o certificado expirou ou não é confiável nesta máquina.",
-            Trust::Unknown(_) => "Não foi possível ler o arquivo para verificar.",
+            Trust::Package { .. } => locale.text(
+                "Proveniência do pacote instalado e comparação SHA-256 com a base local do pacman. Não é uma assinatura Authenticode nem revalidação criptográfica do repositório.",
+                "Installed package provenance and SHA-256 comparison with the local pacman database. This is not an Authenticode signature or repository revalidation.",
+            ),
+            Trust::Valid => locale.text(
+                "O arquivo não foi alterado desde que o fabricante o assinou, e o certificado encadeia até uma raiz confiável desta máquina.",
+                "The file has not changed since the publisher signed it, and its certificate chains to a trusted root on this machine.",
+            ),
+            Trust::Unsigned => locale.text(
+                "Sem assinatura não há como provar quem fez o arquivo nem se ele foi alterado. Normal em ferramentas pequenas e em builds próprios; suspeito num executável que diz ser do Windows.",
+                "Without a signature, there is no proof who made the file or whether it changed. Normal for small tools and local builds; suspicious for an executable claiming to be Windows software.",
+            ),
+            Trust::Invalid(_) => locale.text(
+                "A verificação reprovou: o arquivo pode ter sido adulterado, ou o certificado expirou ou não é confiável nesta máquina.",
+                "Verification failed: the file may have been modified, or the certificate expired or is not trusted on this machine.",
+            ),
+            Trust::Unknown(_) => locale.text("Não foi possível ler o arquivo para verificar.", "The file could not be read for verification."),
         }
     }
 }
 
-#[cfg(not(any(windows,target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn verify(_path: &str) -> SigInfo {
-    SigInfo { trust: Trust::Unknown("só no Windows".into()), signer: String::new() }
+    SigInfo {
+        trust: Trust::Unknown("só no Windows".into()),
+        signer: String::new(),
+    }
 }
 
 #[cfg(windows)]
 pub fn verify(path: &str) -> SigInfo {
     if path.is_empty() {
-        return SigInfo { trust: Trust::Unknown("sem acesso ao caminho".into()), signer: String::new() };
+        return SigInfo {
+            trust: Trust::Unknown("sem acesso ao caminho".into()),
+            signer: String::new(),
+        };
     }
     let trust = check_trust(path);
-    let signer = if matches!(trust, Trust::Unsigned) { String::new() } else { signer_name(path) };
+    let signer = if matches!(trust, Trust::Unsigned) {
+        String::new()
+    } else {
+        signer_name(path)
+    };
     SigInfo { trust, signer }
 }
 
@@ -92,9 +151,9 @@ fn wide(s: &str) -> Vec<u16> {
 #[cfg(windows)]
 fn check_trust(path: &str) -> Trust {
     use windows::Win32::Security::WinTrust::{
-        WinVerifyTrust, WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0, WINTRUST_FILE_INFO,
-        WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE, WTD_REVOKE_NONE, WTD_STATEACTION_CLOSE,
-        WTD_STATEACTION_VERIFY, WTD_UI_NONE,
+        WinVerifyTrust, WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0,
+        WINTRUST_FILE_INFO, WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE, WTD_REVOKE_NONE,
+        WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
     };
 
     // Códigos que o WinVerifyTrust devolve; o crate não os expõe nomeados.
@@ -125,11 +184,19 @@ fn check_trust(path: &str) -> Trust {
             ..Default::default()
         };
         let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-        let status = WinVerifyTrust(windows::Win32::Foundation::HWND::default(), &mut action, &mut data as *mut _ as *mut c_void);
+        let status = WinVerifyTrust(
+            windows::Win32::Foundation::HWND::default(),
+            &mut action,
+            &mut data as *mut _ as *mut c_void,
+        );
 
         // Fechar o estado é obrigatório: sem isso vaza contexto de confiança a cada chamada.
         data.dwStateAction = WTD_STATEACTION_CLOSE;
-        let _ = WinVerifyTrust(windows::Win32::Foundation::HWND::default(), &mut action, &mut data as *mut _ as *mut c_void);
+        let _ = WinVerifyTrust(
+            windows::Win32::Foundation::HWND::default(),
+            &mut action,
+            &mut data as *mut _ as *mut c_void,
+        );
 
         match status {
             0 => Trust::Valid,
@@ -138,7 +205,9 @@ fn check_trust(path: &str) -> Trust {
             CERT_E_EXPIRED => Trust::Invalid("certificado expirado".into()),
             CERT_E_UNTRUSTEDROOT => Trust::Invalid("raiz não confiável".into()),
             CERT_E_CHAINING => Trust::Invalid("cadeia de certificados incompleta".into()),
-            TRUST_E_EXPLICIT_DISTRUST => Trust::Invalid("certificado marcado como não confiável".into()),
+            TRUST_E_EXPLICIT_DISTRUST => {
+                Trust::Invalid("certificado marcado como não confiável".into())
+            }
             other => Trust::Invalid(format!("código 0x{:08X}", other as u32)),
         }
     }
@@ -148,11 +217,12 @@ fn check_trust(path: &str) -> Trust {
 #[cfg(windows)]
 fn signer_name(path: &str) -> String {
     use windows::Win32::Security::Cryptography::{
-        CertCloseStore, CertFreeCertificateContext, CertGetNameStringW, CertFindCertificateInStore,
+        CertCloseStore, CertFindCertificateInStore, CertFreeCertificateContext, CertGetNameStringW,
         CryptMsgClose, CryptMsgGetParam, CryptQueryObject, CERT_FIND_SUBJECT_CERT,
         CERT_NAME_SIMPLE_DISPLAY_TYPE, CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
-        CERT_QUERY_FORMAT_FLAG_BINARY, CERT_QUERY_OBJECT_FILE, CMSG_SIGNER_INFO_PARAM, CMSG_SIGNER_INFO,
-        CERT_QUERY_ENCODING_TYPE, HCERTSTORE, PKCS_7_ASN_ENCODING, X509_ASN_ENCODING,
+        CERT_QUERY_ENCODING_TYPE, CERT_QUERY_FORMAT_FLAG_BINARY, CERT_QUERY_OBJECT_FILE,
+        CMSG_SIGNER_INFO, CMSG_SIGNER_INFO_PARAM, HCERTSTORE, PKCS_7_ASN_ENCODING,
+        X509_ASN_ENCODING,
     };
 
     let w = wide(path);
@@ -182,8 +252,14 @@ fn signer_name(path: &str) -> String {
         let mut need = 0u32;
         if CryptMsgGetParam(msg, CMSG_SIGNER_INFO_PARAM, 0, None, &mut need).is_ok() && need > 0 {
             let mut buf = vec![0u8; need as usize];
-            if CryptMsgGetParam(msg, CMSG_SIGNER_INFO_PARAM, 0, Some(buf.as_mut_ptr() as *mut c_void), &mut need)
-                .is_ok()
+            if CryptMsgGetParam(
+                msg,
+                CMSG_SIGNER_INFO_PARAM,
+                0,
+                Some(buf.as_mut_ptr() as *mut c_void),
+                &mut need,
+            )
+            .is_ok()
             {
                 let si = &*(buf.as_ptr() as *const CMSG_SIGNER_INFO);
                 // Localiza no store o certificado cujo emissor+série batem com o do signatário.
@@ -204,7 +280,13 @@ fn signer_name(path: &str) -> String {
                     let n = CertGetNameStringW(ctx, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, None, None);
                     if n > 1 {
                         let mut name = vec![0u16; n as usize];
-                        let got = CertGetNameStringW(ctx, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, None, Some(&mut name));
+                        let got = CertGetNameStringW(
+                            ctx,
+                            CERT_NAME_SIMPLE_DISPLAY_TYPE,
+                            0,
+                            None,
+                            Some(&mut name),
+                        );
                         if got > 1 {
                             out = String::from_utf16_lossy(&name[..got as usize - 1]);
                         }
@@ -221,23 +303,40 @@ fn signer_name(path: &str) -> String {
 }
 
 #[cfg(target_os = "linux")]
-pub fn verify(path:&str)->SigInfo {
-    let check=(||->Result<Trust,String>{
-        let name=crate::linux::command("pacman",&["-Qoq","--",path])?.trim().to_string();
-        let package=crate::linux::command("pacman",&["-Q","--",&name])?;
-        let mut fields=package.split_whitespace();let pkg=fields.next().ok_or("Pacote inválido")?;let version=fields.next().ok_or("Versão inválida")?;
-        let mtree=format!("/var/lib/pacman/local/{pkg}-{version}/mtree");
-        let mut verified=false;
-        if let Ok(tree)=crate::linux::command("gzip",&["-dc","--",&mtree]) {
-            let relative=format!(".{}",path);
-            let expected=tree.lines().find(|l|l.split_whitespace().next()==Some(relative.as_str())).and_then(|l|l.split_whitespace().find_map(|f|f.strip_prefix("sha256digest=")));
-            if let Some(expected)=expected{
-                let sum=crate::linux::command("sha256sum",&["--",path])?;
-                if sum.split_whitespace().next()!=Some(expected){return Ok(Trust::Invalid("SHA-256 difere do pacote instalado".into()));}
-                verified=true;
+pub fn verify(path: &str) -> SigInfo {
+    let check = (|| -> Result<Trust, String> {
+        let name = crate::linux::command("pacman", &["-Qoq", "--", path])?
+            .trim()
+            .to_string();
+        let package = crate::linux::command("pacman", &["-Q", "--", &name])?;
+        let mut fields = package.split_whitespace();
+        let pkg = fields.next().ok_or("Pacote inválido")?;
+        let version = fields.next().ok_or("Versão inválida")?;
+        let mtree = format!("/var/lib/pacman/local/{pkg}-{version}/mtree");
+        let mut verified = false;
+        if let Ok(tree) = crate::linux::command("gzip", &["-dc", "--", &mtree]) {
+            let relative = format!(".{}", path);
+            let expected = tree
+                .lines()
+                .find(|l| l.split_whitespace().next() == Some(relative.as_str()))
+                .and_then(|l| {
+                    l.split_whitespace()
+                        .find_map(|f| f.strip_prefix("sha256digest="))
+                });
+            if let Some(expected) = expected {
+                let sum = crate::linux::command("sha256sum", &["--", path])?;
+                if sum.split_whitespace().next() != Some(expected) {
+                    return Ok(Trust::Invalid("SHA-256 difere do pacote instalado".into()));
+                }
+                verified = true;
             }
         }
-        Ok(Trust::Package{name,verified})
+        Ok(Trust::Package { name, verified })
     })();
-    SigInfo{trust:check.unwrap_or_else(|_|Trust::Unknown("arquivo não gerenciado pelo pacman ou sem acesso".into())),signer:String::new()}
+    SigInfo {
+        trust: check.unwrap_or_else(|_| {
+            Trust::Unknown("arquivo não gerenciado pelo pacman ou sem acesso".into())
+        }),
+        signer: String::new(),
+    }
 }

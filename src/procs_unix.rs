@@ -63,13 +63,22 @@ fn refresh_cached_reads<T>(
     own: u32,
     mut read: impl FnMut(u32) -> Option<T>,
 ) {
-    let mut due: Vec<_> = candidates.iter().copied().filter(|(key, _)| {
-        cache.get(key).is_none_or(|c| now.duration_since(c.at) >= interval)
-    }).collect();
+    let mut due: Vec<_> = candidates
+        .iter()
+        .copied()
+        .filter(|(key, _)| {
+            cache
+                .get(key)
+                .is_none_or(|c| now.duration_since(c.at) >= interval)
+        })
+        .collect();
     // Unattempted entries first, then the oldest attempt. RSS and our own PID
     // only break ties: a fast-expiring large process must not starve the rest.
     due.sort_by(|(a, ra), (b, rb)| {
-        cache.get(a).map(|c| c.at).cmp(&cache.get(b).map(|c| c.at))
+        cache
+            .get(a)
+            .map(|c| c.at)
+            .cmp(&cache.get(b).map(|c| c.at))
             .then((b.0 == own).cmp(&(a.0 == own)))
             .then(rb.cmp(ra))
             .then(a.cmp(b))
@@ -77,12 +86,21 @@ fn refresh_cached_reads<T>(
     for (key, _) in due.into_iter().take(limit) {
         // Denied/disappeared processes get the same cooldown as successful reads.
         // A failed refresh clears the old value instead of reporting stale data.
-        cache.insert(key, CachedRead { value: read(key.0), at: now });
+        cache.insert(
+            key,
+            CachedRead {
+                value: read(key.0),
+                at: now,
+            },
+        );
     }
 }
 
 #[cfg(target_os = "linux")]
-fn cached_value<T: Copy>(cache: &HashMap<ProcessKey, CachedRead<T>>, key: &ProcessKey) -> Option<T> {
+fn cached_value<T: Copy>(
+    cache: &HashMap<ProcessKey, CachedRead<T>>,
+    key: &ProcessKey,
+) -> Option<T> {
     // Sem prazo de validade: a última leitura boa vale até a próxima tentativa.
     // Expirar em `interval` fazia PSS/Privado piscar pra zero em todo processo
     // fora da janela de releitura — dado atrasado uns segundos é melhor que dado
@@ -203,15 +221,31 @@ impl Sampler {
             });
         }
 
-        let candidates: Vec<_> = parsed.iter()
-            .map(|p| ((p.pid, p.stat.starttime), p.rss)).collect();
+        let candidates: Vec<_> = parsed
+            .iter()
+            .map(|p| ((p.pid, p.stat.starttime), p.rss))
+            .collect();
         refresh_cached_reads(
-            &mut self.smaps, &candidates, now, SMAPS_INTERVAL, SMAPS_PER_SAMPLE, own,
-            |pid| std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup"))
-                .ok().and_then(|t| parse_smaps_rollup(&t)),
+            &mut self.smaps,
+            &candidates,
+            now,
+            SMAPS_INTERVAL,
+            SMAPS_PER_SAMPLE,
+            own,
+            |pid| {
+                std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup"))
+                    .ok()
+                    .and_then(|t| parse_smaps_rollup(&t))
+            },
         );
         refresh_cached_reads(
-            &mut self.fds, &candidates, now, FD_INTERVAL, FD_PER_SAMPLE, own, count_fds,
+            &mut self.fds,
+            &candidates,
+            now,
+            FD_INTERVAL,
+            FD_PER_SAMPLE,
+            own,
+            count_fds,
         );
 
         let mut seen = HashMap::new();
@@ -845,7 +879,10 @@ mod tests {
             Some("agent-bench@dailywork-campanhas.service")
         );
         assert_eq!(parse_unit("0::/\n"), None);
-        assert_eq!(parse_unit("0::/user.slice/user-1000.slice/user@1000.service/app.slice\n"), None);
+        assert_eq!(
+            parse_unit("0::/user.slice/user-1000.slice/user@1000.service/app.slice\n"),
+            None
+        );
     }
 
     #[test]
@@ -892,7 +929,10 @@ mod tests {
         assert_eq!(first_sample_window(5.0, f64::NAN), 5.0);
         // Nasceu há 2 s dentro de uma janela de 5 s e queimou 2 s de um núcleo em 4:
         // 2 s / 5 s / 4 núcleos = 10% da máquina, o mesmo que o medidor do topo credita.
-        assert_eq!(cpu_machine_pct(200, first_sample_window(5.0, 2.0), 100, 4.0), 10.0);
+        assert_eq!(
+            cpu_machine_pct(200, first_sample_window(5.0, 2.0), 100, 4.0),
+            10.0
+        );
     }
 
     #[test]
@@ -985,7 +1025,11 @@ mod tests {
         let mut sampler = Sampler::new();
         let rows = sampler.sample();
         let own = rows.iter().find(|p| p.pid == std::process::id()).unwrap();
-        assert!(own.handles.is_some_and(|n| n >= 3), "handles={:?}", own.handles);
+        assert!(
+            own.handles.is_some_and(|n| n >= 3),
+            "handles={:?}",
+            own.handles
+        );
     }
 
     #[test]
@@ -1013,15 +1057,20 @@ mod tests {
 
     #[test]
     fn review_denied_reads_do_not_starve_later_processes() {
-        for (limit, interval) in [(FD_PER_SAMPLE, FD_INTERVAL), (SMAPS_PER_SAMPLE, SMAPS_INTERVAL)] {
+        for (limit, interval) in [
+            (FD_PER_SAMPLE, FD_INTERVAL),
+            (SMAPS_PER_SAMPLE, SMAPS_INTERVAL),
+        ] {
             let now = Instant::now();
             let candidates: Vec<_> = (1..=limit as u32 + 1)
-                .map(|pid| ((pid, 1), 1000 - pid as u64)).collect();
+                .map(|pid| ((pid, 1), 1000 - pid as u64))
+                .collect();
             let target = (limit as u32 + 1, 1);
             let mut cache = HashMap::new();
             for _ in 0..2 {
-                refresh_cached_reads(&mut cache, &candidates, now, interval, limit, 0,
-                    |pid| (pid == target.0).then_some(3));
+                refresh_cached_reads(&mut cache, &candidates, now, interval, limit, 0, |pid| {
+                    (pid == target.0).then_some(3)
+                });
             }
             assert_eq!(cached_value(&cache, &target), Some(3));
             assert_eq!(cached_value(&cache, &(1, 1)), None);
@@ -1035,8 +1084,18 @@ mod tests {
         let mut cache = HashMap::new();
         let mut read_pids = Vec::new();
         for i in 0..3 {
-            refresh_cached_reads(&mut cache, &candidates, now + Duration::from_secs(i * 6),
-                SMAPS_INTERVAL, 1, 1, |pid| { read_pids.push(pid); Some(1) });
+            refresh_cached_reads(
+                &mut cache,
+                &candidates,
+                now + Duration::from_secs(i * 6),
+                SMAPS_INTERVAL,
+                1,
+                1,
+                |pid| {
+                    read_pids.push(pid);
+                    Some(1)
+                },
+            );
         }
         assert_eq!(read_pids, vec![1, 2, 3]);
     }
@@ -1054,8 +1113,10 @@ mod tests {
         assert_eq!(cached_value(&cache, &key), Some(3));
         let mut retries = 0;
         for _ in 0..2 {
-            refresh_cached_reads(&mut cache, &candidates, expired, FD_INTERVAL, 1, 1,
-                |_| { retries += 1; None });
+            refresh_cached_reads(&mut cache, &candidates, expired, FD_INTERVAL, 1, 1, |_| {
+                retries += 1;
+                None
+            });
         }
         // …até uma releitura falhar de verdade: aí limpa, em vez de mentir dado velho.
         assert_eq!(cached_value(&cache, &key), None);
@@ -1068,17 +1129,29 @@ mod tests {
         std::thread::spawn(move || {
             unsafe {
                 let mut mask: libc::cpu_set_t = std::mem::zeroed();
-                assert_eq!(libc::sched_getaffinity(0, std::mem::size_of_val(&mask), &mut mask), 0);
+                assert_eq!(
+                    libc::sched_getaffinity(0, std::mem::size_of_val(&mask), &mut mask),
+                    0
+                );
                 let first = (0..libc::CPU_SETSIZE as usize)
-                    .find(|&n| libc::CPU_ISSET(n, &mask)).unwrap();
+                    .find(|&n| libc::CPU_ISSET(n, &mask))
+                    .unwrap();
                 libc::CPU_ZERO(&mut mask);
                 libc::CPU_SET(first, &mut mask);
-                assert_eq!(libc::sched_setaffinity(0, std::mem::size_of_val(&mask), &mask), 0);
+                assert_eq!(
+                    libc::sched_setaffinity(0, std::mem::size_of_val(&mask), &mask),
+                    0
+                );
             }
             let sampler = Sampler::new();
             assert_eq!(sampler.ncpu, expected);
-            assert_eq!(cpu_machine_pct(100, 1.0, 100, sampler.ncpu), 100.0 / expected);
-        }).join().unwrap();
+            assert_eq!(
+                cpu_machine_pct(100, 1.0, 100, sampler.ncpu),
+                100.0 / expected
+            );
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
