@@ -11,7 +11,7 @@ O comando do repositório é `./release vX.Y.Z`. Ao pedir `/release` a um agente
 
 O workflow testa e compila Linux x86_64/aarch64, macOS Apple Silicon/Intel e Windows x64. O pacote Linux inclui `ramdog-launch` e a documentação. O Windows inclui o helper térmico, que requer o runtime .NET 8. Os nomes dos pacotes correspondem aos instaladores.
 
-Somente após todas as compilações passarem, o workflow calcula `SHA256SUMS.txt`, cria uma release em rascunho, envia os cinco pacotes e checksums e publica como latest. As notas vêm do arquivo versionado. Uma falha de compilação não publica uma release incompleta; falhas durante o upload deixam um rascunho para nova tentativa.
+Somente após todas as compilações passarem, o workflow calcula `SHA256SUMS.txt`, cria uma release em rascunho, envia os cinco pacotes, checksums e `docs/releases/assets/vX.Y.Z-card.png`, e publica como latest. As notas vêm do arquivo versionado. Uma falha de compilação não publica uma release incompleta; falhas durante o upload deixam um rascunho para nova tentativa.
 
 Se falhar infraestrutura ou upload, use `gh run rerun ID --failed`. Se o código precisar mudar, faça a correção e escolha uma nova versão/tag; não mova uma tag publicada. Uma release já publicada não é sobrescrita por uma reexecução.
 

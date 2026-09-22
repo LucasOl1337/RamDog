@@ -2,6 +2,27 @@
 
 As mudanças são registradas por versão. As notas descrevem funcionalidades disponíveis e suas limitações; testes de hardware não equivalem a cobertura de todos os drivers e desktops.
 
+## [0.12.0] - 2026-09-22
+
+O RamDog agora oferece a interface completa em inglês, preservando o português como padrão e todos os recursos das versões 0.11.x.
+
+Patch notes: [v0.12.0](docs/releases/v0.12.0.md).
+
+### Adicionado
+
+- Seletor persistido **Português / English** nas Preferências. Configurações existentes continuam em português e mantêm locks, categorias, presets e os demais ajustes.
+- [`README.en.md`](README.en.md) completo, com instalação, recursos, plataformas, limites e terminologia da interface.
+
+### Melhorado
+
+- Lista, Árvore, Categorias, Partida, Desperdício, Térmico, Telas e Limpeza, além de busca, filtros, confirmações, estados e erros, seguem o idioma escolhido.
+- Recursos das versões 0.11.x também foram localizados: **Contention**, **Launched by**, contabilidade de CPU/RAM e tratamento de zumbis.
+- Vitrine pública atualizada com capturas da interface atual, demonstração da Limpeza e vídeo narrado.
+
+### Corrigido
+
+- Partida e Desperdício explicam no idioma escolhido quando o barramento systemd de usuário não está disponível, sem expor a saída crua do `systemctl`.
+
 ## [0.11.1] - 2026-09-21
 
 Finalizar deixa de bater em parede quando o pai não recolhe, e a última coluna responde "quem abriu isso" em vez de despejar argumentos.

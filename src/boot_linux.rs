@@ -58,10 +58,12 @@ impl Boot {
         let mut out = Vec::new();
         self.scan.poll();
         if self.action.poll() {
-            self.scan.start(startup_linux::scan);
+            let locale = cfg.locale;
+            self.scan.start(move || startup_linux::scan_for(locale));
         }
         if self.scan.due(30) {
-            self.scan.start(startup_linux::scan);
+            let locale = cfg.locale;
+            self.scan.start(move || startup_linux::scan_for(locale));
         }
         let locale = cfg.locale;
         crate::kit::intro(ui, locale.text("Serviços, temporizadores, sockets e aplicativos de login. Alterar a inicialização não encerra o que já está rodando.", "Services, timers, sockets, and login applications. Changing startup does not stop anything already running."));
@@ -71,7 +73,7 @@ impl Boot {
                 .add(crate::kit::button(locale.text("Atualizar", "Refresh")))
                 .clicked()
             {
-                self.scan.start(startup_linux::scan);
+                self.scan.start(move || startup_linux::scan_for(locale));
             }
             ui.add(
                 egui::TextEdit::singleline(&mut self.search)

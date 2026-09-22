@@ -70,9 +70,14 @@ struct LiveUnit {
 /// systemd --user precisa do barramento de sessão. Sem ele (SSH, container, bancada X11
 /// isolada) o erro cru do systemctl vira um bloco amarelo ilegível; a lista de sistema
 /// e o autostart XDG continuam válidos.
-fn friendly_scan_warning(user: bool, err: String) -> String {
+fn friendly_scan_warning(user: bool, err: String, locale: Locale) -> String {
     if user && err.contains("user scope bus") {
-        "Sessão de usuário do systemd indisponível. Serviços de sistema e autostart XDG continuam listados.".into()
+        locale
+            .text(
+                "Sessão de usuário do systemd indisponível. Serviços de sistema e autostart XDG continuam listados.",
+                "The systemd user session is unavailable. System services and XDG autostart entries are still listed.",
+            )
+            .into()
     } else {
         err
     }
@@ -99,11 +104,17 @@ pub fn protected(unit: &str) -> bool {
 }
 
 pub fn scan() -> Result<Inventory, String> {
+    scan_for(Locale::Portuguese)
+}
+
+pub fn scan_for(locale: Locale) -> Result<Inventory, String> {
     let mut inventory = Inventory::default();
     for user in [true, false] {
         match scan_units(user) {
             Ok(mut entries) => inventory.entries.append(&mut entries),
-            Err(e) => inventory.warnings.push(friendly_scan_warning(user, e)),
+            Err(e) => inventory
+                .warnings
+                .push(friendly_scan_warning(user, e, locale)),
         }
     }
     inventory.entries.extend(scan_desktops());
@@ -433,11 +444,20 @@ mod tests {
     #[test]
     fn missing_user_bus_is_not_raw_systemctl_dump() {
         let raw = "systemctl: Failed to connect to user scope bus via local transport: No such file or directory (exit status: 1)".into();
-        let msg = friendly_scan_warning(true, raw);
+        let msg = friendly_scan_warning(true, raw, Locale::Portuguese);
         assert!(!msg.contains("systemctl:"));
         assert!(msg.contains("Sessão de usuário"));
-        let other =
-            friendly_scan_warning(false, "systemctl: Unit not found (exit status: 1)".into());
+        let english = friendly_scan_warning(
+            true,
+            "systemctl: Failed to connect to user scope bus".into(),
+            Locale::English,
+        );
+        assert!(english.contains("systemd user session"));
+        let other = friendly_scan_warning(
+            false,
+            "systemctl: Unit not found (exit status: 1)".into(),
+            Locale::Portuguese,
+        );
         assert!(other.contains("systemctl:"));
     }
 }
