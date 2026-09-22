@@ -9,13 +9,13 @@
   ·
   <a href="README.en.md">English</a>
   ·
-  <a href="docs/releases/v0.10.0.md">Patch notes v0.10.0</a>
+  <a href="docs/releases/v0.12.0.md">Patch notes v0.12.0</a>
   ·
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 <p align="center">
-  <img alt="v0.10.0" src="https://img.shields.io/badge/v0.10.0-estável-73d8ee?style=flat-square">
+  <img alt="v0.12.0" src="https://img.shields.io/badge/v0.12.0-estável-73d8ee?style=flat-square">
   <img alt="Omarchy" src="https://img.shields.io/badge/Omarchy-suporte%20nativo-9ECE6A?style=flat-square&logo=archlinux&logoColor=white">
   <img alt="Hyprland" src="https://img.shields.io/badge/Hyprland-Telas%20nativo-7AA2F7?style=flat-square">
   <img alt="Windows x64" src="https://img.shields.io/badge/Windows-x64-0B3A4A?style=flat-square&logo=windows&logoColor=4FC3F7">
@@ -30,7 +30,7 @@
   No Linux, o alvo de primeira classe é o <a href="https://omarchy.org/">Omarchy</a> — Arch com Hyprland.
 </p>
 
-<img src="docs/media/lista.png" alt="RamDog v0.10.0 no Linux: barra lateral com Processos, Árvore, Categorias e os addons; cards de CPU, Memória, GPU e Disco com gráfico; chips de categoria; tabela com ícone, nome, PID · categoria · origem e chip de estado por linha." width="100%">
+<img src="docs/media/lista.png" alt="RamDog no Linux: barra lateral com Processos, Árvore, Categorias e os addons; cards de CPU, Memória, GPU e Disco com gráfico; chips de categoria; tabela com ícone, nome, PID · categoria · origem e chip de estado por linha." width="100%">
 
 <p align="center"><sub>Processos no Linux — Omarchy / Hyprland, NVIDIA RTX 4070 Ti SUPER. Agrupar por app ligado; o Emulador Android aparece como sobra.</sub></p>
 
@@ -40,20 +40,18 @@ O Gerenciador de Tarefas não mostra a cadeia de origem — quem lançou o proce
 
 Este app existe por isso.
 
-## Novidades na v0.10.0
+## Novidades na v0.12.0
 
-A **v0.10.0** é a interface nova e o addon **Limpeza**. Barra lateral no lugar das abas e do bloco de botões, quatro cards de recurso com histórico, tabela de linha dupla com ícone e estado, preferências numa janela. Por baixo, tudo da 0.9.1 (sampler que aguenta sessão longa) e da 0.9.2 (identidade da tarefa, VRAM, estado, cortes de CPU/GPU).
+A **v0.12.0** acrescenta a interface completa em inglês sem tirar o português. O idioma fica salvo nas Preferências e cobre navegação, medidores, addons, confirmações, erros e os recursos recentes de Disputa, Quem abriu e zumbis. Também chega um README em inglês e uma vitrine atualizada.
 
 | Antes | Agora |
 |---|---|
-| Cinco fileiras de controle antes da primeira linha de processo | barra lateral, cabeçalho e cards; a tabela começa mais cedo e cabe mais |
-| Medidor era um número com barra | card com gráfico dos últimos 90 s, temperatura e detalhe |
-| Cat., PID, Estado e Origem eram quatro colunas | ícone, nome, "PID · categoria · origem" e chip de estado na mesma linha |
-| Nada pra limpar disco nem achar sobra | **Limpeza**: sobras e zombies pra encerrar; `~/.cache`, lixeira, pacman, journal, coredumps e órfãos pra apagar, com confirmação |
-| `sysinfo` indexava cada thread e mantinha `/proc/*/stat` aberto | `/proc` direto, sem FD preso, threads fora da lista |
-| Overwatch/Proton virava um `wine64` só | chave por Steam appid / prefixo Wine / projeto / agente |
+| Interface somente em português | seletor persistido **Português / English** |
+| Recursos 0.11 sem vocabulário inglês | **Contention**, **Launched by**, conta de recursos e zumbis localizados |
+| Documentação principal só em português | guia completo em português e inglês, com links recíprocos |
+| Mensagens systemd podiam expor erro cru | explicação localizada quando o barramento de usuário não existe |
 
-Notas completas: [v0.10.0](docs/releases/v0.10.0.md) · [changelog](CHANGELOG.md).
+Notas completas: [v0.12.0](docs/releases/v0.12.0.md) · [changelog](CHANGELOG.md).
 
 ## Feito para Omarchy
 
@@ -114,9 +112,9 @@ curl -sSfL https://raw.githubusercontent.com/LucasOl1337/RamDog/main/install.sh 
 
 Baixa o tar do [release](https://github.com/LucasOl1337/RamDog/releases) (`RamDog-linux-x86_64.tar.gz`, `RamDog-linux-aarch64.tar.gz`, `RamDog-macos-aarch64.tar.gz` ou `…-x86_64.tar.gz`) para `~/.local/bin/ramdog` e abre. No Mac, se o Gatekeeper bloquear: Ajustes → Privacidade e segurança → Abrir mesmo assim.
 
-No Linux: lista, categorias, origem, árvore, kill, USS/PSS/RSS, GPU, sensores e ventoinhas, Partida/Desperdício via systemd e Telas via Hyprland. A **v0.10.0** traz a interface nova e a Limpeza; a coleta que aguenta sessão longa veio na 0.9.1 — veja as [patch notes](docs/releases/v0.10.0.md) e o [changelog](CHANGELOG.md). Consulte [dependências e limites](linux/README.md). Janela: Wayland ou X11 (eframe). Os binários Linux requerem glibc 2.39+ (Ubuntu 24.04, Omarchy/Arch atual, ou distribuição compatível); em sistemas anteriores, compile do código. Sem binário no release, o script cai no `cargo build` (precisa [rustup](https://rustup.rs) + git e libs nativas, ver abaixo).
+No Linux: lista, categorias, origem, árvore, kill, USS/PSS/RSS, GPU, sensores e ventoinhas, Partida/Desperdício via systemd e Telas via Hyprland. A **v0.12.0** acrescenta a interface inglesa; a v0.11 trouxe contabilidade precisa, origens systemd e Disputa, e a v0.10 introduziu a interface atual e a Limpeza. Veja as [patch notes](docs/releases/v0.12.0.md) e o [changelog](CHANGELOG.md). Consulte [dependências e limites](linux/README.md). Janela: Wayland ou X11 (eframe). Os binários Linux requerem glibc 2.39+ (Ubuntu 24.04, Omarchy/Arch atual, ou distribuição compatível); em sistemas anteriores, compile do código. Sem binário no release, o script cai no `cargo build` (precisa [rustup](https://rustup.rs) + git e libs nativas, ver abaixo).
 
-O instalador verifica SHA-256 e, no Linux, também instala `ramdog-launch`, que mantém o app independente do terminal usando systemd de usuário quando disponível. `RAMDOG_HOME` muda o destino, `RAMDOG_VERSION=v0.10.0` fixa a versão e `RAMDOG_NO_LAUNCH=1` instala sem abrir. Exemplo: `curl -sSfL https://raw.githubusercontent.com/LucasOl1337/RamDog/main/install.sh | RAMDOG_NO_LAUNCH=1 sh`.
+O instalador verifica SHA-256 e, no Linux, também instala `ramdog-launch`, que mantém o app independente do terminal usando systemd de usuário quando disponível. `RAMDOG_HOME` muda o destino, `RAMDOG_VERSION=v0.12.0` fixa a versão e `RAMDOG_NO_LAUNCH=1` instala sem abrir. Exemplo: `curl -sSfL https://raw.githubusercontent.com/LucasOl1337/RamDog/main/install.sh | RAMDOG_NO_LAUNCH=1 sh`.
 
 No Mac: lista, categorias, origem, árvore, kill. Sem Desperdício, sem Telas, sem temp de CPU, sem GPU NVML.
 
@@ -258,7 +256,7 @@ Os slots guardam posição em fração da **área de trabalho** do monitor, nunc
 
 ## Releases
 
-[Changelog](CHANGELOG.md) · [Patch notes v0.10.0](docs/releases/v0.10.0.md) · [v0.9.1](docs/releases/v0.9.1.md) · [v0.9.0](docs/releases/v0.9.0.md) · [Como publicar com `./release`](docs/RELEASING.md).
+[Changelog](CHANGELOG.md) · [Patch notes v0.12.0](docs/releases/v0.12.0.md) · [v0.11.1](docs/releases/v0.11.1.md) · [v0.11.0](docs/releases/v0.11.0.md) · [Como publicar com `./release`](docs/RELEASING.md).
 
 A imagem de preview social do repositório está em [`docs/media/banners/og.png`](docs/media/banners/og.png) (1280×640).
 

@@ -64,10 +64,10 @@ impl Drains {
         use crate::kit;
         self.scan.poll();
         if self.action.poll() {
-            self.scan.start(startup_linux::scan);
+            self.scan.start(move || startup_linux::scan_for(locale));
         }
         if self.scan.due(10) {
-            self.scan.start(startup_linux::scan);
+            self.scan.start(move || startup_linux::scan_for(locale));
         }
         kit::intro(ui, locale.text("Serviços em segundo plano, do maior pro menor em RAM. Revise o consumo e a finalidade antes de parar um; os essenciais estão protegidos.", "Background services, largest to smallest by RAM. Review their purpose before stopping one; essential services are protected."));
         ui.add_space(6.0);
@@ -80,7 +80,7 @@ impl Drains {
                 .add(kit::button(locale.text("Atualizar", "Refresh")))
                 .clicked()
             {
-                self.scan.start(startup_linux::scan);
+                self.scan.start(move || startup_linux::scan_for(locale));
             }
             self.scan.status(ui);
             self.action.status(ui);
