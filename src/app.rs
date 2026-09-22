@@ -98,7 +98,7 @@ enum Row {
         collapsed: bool,
     },
     /// Cabeçalho de um app: índice em `App::groups`. O conteúdo não fica aqui de
-    /// propósito — as somas são recalculadas a cada quadro, inclusive quando a ordem
+    /// propósito — as somas são recalculadas a cada amostra, inclusive quando a ordem
     /// está congelada porque o mouse está em cima da tabela.
     AppHeader {
         gi: usize,
@@ -109,6 +109,88 @@ enum Row {
         kind: SysRow,
         bytes: u64,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RowCacheAction {
+    Rebuild,
+    ReconcileSnapshot,
+    Reuse,
+}
+
+/// Decide quanto trabalho estrutural a tabela precisa fazer neste quadro.
+///
+/// Esta função fica separada do desenho para o contrato de cache ser testável: um
+/// evento visual (hover, tooltip, movimento do mouse) não pode reordenar nem revarrer
+/// centenas de processos quando nenhum dado mudou.
+fn row_cache_action(
+    has_cache: bool,
+    rows_dirty: bool,
+    snapshot_dirty: bool,
+    key_changed: bool,
+    hovering: bool,
+    order_frozen: bool,
+) -> RowCacheAction {
+    if !has_cache || rows_dirty || key_changed {
+        RowCacheAction::Rebuild
+    } else if snapshot_dirty {
+        if hovering {
+            RowCacheAction::ReconcileSnapshot
+        } else {
+            RowCacheAction::Rebuild
+        }
+    } else if order_frozen && !hovering {
+        // Uma amostra chegou enquanto o mouse protegia a ordem. Ao sair da tabela,
+        // aplicamos a ordenação nova uma única vez.
+        RowCacheAction::Rebuild
+    } else {
+        RowCacheAction::Reuse
+    }
+}
+
+#[cfg(test)]
+mod row_cache_tests {
+    use super::{row_cache_action, RowCacheAction};
+
+    #[test]
+    fn stable_visual_frame_reuses_cached_rows_even_outside_the_table() {
+        assert_eq!(
+            row_cache_action(true, false, false, false, false, false),
+            RowCacheAction::Reuse,
+        );
+    }
+
+    #[test]
+    fn new_snapshot_is_reconciled_once_while_hovering() {
+        assert_eq!(
+            row_cache_action(true, false, true, false, true, false),
+            RowCacheAction::ReconcileSnapshot,
+        );
+    }
+
+    #[test]
+    fn new_snapshot_reorders_once_when_not_hovering() {
+        assert_eq!(
+            row_cache_action(true, false, true, false, false, false),
+            RowCacheAction::Rebuild,
+        );
+    }
+
+    #[test]
+    fn leaving_a_frozen_table_applies_the_pending_order_once() {
+        assert_eq!(
+            row_cache_action(true, false, false, false, false, true),
+            RowCacheAction::Rebuild,
+        );
+    }
+
+    #[test]
+    fn hover_without_new_data_is_a_cache_hit() {
+        assert_eq!(
+            row_cache_action(true, false, false, false, true, true),
+            RowCacheAction::Reuse,
+        );
+    }
 }
 
 /// Um app na visão Lista: todos os processos do mesmo executável somados numa linha.
@@ -207,6 +289,22 @@ struct MemBreakdown {
     kernel_ok: bool,
 }
 
+/// Agregados que dependem da amostra inteira. A UI pode repintar dezenas de vezes por
+/// movimento do mouse; nenhum desses valores precisa ser refeito até chegar outra amostra
+/// (ou mudar a métrica de memória/classificação).
+#[derive(Default)]
+struct UiDerived {
+    breakdown: MemBreakdown,
+    pressure: pressure::Snapshot,
+    thieves: Vec<pressure::Thief>,
+    cpu_split: Option<CpuSplit>,
+    cat_totals: HashMap<Category, (u64, usize)>,
+    private_cat_totals: HashMap<Category, (u64, usize)>,
+    linux_memory_summary: String,
+    linux_memory_available: usize,
+    metric_total: u64,
+}
+
 pub struct App {
     #[cfg(target_os = "linux")]
     gpu_index: usize,
@@ -272,7 +370,15 @@ pub struct App {
     /// Ordem das linhas congelada enquanto o mouse está sobre a tabela (evita matar a linha errada).
     cached_rows: Option<Vec<Row>>,
     cached_key: u64,
+    /// Chegou uma amostra nova; a estrutura da tabela precisa ser atualizada uma vez.
+    /// Separado de `rows_dirty`, que representa mudança de filtro/visão do usuário.
+    snapshot_dirty: bool,
     rows_dirty: bool,
+    /// Quantidade que passa pelos filtros, recalculada junto com o cache de linhas.
+    /// Evita duas varreduras de todos os processos em cada repaint visual.
+    shown_count: usize,
+    derived: UiDerived,
+    derived_dirty: bool,
     table_rect: Option<egui::Rect>,
     order_frozen: bool,
     drains: Drains,
@@ -364,7 +470,11 @@ impl App {
             scroll_to_selected: false,
             cached_rows: None,
             cached_key: 0,
+            snapshot_dirty: false,
             rows_dirty: true,
+            shown_count: 0,
+            derived: UiDerived::default(),
+            derived_dirty: true,
             table_rect: None,
             order_frozen: false,
             drains: Drains::new(),
@@ -433,6 +543,8 @@ impl App {
         }
         self.refresh_services();
         self.rebuild_indexes();
+        self.snapshot_dirty = true;
+        self.derived_dirty = true;
         if let Some(pid) = self.selected {
             if let Some(&i) = self.by_pid.get(&pid) {
                 self.selected_keep = Some((self.procs[i].clone(), self.cat(pid)));
@@ -590,7 +702,7 @@ impl App {
     /// Sempre sobre memória **privada**, independentemente da métrica escolhida na coluna:
     /// o working set conta a mesma página compartilhada em cada processo que a mapeia, então
     /// somá-lo daria mais que a RAM instalada. O resto sai por diferença.
-    fn breakdown(&self) -> MemBreakdown {
+    fn calculate_breakdown(&self) -> MemBreakdown {
         let used = self.mem.used_phys();
         let private: u64 = self.procs.iter().map(|p| p.private_ws).sum();
         let (paged, nonpaged) = if self.kernel.ok {
@@ -788,6 +900,120 @@ impl App {
         }
     }
 
+    /// Coluna "Quem abriu": a cadeia de quem chamou quem, da raiz até o pai imediato.
+    ///
+    /// É o que responde "de onde saiu isso" sem ler 300 caracteres de argumentos: `foot ›
+    /// bash › claude` diz mais que `--type=utility --utility-sub-type=network`. A unidade do
+    /// systemd e o agente deduzido do ambiente entram na frente quando a cadeia não os mostra
+    /// (o `python` de `hermes-gateway.service` vira `Hermes (gateway) › python`).
+    ///
+    /// Devolve (texto da célula, tooltip, PID do pai imediato para o clique).
+    fn invoker_of(&self, p: &ProcInfo) -> (String, String, Option<u32>) {
+        let mut chain: Vec<(String, u32)> = Vec::new();
+        let mut cur = p.ppid;
+        let mut guard = 0;
+        let mut from_desktop = false;
+        while cur != 0 && guard < 64 {
+            guard += 1;
+            let Some(a) = self.proc(cur) else { break };
+            if a.pid == 1 || a.name_lower == "systemd" {
+                break;
+            }
+            // O compositor/shell é a raiz de tudo que o usuário abriu; como "quem chamou"
+            // ele é ruído: `start-hyprland › Hyprland › foot › bash` vira `foot › bash`.
+            if is_desktop_shell(&a.name_lower) {
+                from_desktop = true;
+                break;
+            }
+            chain.push((a.name.clone(), a.pid));
+            cur = a.ppid;
+        }
+        chain.reverse();
+        let target = chain.last().map(|(_, pid)| *pid);
+        // `chromium › chromium › chromium` é um só chromium para quem lê.
+        let mut names: Vec<String> = Vec::new();
+        for (n, _) in &chain {
+            if names.last() != Some(n) {
+                names.push(n.clone());
+            }
+        }
+        let l = &p.launcher;
+        let mut tip = String::new();
+        let known = |what: &str| {
+            let w = what.to_lowercase();
+            let head = w.split(|c: char| !c.is_alphanumeric()).next().unwrap_or("").to_string();
+            let hit = |n: &str| {
+                let n = n.to_lowercase();
+                n == w || (head.len() >= 4 && (n.contains(&head) || head.contains(&n)))
+            };
+            hit(&p.name) || names.iter().any(|n| hit(n))
+        };
+        let mut prefix: Vec<String> = Vec::new();
+        if let Some(u) = l.unit_label() {
+            // "desktop" (menu, atalho, `uwsm app`) só vale quando não há cadeia para mostrar.
+            let desktop = u.to_lowercase().starts_with("desktop");
+            if (!desktop || names.is_empty()) && !known(&u) {
+                prefix.push(u);
+            }
+        }
+        if let Some(a) = l.agent.as_deref().filter(|a| !known(a)) {
+            prefix.push(a.to_string());
+        }
+        if let Some(h) = l.host.as_deref().filter(|h| !known(h)) {
+            prefix.push(h.to_string());
+        }
+        let mut parts = prefix.clone();
+        if names.len() > 4 {
+            parts.push("…".into());
+            parts.extend(names[names.len() - 4..].iter().cloned());
+        } else {
+            parts.extend(names.iter().cloned());
+        }
+        let label = if parts.is_empty() {
+            if from_desktop {
+                "desktop".to_string()
+            } else if p.raw_ppid == 1 || self.proc(p.raw_ppid).map(|a| a.name_lower == "systemd").unwrap_or(false) {
+                "sistema (systemd)".to_string()
+            } else if p.raw_ppid != 0 {
+                match self.seen_names.get(&p.raw_ppid) {
+                    Some(n) => format!("{n} (já saiu)"),
+                    None => format!("pai {} (já saiu)", p.raw_ppid),
+                }
+            } else {
+                "–".to_string()
+            }
+        } else {
+            parts.join(" › ")
+        };
+        if !chain.is_empty() {
+            tip.push_str("Quem chamou quem, da raiz até este processo:\n");
+            for (n, pid) in &chain {
+                tip.push_str(&format!("  {n} ({pid})\n"));
+            }
+            tip.push_str(&format!("  {} ({})\nclique: selecionar o pai", p.name, p.pid));
+        } else if p.raw_ppid > 1 {
+            tip.push_str(&format!("O pai (PID {}) já saiu; a cadeia acima dele não dá para reconstruir.", p.raw_ppid));
+        }
+        if let Some(raw) = &l.unit {
+            tip.push_str(&format!("\nunidade: {raw}"));
+        }
+        if let Some(a) = &l.agent {
+            tip.push_str(&format!("\nagente: {a}"));
+            if let Some(sid) = &l.session {
+                tip.push_str(&format!(" (sessão {sid})"));
+            }
+        }
+        if let Some(cwd) = &l.init_cwd {
+            tip.push_str(&format!("\nprojeto: {cwd}"));
+        }
+        let cmd = if p.cmdline.is_empty() { p.exe_path.as_str() } else { p.cmdline.as_str() };
+        if !cmd.is_empty() {
+            let short: String = cmd.chars().take(400).collect();
+            tip.push_str(&format!("\n\ncomando: {short}{}", if cmd.chars().count() > 400 { "…" } else { "" }));
+        }
+        (label, tip.trim_start_matches('\n').to_string(), target)
+    }
+
     fn ancestry(&self, pid: u32) -> Vec<u32> {
         let mut chain = Vec::new();
         let mut cur = self.proc(pid).map(|p| p.ppid).unwrap_or(0);
@@ -829,7 +1055,9 @@ impl App {
                             self.subtree_cpu.get(b).copied().unwrap_or(pb.cpu_pct),
                         )
                     } else {
-                        (pa.cpu_pct, pb.cpu_pct)
+                        // Filhos já encerrados contam: o shell que disparou dez `rg` de
+                        // 0,3 s é quem explica o CPU, e sem isso ele ficava no fim da lista.
+                        (pa.cpu_pct + pa.cpu_children_pct, pb.cpu_pct + pb.cpu_children_pct)
                     };
                     ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
                 }
@@ -889,7 +1117,7 @@ impl App {
             .unwrap_or(0)
     }
 
-    fn pressure_snap(&self) -> pressure::Snapshot {
+    fn calculate_pressure_snap(&self) -> pressure::Snapshot {
         pressure::Snapshot {
             load1: self.sys.load1,
             ncpu: self.ncpu as u32,
@@ -900,8 +1128,7 @@ impl App {
         }
     }
 
-    fn thieves(&self) -> Vec<pressure::Thief> {
-        let game = self.pressure_snap().game_open;
+    fn calculate_thieves(&self, game: bool) -> Vec<pressure::Thief> {
         let mut out: Vec<pressure::Thief> = self
             .procs
             .iter()
@@ -1252,9 +1479,9 @@ impl App {
         }
     }
 
-    /// Atualiza as somas dos grupos sem mexer na ordem — é o que roda enquanto a tabela
-    /// está congelada porque o mouse está em cima dela. Congelar a ordem é proposital;
-    /// congelar os números junto não seria.
+    /// Atualiza as somas dos grupos sem mexer na ordem quando chega uma amostra enquanto
+    /// o mouse está sobre a tabela. Congelar a ordem é proposital; congelar os números
+    /// junto não seria.
     fn refresh_groups(&mut self) {
         if self.groups.is_empty() {
             return;
@@ -1301,12 +1528,21 @@ impl App {
             _ => false,
         };
         let key = self.rows_key();
-        let can_freeze = hovering && !self.rows_dirty && key == self.cached_key;
-        if can_freeze {
-            if self.cached_rows.is_some() {
+        let action = row_cache_action(
+            self.cached_rows.is_some(),
+            self.rows_dirty,
+            self.snapshot_dirty,
+            key != self.cached_key,
+            hovering,
+            self.order_frozen,
+        );
+        match action {
+            RowCacheAction::Reuse => self.cached_rows.clone().unwrap_or_default(),
+            RowCacheAction::ReconcileSnapshot => {
                 // mantém a ordem; remove só o que morreu ou deixou de passar no filtro
                 let search = self.search.trim().to_lowercase();
                 let mut keep: HashSet<u32> = self.procs.iter().filter(|p| self.passes(p, &search)).map(|p| p.pid).collect();
+                self.shown_count = keep.len();
                 if self.cfg.view == ViewMode::Tree {
                     let hits: Vec<u32> = keep.iter().copied().collect();
                     for h in hits {
@@ -1337,16 +1573,22 @@ impl App {
                     })
                     .collect();
                 self.order_frozen = true;
+                self.snapshot_dirty = false;
                 self.cached_rows = Some(rows.clone());
-                return rows;
+                rows
+            }
+            RowCacheAction::Rebuild => {
+                let rows = self.build_rows();
+                let search = self.search.trim().to_lowercase();
+                self.shown_count = self.procs.iter().filter(|p| self.passes(p, &search)).count();
+                self.cached_rows = Some(rows.clone());
+                self.cached_key = key;
+                self.snapshot_dirty = false;
+                self.rows_dirty = false;
+                self.order_frozen = false;
+                rows
             }
         }
-        let rows = self.build_rows();
-        self.cached_rows = Some(rows.clone());
-        self.cached_key = key;
-        self.rows_dirty = false;
-        self.order_frozen = false;
-        rows
     }
 
     // ---------- ações ----------
@@ -1387,32 +1629,77 @@ impl App {
         self.execute_kill(pids, skipped_locked);
     }
 
+    /// Nome de um PID para mensagem: da amostra, do histórico de nomes ou direto do kernel.
+    fn name_for(&self, pid: u32) -> String {
+        if let Some(p) = self.proc(pid) {
+            return identity::of(p).label;
+        }
+        if let Some(n) = procs::comm_of(pid) {
+            return n;
+        }
+        self.seen_names.get(&pid).cloned().unwrap_or_else(|| format!("PID {pid}"))
+    }
+
+    /// Quem segura um zumbi agora: pai vivo (nome, pid) ou `None` quando o pai é o init /
+    /// já saiu e o recolhimento é automático. Lê o kernel, não a amostra: o zumbi pode ter
+    /// sido reparentado depois que o pai original morreu.
+    fn zombie_holder(&self, pid: u32, sampled_ppid: u32) -> Option<(String, u32)> {
+        let ppid = match procs::live_state(pid) {
+            Some(('Z', ppid)) => ppid,
+            Some(_) => return None,
+            None => return None,
+        };
+        let ppid = if ppid != 0 { ppid } else { sampled_ppid };
+        if ppid <= 1 {
+            return None;
+        }
+        Some((self.name_for(ppid), ppid))
+    }
+
     /// Zombie: o kernel aceita SIGTERM/SIGKILL num processo `Z` (retorna 0) e nada acontece,
     /// porque ele já morreu — o que falta é o pai chamar `wait`. Sem Shift, cutuca o pai com
     /// SIGCHLD e confere; com Shift (ou se o pai já sumiu), finaliza o pai, que é quem segura.
+    ///
+    /// Em qualquer caso a mensagem diz o essencial: um zumbi não ocupa memória. Quem quer a
+    /// linha sumindo tem dois caminhos, os dois nomeados aqui e no painel de detalhes.
     fn request_reap_zombie(&mut self, p: &ProcInfo, kill_parent: bool) {
         let label = identity::of(p).label;
-        let ppid = if p.ppid != 0 { p.ppid } else { p.raw_ppid };
-        let parent = self.proc(ppid).cloned();
-        let Some(parent) = parent.filter(|pp| pp.pid > 1) else {
+        let sampled_ppid = if p.ppid != 0 { p.ppid } else { p.raw_ppid };
+        let Some((pname, ppid)) = self.zombie_holder(p.pid, sampled_ppid) else {
             self.toast(format!("{label} ({}) é zumbi e o pai já saiu: o init recolhe sozinho em instantes", p.pid), false);
             self.after_kill();
             return;
         };
-        let pname = format!("{} ({})", identity::of(&parent).label, parent.pid);
+        let pname = format!("{pname} ({ppid})");
         if kill_parent {
+            let Some(parent) = self.proc(ppid).cloned() else {
+                // O pai existe no kernel mas ainda não entrou numa amostra: sinal direto.
+                match procs::terminate(ppid) {
+                    procs::KillOutcome::Signaled | procs::KillOutcome::AlreadyGone => {
+                        self.toast(format!("pai {pname} finalizado; o zumbi {label} some em instantes"), false)
+                    }
+                    procs::KillOutcome::Denied => self.toast(format!("sem permissão para finalizar o pai {pname}"), true),
+                    other => self.toast(format!("falha ao finalizar o pai {pname}: {other:?}"), true),
+                }
+                self.after_kill();
+                return;
+            };
+            if is_critical(&parent.name_lower, parent.pid) {
+                self.toast(format!("{label} é zumbi segurado por {pname}, que é crítico do sistema: não dá para finalizar. Não ocupa memória"), true);
+                return;
+            }
             if self.is_locked(&parent) {
-                self.toast(format!("{label} é zumbi; o pai {pname} está protegido (lock), não dá para finalizar"), true);
+                self.toast(format!("{label} é zumbi segurado por {pname}, que está protegido (lock). Não ocupa memória; desproteja o pai para finalizar"), true);
                 return;
             }
             let entry = (parent.pid, parent.create_time, identity::of(&parent).label, self.mem_of(&parent));
             self.execute_kill(vec![entry], 0);
             return;
         }
-        match procs::nudge_parent(parent.pid) {
+        match procs::nudge_parent(ppid) {
             procs::KillOutcome::Signaled => {}
             procs::KillOutcome::Denied => {
-                self.toast(format!("{label} é zumbi; sem permissão para sinalizar o pai {pname}"), true);
+                self.toast(format!("{label} é zumbi; sem permissão para sinalizar o pai {pname}. Não ocupa memória"), true);
                 return;
             }
             _ => {
@@ -1422,11 +1709,14 @@ impl App {
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(150));
-        let still = pid_still_same(p.pid, p.create_time) && procs::kernel_state(p.pid) == Some('Z');
+        let still = procs::kernel_state(p.pid) == Some('Z');
         self.after_kill();
         if still {
+            // O painel de detalhes tem o botão "Finalizar pai"; selecionar aqui poupa o
+            // usuário de descobrir o Shift.
+            self.selected = Some(p.pid);
             self.toast(
-                format!("{label} ({}) é zumbi: já morreu, quem segura é {pname}. Shift+✖ finaliza o pai", p.pid),
+                format!("{label} ({}) já morreu e não ocupa memória. A linha fica porque {pname} não recolheu: some quando ele recolher ou for finalizado (Shift+✖ ou o botão no painel)", p.pid),
                 true,
             );
         } else {
@@ -1461,15 +1751,27 @@ impl App {
 
     /// Mata a lista e resume o estrago na barra de status. `skipped_locked` são os que o
     /// lock poupou pelo caminho — dizer só "3 finalizados" quando eram 5 esconde o motivo.
+    ///
+    /// Depois do SIGKILL espera o kernel recolher. Quem vira `Z` nesse meio tempo morreu de
+    /// verdade, mas o pai não chamou `wait`: o RamDog cutuca o pai (SIGCHLD) e, se a linha
+    /// continuar, diz quem está segurando. Antes isso era "1 finalizado" seguido de uma linha
+    /// que não saía nunca, e o clique seguinte caía na mensagem de zumbi sem contexto.
     fn execute_kill(&mut self, pids: Vec<(u32, i64, String, u64)>, skipped_locked: usize) {
         let mut signaled = 0;
         let mut gone = 0;
         let mut freed = 0u64;
         let mut errs: Vec<String> = Vec::new();
         let mut pending = Vec::new();
+        // (pid, nome, ppid amostrado) de quem já era zumbi antes do clique: sinal nele não
+        // faz nada, então nem tenta — vai direto para o acerto com o pai.
+        let mut zombies: Vec<(u32, String, u32)> = Vec::new();
         for (pid, created, name, ram) in &pids {
             if !pid_still_same(*pid, *created) {
                 gone += 1;
+                continue;
+            }
+            if let Some(('Z', ppid)) = procs::live_state(*pid) {
+                zombies.push((*pid, name.clone(), ppid));
                 continue;
             }
             match procs::terminate(*pid) {
@@ -1483,6 +1785,7 @@ impl App {
         if !pending.is_empty() {
             std::thread::sleep(std::time::Duration::from_millis(150));
         }
+        let mut killed: Vec<(u32, String, u32)> = Vec::new();
         for (pid, created, name, ram) in pending {
             if !pid_still_same(pid, created) {
                 signaled += 1;
@@ -1493,12 +1796,15 @@ impl App {
                 procs::KillOutcome::Signaled | procs::KillOutcome::AlreadyGone => {
                     signaled += 1;
                     freed += ram;
+                    killed.push((pid, name, 0));
                 }
                 procs::KillOutcome::Denied => errs.push(format!("{name} ({pid}): acesso negado")),
                 procs::KillOutcome::Invalid => errs.push(format!("{name} ({pid}): PID inválido")),
                 procs::KillOutcome::Failed(e) => errs.push(format!("{name} ({pid}): {e}")),
             }
         }
+        killed.extend(zombies.iter().cloned());
+        let held = self.settle_zombies(&killed);
         self.after_kill();
         let poupados = if skipped_locked > 0 {
             format!(", {skipped_locked} protegido(s) poupado(s)")
@@ -1515,24 +1821,95 @@ impl App {
         if gone > 0 {
             parts.push(format!("{gone} já tinham saído"));
         }
-        if parts.is_empty() && errs.is_empty() {
+        // Zumbis que já eram zumbis e o pai recolheu no cutucão: contam como resolvidos.
+        let reaped = zombies.iter().filter(|(pid, _, _)| !held.iter().any(|h| h.0 == *pid)).count();
+        if reaped > 0 {
+            parts.push(format!("{reaped} zumbi(s) recolhido(s) pelo pai"));
+        }
+        if parts.is_empty() && errs.is_empty() && held.is_empty() {
             parts.push("nada a encerrar".into());
         }
-        if errs.is_empty() {
-            self.toast(format!("{}{poupados}", parts.join(", ")), false);
-        } else {
-            let mut msg = format!(
-                "{}{} falha(s): {}",
-                if parts.is_empty() { String::new() } else { format!("{}; ", parts.join(", ")) },
-                errs.len(),
-                errs[0]
-            );
+        let mut msg = parts.join(", ");
+        let mut warn = false;
+        if !held.is_empty() {
+            warn = true;
+            if !msg.is_empty() {
+                msg.push_str("; ");
+            }
+            msg.push_str(&self.held_zombies_note(&held));
+        }
+        if !errs.is_empty() {
+            warn = true;
+            if !msg.is_empty() {
+                msg.push_str("; ");
+            }
+            msg.push_str(&format!("{} falha(s): {}", errs.len(), errs[0]));
             if errs.len() > 1 {
                 msg.push_str(&format!(" (+{})", errs.len() - 1));
             }
-            msg.push_str(&poupados);
-            self.toast(msg, true);
         }
+        msg.push_str(&poupados);
+        self.toast(msg, warn);
+    }
+
+    /// Espera até ~400 ms os PIDs recém-mortos sumirem. Quem aparece como `Z` recebe um
+    /// SIGCHLD no pai (uma vez por pai); devolve quem continuou zumbi: (pid, nome, ppid).
+    fn settle_zombies(&self, killed: &[(u32, String, u32)]) -> Vec<(u32, String, u32)> {
+        if killed.is_empty() {
+            return Vec::new();
+        }
+        let deadline = Instant::now() + std::time::Duration::from_millis(400);
+        let mut nudged: HashSet<u32> = HashSet::new();
+        let mut held = Vec::new();
+        loop {
+            held.clear();
+            let mut settling = false;
+            for (pid, name, sampled_ppid) in killed {
+                match procs::live_state(*pid) {
+                    None => {}
+                    Some(('Z', ppid)) => {
+                        let ppid = if ppid != 0 { ppid } else { *sampled_ppid };
+                        if ppid > 1 && nudged.insert(ppid) {
+                            let _ = procs::nudge_parent(ppid);
+                        }
+                        // Pai é o init (ou sumiu): recolhe sozinho, não é caso para avisar.
+                        if ppid > 1 {
+                            held.push((*pid, name.clone(), ppid));
+                        }
+                        settling = true;
+                    }
+                    // SIGKILL entregue mas ainda saindo (memória grande, estado D): espera.
+                    Some(_) => settling = true,
+                }
+            }
+            if !settling || Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
+        held
+    }
+
+    /// Frase da barra de status para zumbis que o pai não recolheu, agrupada por pai.
+    fn held_zombies_note(&self, held: &[(u32, String, u32)]) -> String {
+        let mut by_parent: Vec<(u32, Vec<&(u32, String, u32)>)> = Vec::new();
+        for h in held {
+            match by_parent.iter_mut().find(|(pp, _)| *pp == h.2) {
+                Some((_, list)) => list.push(h),
+                None => by_parent.push((h.2, vec![h])),
+            }
+        }
+        let mut parts = Vec::new();
+        for (ppid, list) in by_parent {
+            let pname = self.name_for(ppid);
+            let who = if list.len() == 1 {
+                format!("{} ({})", list[0].1, list[0].0)
+            } else {
+                format!("{} processos ({})", list.len(), list[0].1)
+            };
+            parts.push(format!("{who} morreu mas ficou como zumbi: {pname} ({ppid}) não recolheu"));
+        }
+        format!("{}. Zumbi não ocupa memória; some quando o pai recolher ou for finalizado (selecione a linha: o painel tem o botão)", parts.join("; "))
     }
 
     fn after_kill(&mut self) {
@@ -1562,6 +1939,7 @@ impl App {
         }
         self.cfg_dirty = true;
         self.rebuild_indexes();
+        self.derived_dirty = true;
         self.rows_dirty = true;
     }
 
@@ -1600,13 +1978,13 @@ impl App {
     /// Totais por categoria na métrica escolhida — alimenta os chips de filtro, que precisam
     /// bater com o que a coluna RAM mostra em cada linha.
     fn cat_totals(&self) -> HashMap<Category, (u64, usize)> {
-        self.cat_totals_with(self.cfg.mem_metric)
+        self.derived.cat_totals.clone()
     }
 
     /// Totais por categoria numa métrica específica. O medidor do topo pede sempre
     /// `Private`, porque lá as faixas precisam caber dentro do "em uso" — com working set a
     /// soma das categorias passa da largura da barra.
-    fn cat_totals_with(&self, m: MemMetric) -> HashMap<Category, (u64, usize)> {
+    fn calculate_cat_totals(&self, m: MemMetric) -> HashMap<Category, (u64, usize)> {
         let mut totals: HashMap<Category, (u64, usize)> = HashMap::new();
         for p in &self.procs {
             let e = totals.entry(self.cat(p.pid)).or_default();
@@ -1640,7 +2018,7 @@ impl App {
         }
         let b = self.breakdown();
         let total = self.mem.total_phys.max(1);
-        let cats = self.cat_totals_with(MemMetric::Private);
+        let cats = &self.derived.private_cat_totals;
         let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, TOP_BAR_H), egui::Sense::hover());
         let p = ui.painter();
         p.rect_filled(rect, 3.0, Color32::from_rgb(30, 34, 41));
@@ -2238,7 +2616,7 @@ impl App {
         });
     }
 
-    fn header_btn(&mut self, ui: &mut egui::Ui, key: SortKey, label: &str) {
+    fn header_btn(&mut self, ui: &mut egui::Ui, key: SortKey, label: &str) -> egui::Response {
         let active = self.sort == key;
         let arrow = if active { if self.sort_desc { " ▾" } else { " ▴" } } else { "" };
         // Todos os títulos com o mesmo peso; só a cor marca a coluna ordenada — antes a
@@ -2247,7 +2625,8 @@ impl App {
             .size(11.5)
             .strong()
             .color(if active { ACCENT } else { MUTED });
-        if ui.add(egui::Button::new(text).frame(false)).on_hover_text("Clique para ordenar por esta coluna").clicked() {
+        let r = ui.add(egui::Button::new(text).frame(false));
+        if r.clicked() {
             if active {
                 self.sort_desc = !self.sort_desc;
             } else {
@@ -2255,6 +2634,7 @@ impl App {
                 self.sort_desc = !matches!(key, SortKey::Name | SortKey::Parent | SortKey::Cat);
             }
         }
+        r
     }
 
     fn ui_table(&mut self, ui: &mut egui::Ui) {
@@ -2333,7 +2713,10 @@ impl App {
             .column(Column::initial(68.0).at_least(52.0))
             .column(Column::initial(72.0).at_least(56.0))
             .column(Column::initial(68.0).at_least(52.0))
-            .column(Column::remainder().at_least(80.0).clip(true))
+            // Não redimensionável de propósito: com `resizable`, o egui_extras congela a
+            // largura do "resto" na primeira passada e a coluna não acompanha a janela ao
+            // maximizar. A borda da coluna Tempo continua arrastável, e é ela que reparte.
+            .column(Column::remainder().at_least(80.0).clip(true).resizable(false))
             .column(Column::exact(60.0))
             .min_scrolled_height(0.0);
         if self.scroll_to_selected {
@@ -2380,8 +2763,22 @@ impl App {
                 header.col(|ui| self.header_btn_right(ui, SortKey::Disk, "Disco"));
                 header.col(|ui| self.header_btn_right(ui, SortKey::Age, "Tempo"));
                 header.col(|ui| {
-                    ui.label(RichText::new("Comando").size(11.5).strong().color(MUTED))
-                        .on_hover_text("Argumentos da linha de comando (o caminho do exe já está no nome). Botão direito na linha: ordenar por PID, estado ou origem.");
+                    let r = if self.cfg.cmd_column {
+                        ui.add(egui::Button::new(RichText::new("Comando").size(11.5).strong().color(MUTED)).frame(false))
+                            .on_hover_text("Argumentos da linha de comando (o caminho do exe já está no nome). Botão direito aqui troca para \"Quem abriu\".")
+                    } else {
+                        self.header_btn(ui, SortKey::Parent, "Quem abriu")
+                            .on_hover_text("Quem chamou quem, da raiz até o pai: terminal › shell › agente. Clique ordena pelo pai. A linha de comando fica no tooltip da célula e no painel de detalhes. Botão direito aqui troca para \"Comando\".")
+                    };
+                    r.context_menu(|ui| {
+                        let (on, off) = if self.cfg.cmd_column { ("Comando", "Quem abriu") } else { ("Quem abriu", "Comando") };
+                        ui.label(RichText::new(format!("Coluna: {on}")).weak());
+                        if ui.button(format!("Mostrar {off}")).clicked() {
+                            self.cfg.cmd_column = !self.cfg.cmd_column;
+                            self.cfg_dirty = true;
+                            ui.close_menu();
+                        }
+                    });
                 });
                 header.col(|_ui| {});
             })
@@ -2773,7 +3170,22 @@ impl App {
                                     } else {
                                         ui.label(num(txt).color(c))
                                     };
-                                    if cpu_shown >= 0.05 || p.cpu_raw_pct >= 0.05 {
+                                    // Filhos que já morreram dentro da janela: o `rg` de 2 s que a
+                                    // lista nunca viu. Sem isso o Claude mostrava 0,3% enquanto
+                                    // os filhos dele comiam 15% da máquina.
+                                    if p.cpu_children_pct >= 0.5 && !disputa_on {
+                                        ui.label(
+                                            RichText::new(format!("+{:.0}%", p.cpu_children_pct))
+                                                .monospace()
+                                                .size(10.5)
+                                                .color(Color32::from_rgb(255, 171, 145)),
+                                        )
+                                        .on_hover_text(format!(
+                                            "+{:.1}% em filhos que nasceram e morreram entre duas amostras (creditado a este processo pelo kernel).",
+                                            p.cpu_children_pct
+                                        ));
+                                    }
+                                    if cpu_shown >= 0.05 || p.cpu_raw_pct >= 0.05 || p.cpu_children_pct >= 0.05 {
                                         let mut tip = if tree && has_children {
                                             format!(
                                                 "deste processo: {:.1}%\ncom os filhos: {:.1}% = {:.1} núcleos\n",
@@ -2789,6 +3201,12 @@ impl App {
                                                 p.cpu_raw_pct
                                             )
                                         };
+                                        if p.cpu_children_pct >= 0.05 {
+                                            tip.push_str(&format!(
+                                                "filhos já encerrados neste intervalo: +{:.1}%\n",
+                                                p.cpu_children_pct
+                                            ));
+                                        }
                                         tip.push_str(&format!(
                                             "\n100% = a máquina inteira ({} núcleos). 1 núcleo cheio vira {:.1}%.",
                                             self.ncpu,
@@ -2866,22 +3284,31 @@ impl App {
                                 // Para quem hospeda serviço, o nome do serviço vale mil vezes
                                 // mais que "-k netsvcs -p". Mesma coluna, conteúdo útil.
                                 let svcs = self.services_of(pid);
-                                let (s, color) = if svcs.is_empty() {
-                                    (cmd_args(&p), MUTED)
-                                } else {
+                                if !svcs.is_empty() {
                                     let names: Vec<&str> = svcs.iter().map(|(_, d)| d.as_str()).collect();
-                                    (names.join(" · "), Color32::from_rgb(130, 175, 215))
-                                };
-                                let full = if svcs.is_empty() {
-                                    if p.cmdline.is_empty() { p.exe_path.clone() } else { p.cmdline.clone() }
+                                    let list: Vec<String> = svcs.iter().map(|(n, d)| format!("{d}  ({n})")).collect();
+                                    ui.add(egui::Label::new(RichText::new(names.join(" · ")).color(Color32::from_rgb(130, 175, 215)).size(11.5)).truncate())
+                                        .on_hover_text(format!("Serviços hospedados neste processo:\n{}", list.join("\n")));
+                                } else if self.cfg.cmd_column {
+                                    let full = if p.cmdline.is_empty() { p.exe_path.clone() } else { p.cmdline.clone() };
+                                    let r = ui.add(egui::Label::new(RichText::new(cmd_args(&p)).color(MUTED).size(11.5)).truncate());
+                                    if !full.is_empty() {
+                                        r.on_hover_text(full);
+                                    }
                                 } else {
-                                    let list: Vec<String> =
-                                        svcs.iter().map(|(n, d)| format!("{d}  ({n})")).collect();
-                                    format!("Serviços hospedados neste processo:\n{}", list.join("\n"))
-                                };
-                                let r = ui.add(egui::Label::new(RichText::new(&s).color(color).size(11.5)).truncate());
-                                if !full.is_empty() {
-                                    r.on_hover_text(full);
+                                    let (who, tip, target) = self.invoker_of(&p);
+                                    let color = if target.is_some() { Color32::from_gray(175) } else { MUTED };
+                                    let lbl = egui::Label::new(RichText::new(&who).color(color).size(11.5)).truncate();
+                                    let r = match target {
+                                        Some(_) => ui.add(lbl.sense(egui::Sense::click())),
+                                        None => ui.add(lbl),
+                                    };
+                                    if !tip.is_empty() {
+                                        r.clone().on_hover_text(tip);
+                                    }
+                                    if let (true, Some(tp)) = (r.clicked(), target) {
+                                        click_select = Some(tp);
+                                    }
                                 }
                             });
                             row.col(|ui| {
@@ -2945,7 +3372,14 @@ impl App {
                                         ui.close_menu();
                                     }
                                     let n = self.subtree_count.get(&pid).copied().unwrap_or(1);
-                                    if n > 1 && ui.button(format!("✖ Finalizar árvore ({n} processos)")).clicked() {
+                                    if p.kernel_state == Some('Z') {
+                                        if let Some((pname, ppid)) = self.zombie_holder(pid, if p.ppid != 0 { p.ppid } else { p.raw_ppid }) {
+                                            if ui.button(format!("✖ Finalizar pai: {pname} ({ppid})")).on_hover_text("Zumbi não morre com sinal: já morreu. Some quando o pai recolhe ou cai").clicked() {
+                                                kill = Some((pid, true));
+                                                ui.close_menu();
+                                            }
+                                        }
+                                    } else if n > 1 && ui.button(format!("✖ Finalizar árvore ({n} processos)")).clicked() {
                                         kill = Some((pid, true));
                                         ui.close_menu();
                                     }
@@ -3397,6 +3831,9 @@ impl App {
         };
         let locked = self.is_locked(&p);
         let critical = is_critical(&p.name_lower, p.pid);
+        // Só enquanto existe: depois de finalizar o pai, o `selected_keep` ainda diz `Z`.
+        let zombie = alive.is_some() && p.kernel_state == Some('Z');
+        let holder = if zombie { self.zombie_holder(p.pid, if p.ppid != 0 { p.ppid } else { p.raw_ppid }) } else { None };
         let now_ft = procs::now_filetime();
         let secs = ((now_ft - p.create_time).max(0) / 10_000_000) as u64;
         let mut kill: Option<(u32, bool)> = None;
@@ -3421,6 +3858,8 @@ impl App {
             }
             if alive.is_none() {
                 ui.label(RichText::new("(encerrado)").color(Color32::from_rgb(235, 90, 90)).strong());
+            } else if zombie {
+                ui.label(RichText::new("zumbi · já morreu, 0 de RAM").color(Color32::from_rgb(230, 120, 120)).strong());
             }
         });
         // Ações em fileira própria: à direita da identidade elas atropelavam o nome quando a
@@ -3429,7 +3868,22 @@ impl App {
             ui.spacing_mut().button_padding = Vec2::new(10.0, 4.0);
             {
                 if alive.is_some() {
-                    if !locked {
+                    if zombie {
+                        // Sinal num zumbi não faz nada; os dois caminhos reais ganham botão
+                        // com nome, em vez de um Shift que ninguém descobre.
+                        if ui.button("Pedir ao pai para recolher").on_hover_text("Manda SIGCHLD ao pai. Pai bem escrito recolhe na hora; se não recolher, só finalizando ele").clicked() {
+                            kill = Some((p.pid, false));
+                        }
+                        if let Some((pname, ppid)) = &holder {
+                            if ui
+                                .add(egui::Button::new(RichText::new(format!("✖ Finalizar pai: {pname} ({ppid})")).color(Color32::WHITE)).fill(Color32::from_rgb(170, 50, 50)))
+                                .on_hover_text("O pai é quem segura a entrada. Finalizando ele, o zumbi some junto")
+                                .clicked()
+                            {
+                                kill = Some((p.pid, true));
+                            }
+                        }
+                    } else if !locked {
                         if ui.add(egui::Button::new(RichText::new("✖ Finalizar").color(Color32::WHITE)).fill(Color32::from_rgb(170, 50, 50))).clicked() {
                             kill = Some((p.pid, false));
                         }
@@ -3522,6 +3976,19 @@ impl App {
                                     }
                                 });
                         }
+                    });
+                    ui.end_row();
+                }
+
+                if zombie {
+                    ui.label(RichText::new("Zumbi").weak());
+                    ui.vertical(|ui| {
+                        ui.add(egui::Label::new(RichText::new("Este processo já terminou: não usa memória nem CPU. A linha existe porque o pai ainda não recolheu o código de saída (wait).").size(12.0)).wrap());
+                        let txt = match &holder {
+                            Some((pname, ppid)) => format!("Quem segura: {pname} ({ppid}). Some quando ele recolher ou for finalizado."),
+                            None => "O pai já saiu: o init recolhe sozinho em instantes.".to_string(),
+                        };
+                        ui.add(egui::Label::new(RichText::new(txt).size(12.0).color(Color32::from_rgb(230, 120, 120))).wrap());
                     });
                     ui.end_row();
                 }
@@ -3699,7 +4166,7 @@ impl App {
     /// base é sempre a memória privada; com working set na coluna a soma passaria de 100% por
     /// dupla contagem do compartilhado, então o excedente é mostrado à parte, nomeado.
     #[cfg(target_os = "linux")]
-    fn linux_memory_summary(&self) -> String {
+    fn calculate_linux_memory_summary(&self) -> String {
         let measured: Vec<_> = self.procs.iter().filter_map(|p| p.linux_memory).collect();
         let uss: u64 = measured.iter().map(|m| m.0).sum();
         let pss: u64 = measured.iter().map(|m| m.1).sum();
@@ -3709,7 +4176,7 @@ impl App {
     fn ui_accounting(&mut self, ui: &mut egui::Ui) {
         #[cfg(target_os = "linux")]
         if cfg!(target_os = "linux") {
-            let available = self.procs.iter().filter(|p| p.linux_memory.is_some()).count();
+            let available = self.derived.linux_memory_available;
             ui.label(RichText::new(format!("RAM {} em uso · memória detalhada: {available}/{} processos", fmt_gb(self.mem.used_phys()), self.procs.len())).small().color(MUTED))
                 .on_hover_text(self.linux_memory_summary());
             return;
@@ -3756,7 +4223,7 @@ impl App {
             );
         }
         if self.cfg.mem_metric != MemMetric::Private {
-            let shown: u64 = self.procs.iter().map(|p| self.mem_of(p)).sum();
+            let shown = self.derived.metric_total;
             tip.push_str(&format!(
                 "\nA coluna RAM está em {} e soma {} — acima do privado porque cada página \
                  compartilhada conta em todo processo que a mapeia.",
@@ -3809,10 +4276,12 @@ impl eframe::App for App {
             self.cfg.view=views[step%views.len()];self.cfg.mini=step%10==8;
             self.cfg.mem_metric=MemMetric::ALL[step%MemMetric::ALL.len()];
             self.cfg.group_apps=step%2==0;self.rows_dirty=true;
+            self.derived_dirty=true;
             self.selected=self.procs.iter().find(|p|p.pid==std::process::id()).map(|p|p.pid);
             if start.elapsed().as_secs()>=90 {crate::linux::log("SMOKE PASS: 90s, todas as abas, mini e métricas");ctx.send_viewport_cmd(egui::ViewportCommand::Close);}
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
+        self.refresh_derived_if_dirty();
         // Fora do ingest: ele retorna cedo quando não há amostra nova, e a verificação
         // de assinatura chega no seu próprio ritmo.
         self.drain_sigs();
@@ -3871,8 +4340,7 @@ impl eframe::App for App {
         }
         egui::TopBottomPanel::bottom("statusbar").frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(16, 4))).show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let shown = self.procs.iter().filter(|p| self.passes(p, &self.search.trim().to_lowercase())).count();
-                ui.label(RichText::new(format!("{} processos ({} exibidos)", self.procs.len(), shown)).weak().small());
+                ui.label(RichText::new(format!("{} processos ({} exibidos)", self.procs.len(), self.shown_count)).weak().small());
                 ui.separator();
                 let locked_n = self.cfg.locked.len();
                 ui.label(RichText::new(format!("{locked_n} protegidos")).weak().small())
@@ -4219,8 +4687,7 @@ impl App {
             let title = if v == ViewMode::List { "Processos" } else { v.label() };
             ui.label(RichText::new(title).size(17.0).strong());
             if !v.is_addon() {
-                let shown = self.procs.iter().filter(|p| self.passes(p, &self.search.trim().to_lowercase())).count();
-                ui.label(RichText::new(format!("{} · {} na tela", self.procs.len(), shown)).color(MUTED).size(12.5));
+                ui.label(RichText::new(format!("{} · {} na tela", self.procs.len(), self.shown_count)).color(MUTED).size(12.5));
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().button_padding = Vec2::new(12.0, 5.0);
@@ -4311,19 +4778,30 @@ impl App {
             let ncpu = self.ncpu;
             let press = self.pressure_snap();
             let cpu_color = if press.load_hot() { Color32::from_rgb(255, 150, 90) } else { C_CPU };
-            let cpu_sub = match self.sys.load1 {
-                Some(l) => format!("load {} · {ncpu} threads", pt_num(l as f64, 2)),
-                None => format!("{ncpu} threads"),
+            let split = self.cpu_split();
+            let unlisted = split.and_then(|s| s.unlisted_chip());
+            let cpu_sub = match (self.sys.load1, unlisted.is_some()) {
+                (Some(l), false) => format!("load {} · {ncpu} threads", pt_num(l as f64, 2)),
+                (Some(l), true) => format!("load {}", pt_num(l as f64, 2)),
+                (None, _) => format!("{ncpu} threads"),
             };
-            let cpu_tip = match (self.sys.load1, self.sys.load5, self.sys.load15) {
+            let mut cpu_tip = match (self.sys.load1, self.sys.load5, self.sys.load15) {
                 (Some(a), Some(b), Some(c)) => format!(
                     "Uso de CPU (todos os núcleos).\nLoad 1/5/15 min: {a:.2} / {b:.2} / {c:.2}\nLoad acima de {ncpu} significa fila cheia — processo com pouca RAM some na lista ordenada por memória."
                 ),
                 _ => "Uso de CPU (todos os núcleos)".into(),
             };
+            if let Some(s) = split {
+                cpu_tip.push_str("\n\n");
+                cpu_tip.push_str(&s.explain());
+            }
             Self::resource_card(ui, w, "CPU", cpu_pct, cpu_color, &self.hist_cpu, &cpu_tip, |ui| {
                 Self::temp_label(ui, cpu_temp);
                 ui.label(RichText::new(cpu_sub).color(if press.load_hot() { Color32::from_rgb(255, 171, 145) } else { MUTED }).size(11.5));
+                if let Some((chip, tip)) = unlisted {
+                    ui.label(RichText::new(chip).color(Color32::from_rgb(255, 171, 145)).size(11.5))
+                        .on_hover_text(tip);
+                }
             });
 
             let used = self.mem.used_phys();
@@ -4406,6 +4884,7 @@ impl App {
             if gpu_index != self.gpu_index {
                 self.gpu_index = gpu_index;
                 self.sys.gpu = self.sys.gpu_linux.cards.get(gpu_index).cloned();
+                self.derived_dirty = true;
             }
 
             let disk_pct = self.sys.disk_pct;
@@ -4635,6 +5114,7 @@ impl App {
                 if metric != self.cfg.mem_metric {
                     self.cfg.mem_metric = metric;
                     self.cfg_dirty = true;
+                    self.derived_dirty = true;
                     self.rows_dirty = true;
                 }
                 ui.label(RichText::new(self.cfg.mem_metric.tip()).color(MUTED).size(11.5));
@@ -4702,6 +5182,76 @@ impl App {
         self.show_prefs = open;
     }
 
+    /// Quanto do medidor do topo a lista consegue explicar. `None` sem leitura de CPU.
+    fn calculate_cpu_split(&self) -> Option<CpuSplit> {
+        let total = self.sys.cpu_pct?;
+        let mut listed = 0.0f32;
+        let mut children = 0.0f32;
+        for p in &self.procs {
+            listed += p.cpu_raw_pct;
+            children += p.cpu_children_pct;
+        }
+        Some(CpuSplit { total, listed, children })
+    }
+
+    fn refresh_derived_if_dirty(&mut self) {
+        if !self.derived_dirty {
+            return;
+        }
+        let pressure = self.calculate_pressure_snap();
+        let thieves = self.calculate_thieves(pressure.game_open);
+        let breakdown = self.calculate_breakdown();
+        let cpu_split = self.calculate_cpu_split();
+        let cat_totals = self.calculate_cat_totals(self.cfg.mem_metric);
+        let private_cat_totals = self.calculate_cat_totals(MemMetric::Private);
+        let metric_total = self.procs.iter().map(|p| self.mem_of(p)).sum();
+        #[cfg(target_os = "linux")]
+        let linux_memory_summary = self.calculate_linux_memory_summary();
+        #[cfg(not(target_os = "linux"))]
+        let linux_memory_summary = String::new();
+        #[cfg(target_os = "linux")]
+        let linux_memory_available = self
+            .procs
+            .iter()
+            .filter(|p| p.linux_memory.is_some())
+            .count();
+        #[cfg(not(target_os = "linux"))]
+        let linux_memory_available = 0;
+        self.derived = UiDerived {
+            breakdown,
+            pressure,
+            thieves,
+            cpu_split,
+            cat_totals,
+            private_cat_totals,
+            linux_memory_summary,
+            linux_memory_available,
+            metric_total,
+        };
+        self.derived_dirty = false;
+    }
+
+    fn breakdown(&self) -> MemBreakdown {
+        self.derived.breakdown
+    }
+
+    fn pressure_snap(&self) -> pressure::Snapshot {
+        self.derived.pressure
+    }
+
+    fn thieves(&self) -> Vec<pressure::Thief> {
+        self.derived.thieves.clone()
+    }
+
+    fn cpu_split(&self) -> Option<CpuSplit> {
+        self.derived.cpu_split
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux_memory_summary(&self) -> &str {
+        &self.derived.linux_memory_summary
+    }
+
     fn push_hist(&mut self) {
         let push = |h: &mut VecDeque<f32>, v: Option<f32>| {
             let v = v.or_else(|| h.back().copied()).unwrap_or(0.0);
@@ -4715,6 +5265,61 @@ impl App {
         push(&mut self.hist_ram, Some(self.mem.used_phys() as f32 / total as f32 * 100.0));
         push(&mut self.hist_gpu, self.sys.gpu.as_ref().and_then(|g| g.util_pct));
         push(&mut self.hist_disk, self.sys.disk_pct);
+    }
+}
+
+/// Medidor do topo (o que o kernel cobrou de todos os núcleos) contra a soma da lista.
+/// A diferença é o que nenhuma linha mostra: processo que nasceu e morreu entre duas
+/// amostras, interrupções e trabalho do kernel fora de qualquer PID.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CpuSplit {
+    total: f32,
+    /// Σ `cpu_raw_pct` dos processos vivos agora, na mesma janela do medidor.
+    listed: f32,
+    /// Σ `cpu_children_pct`: filhos já encerrados, creditados ao pai. Parte do `unlisted`.
+    children: f32,
+}
+
+impl CpuSplit {
+    /// O que o medidor cobrou e a lista não mostra. Nunca negativo: a lista pode passar do
+    /// medidor por 1–2 pontos porque as duas janelas não fecham no mesmo microssegundo.
+    fn unlisted(&self) -> f32 {
+        (self.total - self.listed).max(0.0)
+    }
+
+    /// Chip vermelho no card só quando a diferença engana de verdade: pelo menos 3 pontos
+    /// e um quinto do medidor. Fora disso, a conta fecha no arredondamento e a linha some.
+    fn unlisted_chip(&self) -> Option<(String, String)> {
+        let u = self.unlisted();
+        if u < 3.0 || u < self.total * 0.2 {
+            return None;
+        }
+        Some((format!("fora da lista {}", App::fmt_pct(u)), self.explain()))
+    }
+
+    fn explain(&self) -> String {
+        let u = self.unlisted();
+        let kids = self.children.min(u);
+        let rest = u - kids;
+        let mut t = format!(
+            "Na lista agora: {} (soma de todos os processos, mesmo os que arredondam pra 0,0%).\nFora da lista: {}",
+            App::fmt_pct(self.listed),
+            App::fmt_pct(u),
+        );
+        if kids >= 0.05 {
+            t.push_str(&format!(
+                "\n  · {} em processos que nasceram e morreram entre duas amostras (rg, git, cc, shells). O pai mostra isso como “+filhos” na coluna CPU.",
+                App::fmt_pct(kids)
+            ));
+        }
+        if rest >= 0.05 {
+            t.push_str(&format!(
+                "\n  · {} em interrupções, trabalho do kernel sem PID e processos curtos ainda sem pai que os recolhesse.",
+                App::fmt_pct(rest)
+            ));
+        }
+        t.push_str("\n\nIntervalo menor (a cada 1s) pega mais processo curto na lista.");
+        t
     }
 }
 
@@ -4829,6 +5434,11 @@ fn setup_style(ctx: &egui::Context) {
         s.spacing.menu_margin = egui::Margin::same(8);
         s.interaction.selectable_labels = false;
         s.interaction.tooltip_delay = 0.35;
+        // O RamDog é um painel de dados, não uma cena animada. A animação padrão
+        // do egui agenda vários quadros extras em cada hover/scrollbar; no Linux com
+        // OpenGL isso transforma um movimento curto do mouse em uma rajada de GPU.
+        // Transições instantâneas preservam a interação e pintam só o quadro útil.
+        s.animation_time = 0.0;
     });
 }
 
@@ -4926,6 +5536,15 @@ pub fn fmt_bps(bps: f64) -> String {
     } else {
         format!("{} KB/s", pt_num(b as f64 / 1024.0, 0))
     }
+}
+
+/// Compositor / shell do desktop: raiz de tudo que o usuário abriu pelo menu ou atalho.
+fn is_desktop_shell(name_lower: &str) -> bool {
+    matches!(
+        name_lower.strip_suffix(".exe").unwrap_or(name_lower),
+        "hyprland" | "start-hyprland" | "sway" | "niri" | "river" | "gnome-shell" | "gnome-session-b" | "plasmashell"
+            | "kwin_wayland" | "kwin_x11" | "xfce4-session" | "explorer" | "finder" | "loginwindow" | "windowserver"
+    )
 }
 
 fn pid_still_same(pid: u32, _created: i64) -> bool {

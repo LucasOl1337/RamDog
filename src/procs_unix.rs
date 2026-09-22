@@ -37,6 +37,8 @@ struct StaticInfo {
 #[cfg(target_os = "linux")]
 struct Live {
     cpu_ticks: u64,
+    /// `cutime + cstime`: CPU dos filhos que já encerraram e o pai recolheu com `wait`.
+    child_ticks: u64,
     io_bytes: u64,
     ema: f32,
     at: Instant,
@@ -108,6 +110,9 @@ pub struct Sampler {
     smaps: HashMap<ProcessKey, CachedRead<(u64, u64)>>,
     #[cfg(target_os = "linux")]
     fds: HashMap<ProcessKey, CachedRead<u32>>,
+    /// Instante da amostra anterior: a janela que o medidor do topo também mede.
+    #[cfg(target_os = "linux")]
+    last_at: Option<Instant>,
 }
 
 impl Sampler {
@@ -124,6 +129,7 @@ impl Sampler {
                 live: HashMap::new(),
                 smaps: HashMap::new(),
                 fds: HashMap::new(),
+                last_at: None,
             }
         }
         #[cfg(not(target_os = "linux"))]
@@ -157,6 +163,10 @@ impl Sampler {
         // Refresh for CPU hotplug as well as the initial sample.
         self.ncpu = sysconf_positive(libc::_SC_NPROCESSORS_ONLN) as f32;
         let now = Instant::now();
+        // Janela desta amostra, a mesma que o medidor do topo cobre. `None` só na primeira.
+        let window = self.last_at.map(|t| now.duration_since(t).as_secs_f64());
+        self.last_at = Some(now);
+        let uptime = read_uptime_secs();
         let own = std::process::id();
         let Ok(dir) = std::fs::read_dir("/proc") else {
             return Vec::new();
@@ -242,11 +252,18 @@ impl Sampler {
                 }
             });
             let ticks = p.stat.utime.saturating_add(p.stat.stime);
-            let (cpu_raw, cpu_pct, disk_bps) = match self.live.get(&key) {
+            let child_ticks = p.stat.cutime.saturating_add(p.stat.cstime);
+            let (cpu_raw, cpu_pct, cpu_children, disk_bps) = match self.live.get(&key) {
                 Some(prev) => {
                     let dt = now.duration_since(prev.at).as_secs_f64();
                     let raw = cpu_machine_pct(
                         ticks.saturating_sub(prev.cpu_ticks),
+                        dt,
+                        self.clk_tck,
+                        self.ncpu,
+                    );
+                    let children = cpu_machine_pct(
+                        child_ticks.saturating_sub(prev.child_ticks),
                         dt,
                         self.clk_tck,
                         self.ncpu,
@@ -257,14 +274,30 @@ impl Sampler {
                     } else {
                         0.0
                     };
-                    (raw, ema, disk)
+                    (raw, ema, children, disk)
                 }
-                None => (0.0, 0.0, 0.0),
+                // Processo que nasceu depois da amostra anterior. Antes entrava com 0% e só
+                // ganhava número na amostra seguinte, se ainda estivesse vivo — um `cargo`
+                // ou `rg` de 4 s a 100% de um núcleo nunca aparecia, e o medidor do topo
+                // ficava sem explicação. O kernel dá o instante de criação, então o total
+                // acumulado já é uma taxa: dividido pela janela se nasceu dentro dela, pela
+                // idade se é mais velho (só acontece se a leitura anterior falhou).
+                None => match window {
+                    Some(window) => {
+                        let age = uptime - p.stat.starttime as f64 / self.clk_tck.max(1) as f64;
+                        let dt = first_sample_window(window, age);
+                        let raw = cpu_machine_pct(ticks, dt, self.clk_tck, self.ncpu);
+                        let children = cpu_machine_pct(child_ticks, dt, self.clk_tck, self.ncpu);
+                        (raw, raw, children, 0.0)
+                    }
+                    None => (0.0, 0.0, 0.0, 0.0),
+                },
             };
             self.live.insert(
                 key,
                 Live {
                     cpu_ticks: ticks,
+                    child_ticks,
                     io_bytes: p.io_bytes,
                     ema: cpu_pct,
                     at: now,
@@ -301,6 +334,7 @@ impl Sampler {
                 create_time,
                 cpu_pct,
                 cpu_raw_pct: cpu_raw,
+                cpu_children_pct: cpu_children,
                 disk_bps,
                 gpu_pct: 0.0,
                 gpu_load: None,
@@ -394,6 +428,7 @@ impl Sampler {
                 create_time,
                 cpu_pct,
                 cpu_raw_pct: cpu_pct,
+                cpu_children_pct: 0.0,
                 disk_bps,
                 gpu_pct: 0.0,
                 gpu_load: None,
@@ -498,11 +533,37 @@ pub fn nudge_parent(ppid: u32) -> KillOutcome {
 
 /// Estado do kernel agora (`Z` = zombie), sem esperar a próxima amostra.
 pub fn kernel_state(pid: u32) -> Option<char> {
+    live_state(pid).map(|(state, _)| state)
+}
+
+/// Estado e pai agora, direto do kernel: `(estado, ppid)`. `None` = o PID já sumiu.
+///
+/// O PPID da amostra pode estar velho: quando o pai morre, o kernel reparenta o zumbi
+/// para o init ou para o subreaper mais próximo, e é esse novo pai que recolhe (ou não).
+pub fn live_state(pid: u32) -> Option<(char, u32)> {
     #[cfg(target_os = "linux")]
     {
         let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         let rest = &text[text.rfind(')')? + 1..];
-        rest.split_whitespace().next()?.chars().next()
+        let mut it = rest.split_whitespace();
+        let state = it.next()?.chars().next()?;
+        let ppid = it.next()?.parse().ok()?;
+        Some((state, ppid))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// Nome curto (`comm`) de um PID agora, mesmo que ele nunca tenha entrado numa amostra.
+pub fn comm_of(pid: u32) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let text = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+        let name = text.trim();
+        (!name.is_empty()).then(|| name.to_string())
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -559,6 +620,8 @@ struct Stat {
     session: u32,
     utime: u64,
     stime: u64,
+    cutime: u64,
+    cstime: u64,
     num_threads: u32,
     starttime: u64,
     vsize: u64,
@@ -588,6 +651,8 @@ fn parse_stat(text: &str) -> Option<Stat> {
         session: rest[3].parse().ok()?,
         utime: rest[11].parse().ok()?,
         stime: rest[12].parse().ok()?,
+        cutime: rest[13].parse().ok()?,
+        cstime: rest[14].parse().ok()?,
         num_threads: rest[17].parse().ok()?,
         starttime: rest[19].parse().ok()?,
         vsize: rest[20].parse().ok()?,
@@ -713,6 +778,27 @@ fn cpu_machine_pct(delta_ticks: u64, dt: f64, clk_tck: u64, ncpu: f32) -> f32 {
     ((seconds / dt / ncpu as f64) * 100.0).clamp(0.0, 100.0) as f32
 }
 
+/// Janela sobre a qual dividir o CPU acumulado de um processo visto pela primeira vez.
+/// Nasceu dentro da janela: tudo que acumulou aconteceu nela, divide pela janela e o
+/// número é comparável ao medidor do topo. Mais velho que a janela: só dá pra falar da
+/// média de vida. Idade inválida (relógio andou pra trás) cai na janela.
+#[cfg(target_os = "linux")]
+fn first_sample_window(window: f64, age: f64) -> f64 {
+    if age.is_finite() && age > window {
+        age
+    } else {
+        window
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_uptime_secs() -> f64 {
+    std::fs::read_to_string("/proc/uptime")
+        .ok()
+        .and_then(|t| t.split_whitespace().next()?.parse().ok())
+        .unwrap_or(0.0)
+}
+
 #[cfg(target_os = "linux")]
 fn smooth(prev: f32, raw: f32, dt: f64) -> f32 {
     if dt <= 0.0 {
@@ -795,6 +881,18 @@ mod tests {
             Some((409600, 204800, 40960))
         );
         assert_eq!(parse_statm("bad", 4096), None);
+    }
+
+    #[test]
+    fn first_sample_uses_the_window_unless_the_process_is_older() {
+        assert_eq!(first_sample_window(5.0, 1.2), 5.0);
+        assert_eq!(first_sample_window(5.0, 5.0), 5.0);
+        assert_eq!(first_sample_window(5.0, 40.0), 40.0);
+        assert_eq!(first_sample_window(5.0, -0.5), 5.0);
+        assert_eq!(first_sample_window(5.0, f64::NAN), 5.0);
+        // Nasceu há 2 s dentro de uma janela de 5 s e queimou 2 s de um núcleo em 4:
+        // 2 s / 5 s / 4 núcleos = 10% da máquina, o mesmo que o medidor do topo credita.
+        assert_eq!(cpu_machine_pct(200, first_sample_window(5.0, 2.0), 100, 4.0), 10.0);
     }
 
     #[test]

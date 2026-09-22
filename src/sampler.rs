@@ -72,6 +72,7 @@ pub fn spawn(ctx: egui::Context, interval_ms: u64) -> SamplerHandle {
                     let kernel = kernel_mem();
                     let sys = metrics.sample();
                     let gpu_per_proc = metrics.gpu_per_process_available();
+                    cap_children_to_gap(&mut procs, sys.cpu_pct);
                     for p in procs.iter_mut() {
                         p.gpu_load = sys.gpu_by_pid.get(&p.pid).copied();
                         p.gpu_pct = p.gpu_load.unwrap_or(0.0);
@@ -121,4 +122,63 @@ pub fn spawn(ctx: egui::Context, interval_ms: u64) -> SamplerHandle {
         })
         .expect("spawn sampler thread");
     h
+}
+
+/// `cutime` credita a vida inteira do filho ao pai no instante em que ele é recolhido:
+/// um `cargo build` de 60 s que morre agora vira 60 s de CPU nesta janela de 5 s. O
+/// crédito só serve pra explicar o que a lista não mostra, então nunca pode passar do
+/// buraco entre o medidor do topo e a soma dos processos vivos. Quando passa, todos os
+/// pais dividem o buraco na proporção do que reportaram.
+fn cap_children_to_gap(procs: &mut [ProcInfo], total_cpu: Option<f32>) {
+    let Some(total) = total_cpu else {
+        for p in procs.iter_mut() {
+            p.cpu_children_pct = 0.0;
+        }
+        return;
+    };
+    let listed: f32 = procs.iter().map(|p| p.cpu_raw_pct).sum();
+    let children: f32 = procs.iter().map(|p| p.cpu_children_pct).sum();
+    let gap = (total - listed).max(0.0);
+    if children <= gap || children <= 0.0 {
+        return;
+    }
+    let scale = gap / children;
+    for p in procs.iter_mut() {
+        p.cpu_children_pct *= scale;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cap_children_to_gap;
+    use crate::procs::ProcInfo;
+
+    fn proc(raw: f32, children: f32) -> ProcInfo {
+        ProcInfo { cpu_raw_pct: raw, cpu_children_pct: children, ..Default::default() }
+    }
+
+    #[test]
+    fn children_credit_never_exceeds_what_the_meter_left_unexplained() {
+        // Medidor 30%, lista 10%: sobra 20% pra explicar. Pais reportam 60% de filhos
+        // (um build longo recolhido agora) — cai pra 20%, na proporção 3:1.
+        let mut procs = vec![proc(6.0, 45.0), proc(4.0, 15.0)];
+        cap_children_to_gap(&mut procs, Some(30.0));
+        assert!((procs[0].cpu_children_pct - 15.0).abs() < 1e-4);
+        assert!((procs[1].cpu_children_pct - 5.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn children_credit_within_the_gap_is_kept_as_is() {
+        let mut procs = vec![proc(6.0, 8.0), proc(4.0, 2.0)];
+        cap_children_to_gap(&mut procs, Some(30.0));
+        assert_eq!(procs[0].cpu_children_pct, 8.0);
+        assert_eq!(procs[1].cpu_children_pct, 2.0);
+    }
+
+    #[test]
+    fn without_a_meter_there_is_nothing_to_explain() {
+        let mut procs = vec![proc(6.0, 8.0)];
+        cap_children_to_gap(&mut procs, None);
+        assert_eq!(procs[0].cpu_children_pct, 0.0);
+    }
 }

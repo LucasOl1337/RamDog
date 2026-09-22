@@ -52,6 +52,11 @@ pub struct Config {
     pub screen_grid: String,
     /// Arrastar uma janela no mapa encaixa na zona da grade em vez de mover livre.
     pub screen_snap: bool,
+    /// Última coluna da lista mostra os argumentos do comando em vez de quem abriu o
+    /// processo. Padrão é quem abriu: `foot › bash › claude` responde "de onde saiu isso"
+    /// melhor que `--type=utility --utility-sub-type=...`.
+    #[serde(default)]
+    pub cmd_column: bool,
 }
 
 /// Em que fatias a lista da Partida se quebra.
@@ -324,6 +329,7 @@ impl Default for Config {
             screen_presets: BTreeMap::new(),
             screen_grid: String::new(),
             screen_snap: true,
+            cmd_column: false,
         }
     }
 }

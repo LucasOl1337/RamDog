@@ -2,10 +2,34 @@
 
 As mudanças são registradas por versão. As notas descrevem funcionalidades disponíveis e suas limitações; testes de hardware não equivalem a cobertura de todos os drivers e desktops.
 
-## [Unreleased]
+## [0.11.1] - 2026-09-21
+
+Finalizar deixa de bater em parede quando o pai não recolhe, e a última coluna responde "quem abriu isso" em vez de despejar argumentos.
 
 ### Adicionado
 
+- Coluna **Quem abriu** no lugar de **Comando**: a cadeia de quem chamou quem, da raiz até o pai (`foot › bash › claude`, `Hermes (gateway) › python3`, `agent-bench · padrao › python3`). Compositor e `systemd` ficam de fora como raiz; unidade do systemd, agente e host deduzidos do ambiente entram na frente quando a cadeia não os mostra. Clique na célula seleciona o pai; o hover traz a cadeia com PIDs e a linha de comando inteira. Botão direito no título troca de volta para **Comando** (persistido).
+- Painel de detalhes de um zumbi: diz que já morreu e não ocupa memória, quem está segurando, e dá os dois botões que existem de verdade: **Pedir ao pai para recolher** e **Finalizar pai: nome (PID)**. O menu de contexto ganha o mesmo item.
+
+### Corrigido
+
+- Finalizar um processo cujo pai não chama `wait` (script Python com `Popen` sem `wait`, ponte que abandona o filho) dizia `1 finalizado(s)` e a linha ficava para sempre; o clique seguinte caía num aviso de zumbi que só citava o Shift. Agora o RamDog espera o kernel recolher (até 400 ms), cutuca o pai com SIGCHLD e, se a linha ficar, diz na hora quem está segurando e que não há memória presa. Processo que já era zumbi na lista (árvore ou app agrupado) nem recebe sinal: vai direto para esse acerto.
+- Zumbi reparentado depois que o pai original morreu era atribuído ao pai da amostra antiga; o pai agora é lido do kernel no clique.
+- Linux: a última coluna da tabela não acompanhava a janela ao maximizar (o egui_extras congela a largura do "resto" quando a coluna é redimensionável). Agora ela acompanha; a borda da coluna Tempo continua arrastável.
+
+## [0.11.0] - 2026-09-19
+
+A conta do CPU fecha, a faixa Disputa aponta quem está atrapalhando o jogo ou a máquina, e a origem reconhece serviços do systemd.
+
+Patch notes: [v0.11.0](docs/releases/v0.11.0.md).
+
+### Melhorado
+
+- A tabela reutiliza os cálculos entre amostras e aplica a ordenação pendente ao sair com o mouse, evitando recalcular todos os processos a cada evento visual.
+
+### Adicionado
+
+- Chip **GPU no CPU** na Disputa: navegador de agente que caiu em renderização por software (`swiftshader`) e queima núcleos desenhando enquanto a GPU real fica parada. Sobe acima de sobra no ranking.
 - Linux/macOS: load 1/5/15 min no card de CPU e swap usado no card de Memória. Load acima do número de núcleos e swap ≥ 1 GB acendem o card.
 - Faixa **Disputa** quando um jogo está aberto com GPU ociosa, load/swap altos, emulador Android sem janela, `git-credential`/`gh` em loop ou processo que come núcleo com pouca RAM. O botão **Ver disputa** ordena por isso e seleciona o primeiro.
 - Chip **Disputa** na fileira de categorias e item no menu de contexto. Com a Disputa ligada a coluna CPU mostra os núcleos equivalentes em destaque (`14×`) e o % da máquina menor ao lado; desligada, volta ao % só.
@@ -14,6 +38,7 @@ As mudanças são registradas por versão. As notas descrevem funcionalidades di
 ### Corrigido
 
 - Linux: sem barramento de usuário do systemd, Partida e Desperdício avisam em português em vez de despejar o erro cru do `systemctl`.
+- O medidor de CPU do topo dizia 28% e a lista, somada, não passava de 8%. Dois motivos: processo que nascia depois da amostra anterior entrava com 0,0% e só ganhava número na amostra seguinte, se ainda estivesse vivo (um `rg`, `git` ou `cc` de 3 s a 100% de um núcleo nunca aparecia); e filho que nascia e morria dentro da janela sumia sem deixar rastro. Agora processo novo entra com a taxa desde que nasceu (Linux e Windows), e no Linux o pai mostra `+N%` na coluna CPU com o que os filhos já encerrados gastaram (`cutime`/`cstime`, limitado ao que o medidor não explica). Quando ainda sobra diferença (interrupções, kernel sem PID), o card de CPU mostra o chip **fora da lista N%** com a conta no hover, em vez de deixar a soma não fechar em silêncio.
 - Zumbi não "finalizava": o kernel aceita SIGTERM/SIGKILL num processo `Z` e o RamDog contava como `1 finalizado(s), ~0,0 MB` sem nada mudar. Agora o ✖ num zumbi pede ao pai para recolher (SIGCHLD) e diz quem segura; Shift+✖ finaliza o pai.
 - Linux: o cliente Steam relançado por um atalho (`steam steam://rungameid/2357570`) era rotulado como o jogo (`Overwatch 2 · Steam / Proton`) horas depois de o jogo fechar. Agora é `Steam`.
 - Linux: ícone do binário escolhido pelo primeiro `.desktop` que o `read_dir` devolvesse. `Counter-Strike 2.desktop` (`Exec=steam steam://rungameid/730`) dava o ícone do CS ao cliente Steam. O `.desktop` com o nome do programa ganha; atalho com URL perde.
