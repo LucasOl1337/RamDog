@@ -1,5 +1,8 @@
 //! Interface egui: lista / árvore / categorias, detalhes, kill, lock.
 
+mod table;
+use table::{ProcessQuery, ResourceFilter, Row, RowCache, RowCacheAction, SortKey, SysRow};
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -72,129 +75,6 @@ enum Temp {
     Missing(String),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SortKey {
-    Name,
-    Ram,
-    Cat,
-    Pid,
-    Cpu,
-    Gpu,
-    Vram,
-    Disk,
-    Age,
-    Parent,
-    State,
-    /// Sobra / loop / CPU barata primeiro; depois % de CPU. É o que a faixa "Disputa" liga.
-    Steal,
-}
-
-#[derive(Clone, Copy)]
-enum Row {
-    Proc {
-        pid: u32,
-        depth: u8,
-        has_children: bool,
-        expanded: bool,
-        dim: bool,
-    },
-    CatHeader {
-        cat: Category,
-        count: usize,
-        total: u64,
-        collapsed: bool,
-    },
-    /// Cabeçalho de um app: índice em `App::groups`. O conteúdo não fica aqui de
-    /// propósito — as somas são recalculadas a cada amostra, inclusive quando a ordem
-    /// está congelada porque o mouse está em cima da tabela.
-    AppHeader { gi: usize },
-    /// Linha sintética: memória em uso que não pertence a processo nenhum.
-    /// Sem PID, sem kill — existe para a soma da lista bater com o "em uso" do topo.
-    System { kind: SysRow, bytes: u64 },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RowCacheAction {
-    Rebuild,
-    ReconcileSnapshot,
-    Reuse,
-}
-
-/// Decide quanto trabalho estrutural a tabela precisa fazer neste quadro.
-///
-/// Esta função fica separada do desenho para o contrato de cache ser testável: um
-/// evento visual (hover, tooltip, movimento do mouse) não pode reordenar nem revarrer
-/// centenas de processos quando nenhum dado mudou.
-fn row_cache_action(
-    has_cache: bool,
-    rows_dirty: bool,
-    snapshot_dirty: bool,
-    key_changed: bool,
-    hovering: bool,
-    order_frozen: bool,
-) -> RowCacheAction {
-    if !has_cache || rows_dirty || key_changed {
-        RowCacheAction::Rebuild
-    } else if snapshot_dirty {
-        if hovering {
-            RowCacheAction::ReconcileSnapshot
-        } else {
-            RowCacheAction::Rebuild
-        }
-    } else if order_frozen && !hovering {
-        // Uma amostra chegou enquanto o mouse protegia a ordem. Ao sair da tabela,
-        // aplicamos a ordenação nova uma única vez.
-        RowCacheAction::Rebuild
-    } else {
-        RowCacheAction::Reuse
-    }
-}
-
-#[cfg(test)]
-mod row_cache_tests {
-    use super::{row_cache_action, RowCacheAction};
-
-    #[test]
-    fn stable_visual_frame_reuses_cached_rows_even_outside_the_table() {
-        assert_eq!(
-            row_cache_action(true, false, false, false, false, false),
-            RowCacheAction::Reuse,
-        );
-    }
-
-    #[test]
-    fn new_snapshot_is_reconciled_once_while_hovering() {
-        assert_eq!(
-            row_cache_action(true, false, true, false, true, false),
-            RowCacheAction::ReconcileSnapshot,
-        );
-    }
-
-    #[test]
-    fn new_snapshot_reorders_once_when_not_hovering() {
-        assert_eq!(
-            row_cache_action(true, false, true, false, false, false),
-            RowCacheAction::Rebuild,
-        );
-    }
-
-    #[test]
-    fn leaving_a_frozen_table_applies_the_pending_order_once() {
-        assert_eq!(
-            row_cache_action(true, false, false, false, false, true),
-            RowCacheAction::Rebuild,
-        );
-    }
-
-    #[test]
-    fn hover_without_new_data_is_a_cache_hit() {
-        assert_eq!(
-            row_cache_action(true, false, false, false, true, true),
-            RowCacheAction::Reuse,
-        );
-    }
-}
-
 /// Um app na visão Lista: todos os processos do mesmo executável somados numa linha.
 ///
 /// É a diferença que fazia o Gerenciador de Tarefas parecer melhor: lá o Chrome com 30
@@ -225,14 +105,6 @@ struct AppGroup {
     focused: bool,
     leftover: Option<String>,
     origin: String,
-}
-
-/// As parcelas do "em uso" que nunca aparecem numa lista de processos.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SysRow {
-    PagedPool,
-    NonPagedPool,
-    SharedAndCache,
 }
 
 impl SysRow {
@@ -400,20 +272,11 @@ pub struct App {
     status: Option<(Instant, String, bool)>,
     is_admin: bool,
     scroll_to_selected: bool,
-    /// Ordem das linhas congelada enquanto o mouse está sobre a tabela (evita matar a linha errada).
-    cached_rows: Option<Vec<Row>>,
-    cached_key: u64,
-    /// Chegou uma amostra nova; a estrutura da tabela precisa ser atualizada uma vez.
-    /// Separado de `rows_dirty`, que representa mudança de filtro/visão do usuário.
-    snapshot_dirty: bool,
-    rows_dirty: bool,
-    /// Quantidade que passa pelos filtros, recalculada junto com o cache de linhas.
-    /// Evita duas varreduras de todos os processos em cada repaint visual.
-    shown_count: usize,
+    /// Frame cache owns invalidation, pending snapshots and hover-protected order.
+    row_cache: RowCache,
     derived: UiDerived,
     derived_dirty: bool,
     table_rect: Option<egui::Rect>,
-    order_frozen: bool,
     drains: Drains,
     boot: Boot,
     screens: Screens,
@@ -511,15 +374,10 @@ impl App {
             status: None,
             is_admin,
             scroll_to_selected: false,
-            cached_rows: None,
-            cached_key: 0,
-            snapshot_dirty: false,
-            rows_dirty: true,
-            shown_count: 0,
+            row_cache: RowCache::default(),
             derived: UiDerived::default(),
             derived_dirty: true,
             table_rect: None,
-            order_frozen: false,
             drains: Drains::new(),
             boot: Boot::new(),
             screens: Screens::new(),
@@ -606,7 +464,7 @@ impl App {
         }
         self.refresh_services();
         self.rebuild_indexes();
-        self.snapshot_dirty = true;
+        self.row_cache.snapshot_changed();
         self.derived_dirty = true;
         if let Some(pid) = self.selected {
             if let Some(&i) = self.by_pid.get(&pid) {
@@ -783,13 +641,7 @@ impl App {
     }
 
     fn metric_of(m: MemMetric, p: &ProcInfo) -> u64 {
-        match m {
-            #[cfg(target_os = "linux")]
-            MemMetric::Proportional => p.linux_memory.map(|m| m.1).unwrap_or(0),
-            MemMetric::WorkingSet => p.working_set,
-            MemMetric::Private => p.private_ws,
-            MemMetric::Commit => p.commit,
-        }
+        table::metric_of(m, p)
     }
 
     /// Reparte o "em uso" em parcelas que somam exatamente o total.
@@ -854,53 +706,23 @@ impl App {
             || p.pid == std::process::id()
     }
 
-    fn grouping(&self) -> bool {
-        self.cfg.view == ViewMode::List && self.cfg.group_apps
-    }
-
-    fn passes_resources(&self, ram: u64, cpu: f32, gpu: Option<f32>, vram: Option<u64>) -> bool {
-        if ram < self.cfg.min_mb as u64 * MB {
-            return false;
+    fn table_query(&self) -> ProcessQuery<'_> {
+        ProcessQuery {
+            procs: &self.procs,
+            by_pid: &self.by_pid,
+            cats: &self.cats,
+            subtree: &self.subtree,
+            subtree_cpu: &self.subtree_cpu,
+            cat_enabled: &self.cat_enabled,
+            metric: self.cfg.mem_metric,
+            resources: ResourceFilter {
+                min_mb: self.cfg.min_mb,
+                min_cpu: self.cfg.min_cpu,
+                min_gpu: self.cfg.min_gpu,
+                min_vram_mb: self.cfg.min_vram_mb,
+            },
+            grouped: self.cfg.view == ViewMode::List && self.cfg.group_apps,
         }
-        if self.cfg.min_cpu > 0.0 && cpu < self.cfg.min_cpu {
-            return false;
-        }
-        if self.cfg.min_gpu > 0.0 && gpu.unwrap_or(0.0) < self.cfg.min_gpu {
-            return false;
-        }
-        if self.cfg.min_vram_mb > 0 && vram.unwrap_or(0) < self.cfg.min_vram_mb as u64 * MB {
-            return false;
-        }
-        true
-    }
-
-    fn passes(&self, p: &ProcInfo, search: &str) -> bool {
-        if !self.cat_enabled.contains(&self.cat(p.pid)) {
-            return false;
-        }
-        if !self.grouping()
-            && !self.passes_resources(self.mem_of(p), p.cpu_pct, p.gpu_load, p.gpu_vram)
-        {
-            return false;
-        }
-        if !search.is_empty() {
-            let pid_s = p.pid.to_string();
-            let id = identity::of(p);
-            let hit = p.name_lower.contains(search)
-                || id.label.to_lowercase().contains(search)
-                || pid_s == search
-                || p.exe_path.to_lowercase().contains(search)
-                || p.cmdline.to_lowercase().contains(search)
-                || p.launcher.short().to_lowercase().contains(search)
-                || p.window_title
-                    .as_deref()
-                    .map(|t| t.to_lowercase().contains(search))
-                    .unwrap_or(false);
-            if !hit {
-                return false;
-            }
-        }
-        true
     }
 
     fn descendants(&self, pid: u32) -> Vec<u32> {
@@ -1235,88 +1057,11 @@ impl App {
         chain
     }
 
-    fn sort_pids(&self, pids: &mut Vec<u32>, tree: bool) {
-        let key = self.sort;
-        let desc = self.sort_desc;
-        pids.sort_by(|a, b| {
-            let (pa, pb) = match (self.proc(*a), self.proc(*b)) {
-                (Some(x), Some(y)) => (x, y),
-                _ => return std::cmp::Ordering::Equal,
-            };
-            let ord = match key {
-                SortKey::Name => pa.name_lower.cmp(&pb.name_lower).then(pa.pid.cmp(&pb.pid)),
-                SortKey::Ram => {
-                    if tree {
-                        self.subtree
-                            .get(a)
-                            .unwrap_or(&0)
-                            .cmp(self.subtree.get(b).unwrap_or(&0))
-                    } else {
-                        self.mem_of(pa).cmp(&self.mem_of(pb))
-                    }
-                }
-                SortKey::Cat => self
-                    .cat(*a)
-                    .cmp(&self.cat(*b))
-                    .then(self.mem_of(pb).cmp(&self.mem_of(pa))),
-                SortKey::Pid => pa.pid.cmp(&pb.pid),
-                SortKey::Cpu => {
-                    // Na Árvore compara a subárvore, como a RAM: o pai sobe junto com
-                    // os filhos que estão comendo núcleo.
-                    let (ca, cb) = if tree {
-                        (
-                            self.subtree_cpu.get(a).copied().unwrap_or(pa.cpu_pct),
-                            self.subtree_cpu.get(b).copied().unwrap_or(pb.cpu_pct),
-                        )
-                    } else {
-                        // Filhos já encerrados contam: o shell que disparou dez `rg` de
-                        // 0,3 s é quem explica o CPU, e sem isso ele ficava no fim da lista.
-                        (
-                            pa.cpu_pct + pa.cpu_children_pct,
-                            pb.cpu_pct + pb.cpu_children_pct,
-                        )
-                    };
-                    ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
-                }
-                SortKey::Gpu => pa
-                    .gpu_load
-                    .unwrap_or(-1.0)
-                    .partial_cmp(&pb.gpu_load.unwrap_or(-1.0))
-                    .unwrap_or(std::cmp::Ordering::Equal),
-                SortKey::Vram => pa.gpu_vram.unwrap_or(0).cmp(&pb.gpu_vram.unwrap_or(0)),
-                SortKey::State => {
-                    let sa = (pa.focused, pa.has_window, pa.kernel_state == Some('Z'));
-                    let sb = (pb.focused, pb.has_window, pb.kernel_state == Some('Z'));
-                    sa.cmp(&sb)
-                }
-                SortKey::Disk => pa
-                    .disk_bps
-                    .partial_cmp(&pb.disk_bps)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-                SortKey::Age => pb.create_time.cmp(&pa.create_time),
-                SortKey::Parent => {
-                    let na = self
-                        .proc(pa.ppid)
-                        .map(|p| p.name_lower.as_str())
-                        .unwrap_or("");
-                    let nb = self
-                        .proc(pb.ppid)
-                        .map(|p| p.name_lower.as_str())
-                        .unwrap_or("");
-                    na.cmp(nb).then(self.mem_of(pb).cmp(&self.mem_of(pa)))
-                }
-                SortKey::Steal => self.steal_rank(pa).cmp(&self.steal_rank(pb)).then(
-                    pa.cpu_pct
-                        .partial_cmp(&pb.cpu_pct)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                ),
-            };
-            // Desempate por PID depois da inversão. Sem ele, as dezenas de processos
-            // empatados em "–" na coluna CPU trocavam de lugar a cada amostra e a lista
-            // inteira piscava embaixo do que você estava tentando ler.
-            let ord = if desc { ord.reverse() } else { ord };
-            ord.then(pa.pid.cmp(&pb.pid))
-        });
+    fn sort_pids(&self, pids: &mut [u32], tree: bool) {
+        self.table_query()
+            .sort_pids(pids, tree, self.sort, self.sort_desc, |p| {
+                self.steal_rank(p)
+            });
     }
 
     fn proc_age_secs(p: &ProcInfo) -> u64 {
@@ -1464,12 +1209,7 @@ impl App {
 
     fn build_rows(&mut self) -> Vec<Row> {
         let search = self.search.trim().to_lowercase();
-        let hits: Vec<u32> = self
-            .procs
-            .iter()
-            .filter(|p| self.passes(p, &search))
-            .map(|p| p.pid)
-            .collect();
+        let hits = self.table_query().matching_pids(&self.search);
         let sys_rows = self.system_rows(&search);
         match self.cfg.view {
             // Térmico, Partida e Telas não desenham tabela de processos — o braço só
@@ -1647,7 +1387,7 @@ impl App {
                 origin: best.origin.clone().unwrap_or_default(),
             };
             self.fill_group(&mut g);
-            if !self.passes_resources(
+            if !self.table_query().passes_resources(
                 g.ram,
                 g.cpu,
                 if g.gpu_known { Some(g.gpu) } else { None },
@@ -1848,26 +1588,16 @@ impl App {
             _ => false,
         };
         let key = self.rows_key();
-        let action = row_cache_action(
-            self.cached_rows.is_some(),
-            self.rows_dirty,
-            self.snapshot_dirty,
-            key != self.cached_key,
-            hovering,
-            self.order_frozen,
-        );
-        match action {
-            RowCacheAction::Reuse => self.cached_rows.clone().unwrap_or_default(),
+        match self.row_cache.action(key, hovering) {
+            RowCacheAction::Reuse => self.row_cache.rows(),
             RowCacheAction::ReconcileSnapshot => {
-                // mantém a ordem; remove só o que morreu ou deixou de passar no filtro
-                let search = self.search.trim().to_lowercase();
+                // Keep existing order, but update membership and values once per snapshot.
                 let mut keep: HashSet<u32> = self
-                    .procs
-                    .iter()
-                    .filter(|p| self.passes(p, &search))
-                    .map(|p| p.pid)
+                    .table_query()
+                    .matching_pids(&self.search)
+                    .into_iter()
                     .collect();
-                self.shown_count = keep.len();
+                let shown_count = keep.len();
                 if self.cfg.view == ViewMode::Tree {
                     let hits: Vec<u32> = keep.iter().copied().collect();
                     for h in hits {
@@ -1876,47 +1606,16 @@ impl App {
                         }
                     }
                 }
-                // Os grupos são refeitos aqui: a ordem fica congelada, os números não.
                 self.refresh_groups();
-                let mut rows = self.cached_rows.take().unwrap();
-                rows = rows
-                    .into_iter()
-                    .flat_map(|r| match r {
-                        Row::Proc { pid, .. } if !keep.contains(&pid) => Vec::new(),
-                        Row::AppHeader { gi } => {
-                            match self.groups.get(gi).map(|g| g.pids.as_slice()) {
-                                Some([pid]) => vec![Row::Proc {
-                                    pid: *pid,
-                                    depth: 0,
-                                    has_children: false,
-                                    expanded: false,
-                                    dim: false,
-                                }],
-                                Some(pids) if pids.len() > 1 => vec![Row::AppHeader { gi }],
-                                _ => Vec::new(),
-                            }
-                        }
-                        other => vec![other],
-                    })
-                    .collect();
-                self.order_frozen = true;
-                self.snapshot_dirty = false;
-                self.cached_rows = Some(rows.clone());
-                rows
+                self.row_cache.reconcile(&keep, shown_count, |gi| {
+                    self.groups.get(gi).map(|g| g.pids.as_slice())
+                });
+                self.row_cache.rows()
             }
             RowCacheAction::Rebuild => {
                 let rows = self.build_rows();
-                let search = self.search.trim().to_lowercase();
-                self.shown_count = self
-                    .procs
-                    .iter()
-                    .filter(|p| self.passes(p, &search))
-                    .count();
-                self.cached_rows = Some(rows.clone());
-                self.cached_key = key;
-                self.snapshot_dirty = false;
-                self.rows_dirty = false;
-                self.order_frozen = false;
+                let shown_count = self.table_query().count_matches(&self.search);
+                self.row_cache.rebuilt(key, rows.clone(), shown_count);
                 rows
             }
         }
@@ -2393,9 +2092,7 @@ impl App {
 
     fn after_kill(&mut self) {
         self.sampler.force.store(true, Ordering::Relaxed);
-        self.cached_rows = None;
-        self.rows_dirty = true;
-        self.order_frozen = false;
+        self.row_cache.clear();
     }
 
     fn toggle_lock(&mut self, name_lower: &str) {
@@ -2419,7 +2116,7 @@ impl App {
         self.cfg_dirty = true;
         self.rebuild_indexes();
         self.derived_dirty = true;
-        self.rows_dirty = true;
+        self.row_cache.invalidate();
     }
 
     fn toast(&mut self, msg: String, err: bool) {
@@ -4243,7 +3940,7 @@ impl App {
             if !self.expanded_apps.remove(&k) {
                 self.expanded_apps.insert(k);
             }
-            self.rows_dirty = true;
+            self.row_cache.invalidate();
         }
         if let Some(gi) = kill_group {
             self.request_kill_app(gi);
@@ -5348,7 +5045,7 @@ impl eframe::App for App {
             self.cfg.mini = step % 10 == 8;
             self.cfg.mem_metric = MemMetric::ALL[step % MemMetric::ALL.len()];
             self.cfg.group_apps = step % 2 == 0;
-            self.rows_dirty = true;
+            self.row_cache.invalidate();
             self.derived_dirty = true;
             self.selected = self
                 .procs
@@ -5391,9 +5088,7 @@ impl eframe::App for App {
         }
         if f5 {
             self.sampler.force.store(true, Ordering::Relaxed);
-            self.cached_rows = None;
-            self.rows_dirty = true;
-            self.order_frozen = false;
+            self.row_cache.clear();
         }
         if esc && !ctx.wants_keyboard_input() {
             self.selected = None;
@@ -5434,9 +5129,9 @@ impl eframe::App for App {
         egui::TopBottomPanel::bottom("statusbar").frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(16, 4))).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let count = if locale == Locale::Portuguese {
-                    format!("{} processos ({} exibidos)", self.procs.len(), self.shown_count)
+                    format!("{} processos ({} exibidos)", self.procs.len(), self.row_cache.shown_count())
                 } else {
-                    format!("{} processes ({} shown)", self.procs.len(), self.shown_count)
+                    format!("{} processes ({} shown)", self.procs.len(), self.row_cache.shown_count())
                 };
                 ui.label(RichText::new(count).weak().small());
                 ui.separator();
@@ -5448,7 +5143,7 @@ impl eframe::App for App {
                 self.ui_sampling_controls(ui);
                 ui.separator();
                 self.ui_accounting(ui);
-                if self.order_frozen {
+                if self.row_cache.order_frozen() {
                     ui.separator();
                     ui.label(RichText::new(locale.text("ordem congelada", "order frozen")).weak().small())
                         .on_hover_text(locale.text(
@@ -5941,9 +5636,9 @@ impl App {
             ui.label(RichText::new(title).size(17.0).strong());
             if !v.is_addon() {
                 let count = if self.cfg.locale == Locale::Portuguese {
-                    format!("{} · {} na tela", self.procs.len(), self.shown_count)
+                    format!("{} · {} na tela", self.procs.len(), self.row_cache.shown_count())
                 } else {
-                    format!("{} · {} shown", self.procs.len(), self.shown_count)
+                    format!("{} · {} shown", self.procs.len(), self.row_cache.shown_count())
                 };
                 ui.label(RichText::new(count).color(MUTED).size(12.5));
             }
@@ -5985,7 +5680,7 @@ impl App {
                     {
                         self.cfg.group_apps = !on;
                         self.cfg_dirty = true;
-                        self.rows_dirty = true;
+                        self.row_cache.invalidate();
                     }
                 }
                 let plain = |t: &str| egui::Button::new(RichText::new(t).size(13.0)).fill(SURFACE).stroke(Stroke::NONE).corner_radius(8.0);
@@ -5999,11 +5694,11 @@ impl App {
                 } else if v == ViewMode::List && self.cfg.group_apps {
                     if !self.expanded_apps.is_empty() && ui.add(plain(self.cfg.locale.text("Recolher", "Collapse"))).clicked() {
                         self.expanded_apps.clear();
-                        self.rows_dirty = true;
+                        self.row_cache.invalidate();
                     }
                     if ui.add(plain(self.cfg.locale.text("Expandir tudo", "Expand all"))).clicked() {
                         self.expanded_apps = self.groups.iter().filter(|g| g.pids.len() >= 2).map(|g| g.key.clone()).collect();
-                        self.rows_dirty = true;
+                        self.row_cache.invalidate();
                     }
                 }
                 egui::Frame::new()
@@ -6284,8 +5979,8 @@ impl App {
         if go {
             self.sort = SortKey::Steal;
             self.sort_desc = true;
-            self.rows_dirty = true;
-            self.order_frozen = false;
+            self.row_cache.invalidate();
+            self.row_cache.thaw();
             if let Some(first) = thieves.first() {
                 self.selected = Some(first.pid);
                 self.scroll_to_selected = true;
@@ -6359,8 +6054,8 @@ impl App {
                     self.sort = SortKey::Steal;
                     self.sort_desc = true;
                 }
-                self.rows_dirty = true;
-                self.order_frozen = false;
+                self.row_cache.invalidate();
+                self.row_cache.thaw();
             }
             // Chip das linhas que não são processo: interruptor de exibição, não filtro. A
             // memória do kernel continua no medidor e na conferência do rodapé.
@@ -6396,7 +6091,7 @@ impl App {
                 {
                     self.cfg.show_kernel_rows = !on;
                     self.cfg_dirty = true;
-                    self.rows_dirty = true;
+                    self.row_cache.invalidate();
                 }
             }
             if self.cat_enabled.len() != Category::ALL.len() {
@@ -6448,7 +6143,7 @@ impl App {
                     self.cfg.mem_metric = metric;
                     self.cfg_dirty = true;
                     self.derived_dirty = true;
-                    self.rows_dirty = true;
+                    self.row_cache.invalidate();
                 }
                 ui.label(RichText::new(self.cfg.mem_metric.tip_for(locale)).color(MUTED).size(11.5));
                 ui.separator();
@@ -6476,7 +6171,7 @@ impl App {
                     self.cfg.min_gpu = min_gpu;
                     self.cfg.min_vram_mb = min_vram;
                     self.cfg_dirty = true;
-                    self.rows_dirty = true;
+                    self.row_cache.invalidate();
                 }
                 // Cortes prontos: o caso de uso real é "cadê quem está comendo agora",
                 // não calibrar quatro DragValues no susto.
@@ -6485,12 +6180,12 @@ impl App {
                     if ui.small_button(locale.text("Só CPU ativa (≥ 3%)", "CPU active only (≥ 3%)")).on_hover_text(locale.text("Esconde quem não está usando CPU agora (corte em 3% da máquina)", "Hides processes not using CPU now (3% of the machine)")).clicked() {
                         self.cfg.min_cpu = 3.0;
                         self.cfg_dirty = true;
-                        self.rows_dirty = true;
+                        self.row_cache.invalidate();
                     }
                     if ui.small_button(locale.text("Só GPU em uso (≥ 1%)", "GPU in use only (≥ 1%)")).on_hover_text(locale.text("Esconde quem não está com carga na GPU", "Hides processes with no GPU load")).clicked() {
                         self.cfg.min_gpu = 1.0;
                         self.cfg_dirty = true;
-                        self.rows_dirty = true;
+                        self.row_cache.invalidate();
                     }
                     if ui.add_enabled(cortes_ativos, egui::Button::new(locale.text("Mostrar tudo", "Show all")).small()).on_hover_text(locale.text("Zera os quatro cortes", "Clears all four thresholds")).clicked() {
                         self.cfg.min_mb = 0;
@@ -6498,7 +6193,7 @@ impl App {
                         self.cfg.min_gpu = 0.0;
                         self.cfg.min_vram_mb = 0;
                         self.cfg_dirty = true;
-                        self.rows_dirty = true;
+                        self.row_cache.invalidate();
                     }
                 });
                 ui.separator();
