@@ -9,13 +9,13 @@
   ·
   <a href="README.md">Português</a>
   ·
-  <a href="docs/releases/v0.12.0.md">v0.12.0 patch notes</a>
+  <a href="docs/releases/v0.12.1.md">v0.12.1 patch notes</a>
   ·
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 <p align="center">
-  <img alt="v0.12.0" src="https://img.shields.io/badge/v0.12.0-stable-73d8ee?style=flat-square">
+  <img alt="v0.12.1" src="https://img.shields.io/badge/v0.12.1-stable-73d8ee?style=flat-square">
   <img alt="Omarchy" src="https://img.shields.io/badge/Omarchy-native%20support-9ECE6A?style=flat-square&logo=archlinux&logoColor=white">
   <img alt="Hyprland" src="https://img.shields.io/badge/Hyprland-native%20windows-7AA2F7?style=flat-square">
   <img alt="Windows x64" src="https://img.shields.io/badge/Windows-x64-0B3A4A?style=flat-square&logo=windows&logoColor=4FC3F7">
@@ -40,18 +40,15 @@ Task Manager does not show the process origin — who launched it. It does not c
 
 RamDog exists for that.
 
-## What's new in v0.12.0
+## v0.12.1 update
 
-**v0.12.0** adds a complete English interface while keeping Portuguese as the default. The language preference persists and covers navigation, resource cards, addons, confirmations, errors, and the recent **Contention**, **Launched by**, accounting, and zombie workflows. The public showcase was refreshed too.
+**v0.12.1** is an internal maintenance patch: it separates the table cache and process queries from the interface and expands regression tests. Filters, sorting, updates under the pointer, and the Portuguese and English features from v0.12.0 are preserved. There are no new visual features or measured performance gains.
 
-| Before | Now |
-|---|---|
-| Portuguese-only interface | persistent **Português / English** selector |
-| v0.11 features had no English vocabulary | localized **Contention**, **Launched by**, resource accounting and zombie handling |
-| Primary documentation only in Portuguese | complete Portuguese and English guides with reciprocal links |
-| systemd failures could expose raw output | localized explanation when the user bus is unavailable |
+- Cache and process queries in modules that can be tested without opening a window.
+- 22 table-model tests cover hover transitions, groups, search and sorting criteria.
+- Linux suite: 101 tests passed, three opt-in integrations ignored.
 
-Full notes: [v0.12.0](docs/releases/v0.12.0.md) · [v0.11.1](docs/releases/v0.11.1.md) · [changelog](CHANGELOG.md).
+Full notes: [v0.12.1](docs/releases/v0.12.1.md) · [v0.12.0](docs/releases/v0.12.0.md) · [changelog](CHANGELOG.md).
 
 ## Built for Omarchy
 
@@ -115,9 +112,9 @@ curl -sSfL https://raw.githubusercontent.com/LucasOl1337/RamDog/main/install.sh 
 
 The installer downloads the [release](https://github.com/LucasOl1337/RamDog/releases) (`RamDog-linux-x86_64.tar.gz`, `RamDog-linux-aarch64.tar.gz`, `RamDog-macos-aarch64.tar.gz` or `…-x86_64.tar.gz`) into `~/.local/bin/ramdog` and opens it. On macOS, if Gatekeeper blocks it: Settings → Privacy & Security → Open Anyway.
 
-Linux provides list, categories, origin, tree, kill, USS/PSS/RSS, GPU, sensors and fans, Startup/Waste through systemd and Screens through Hyprland. v0.12 adds the complete English interface; v0.11 added accurate CPU accounting, systemd-aware origins and contention diagnostics; v0.10 introduced the current interface and Cleanup. See the [patch notes](docs/releases/v0.12.0.md), [changelog](CHANGELOG.md), and [dependencies and limits](linux/README.md). The window works on Wayland or X11 (eframe). Release Linux binaries require glibc 2.39+ (Ubuntu 24.04, current Omarchy/Arch or a compatible distribution); older systems can compile from source. If no release binary is available, the script falls back to `cargo build` (requires [rustup](https://rustup.rs), git and native libraries listed below).
+Linux provides list, categories, origin, tree, kill, USS/PSS/RSS, GPU, sensors and fans, Startup/Waste through systemd and Screens through Hyprland. v0.12 adds the complete English interface; v0.11 added accurate CPU accounting, systemd-aware origins and contention diagnostics; v0.10 introduced the current interface and Cleanup. See the [patch notes](docs/releases/v0.12.1.md), [changelog](CHANGELOG.md), and [dependencies and limits](linux/README.md). The window works on Wayland or X11 (eframe). Release Linux binaries require glibc 2.39+ (Ubuntu 24.04, current Omarchy/Arch or a compatible distribution); older systems can compile from source. If no release binary is available, the script falls back to `cargo build` (requires [rustup](https://rustup.rs), git and native libraries listed below).
 
-The installer verifies SHA-256 and, on Linux, also installs `ramdog-launch`, which keeps the app independent of the terminal through a user systemd unit when available. `RAMDOG_HOME` changes the destination, `RAMDOG_VERSION=v0.12.0` pins a version and `RAMDOG_NO_LAUNCH=1` installs without opening the app. Example: `curl -sSfL https://raw.githubusercontent.com/LucasOl1337/RamDog/main/install.sh | RAMDOG_NO_LAUNCH=1 sh`.
+The installer verifies SHA-256 and, on Linux, also installs `ramdog-launch`, which keeps the app independent of the terminal through a user systemd unit when available. `RAMDOG_HOME` changes the destination, `RAMDOG_VERSION=v0.12.1` pins a version and `RAMDOG_NO_LAUNCH=1` installs without opening the app. Example: `curl -sSfL https://raw.githubusercontent.com/LucasOl1337/RamDog/main/install.sh | RAMDOG_NO_LAUNCH=1 sh`.
 
 On macOS: list, categories, origin, tree and kill. No Waste, Screens, CPU temperature or NVML GPU support.
 
@@ -256,7 +253,7 @@ Slots store position as a fraction of the monitor's **work area**, never as pixe
 
 ## Releases
 
-[Changelog](CHANGELOG.md) · [v0.12.0 patch notes](docs/releases/v0.12.0.md) · [v0.11.1](docs/releases/v0.11.1.md) · [v0.11.0](docs/releases/v0.11.0.md) · [How to publish with `./release`](docs/RELEASING.md).
+[v0.12.1](docs/releases/v0.12.1.md) · [Changelog](CHANGELOG.md) · [v0.12.0 patch notes](docs/releases/v0.12.0.md) · [v0.11.1](docs/releases/v0.11.1.md) · [v0.11.0](docs/releases/v0.11.0.md) · [How to publish with `./release`](docs/RELEASING.md).
 
 The repository's social preview image is [`docs/media/banners/og.png`](docs/media/banners/og.png) (1280×640).
 

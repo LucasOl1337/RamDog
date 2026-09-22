@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="660" font-family="Liberation Sans, sans-serif">
+  <defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#160D31"/><stop offset="1" stop-color="#28184D"/></linearGradient></defs>
+  <rect width="1200" height="660" fill="url(#bg)"/>
+  <path d="M28 78V28H78M1122 28H1172V78M28 582V632H78M1122 632H1172V582" fill="none" stroke="#8B7AA2" stroke-width="2" opacity=".7"/>
+  <text x="56" y="90" font-size="43" fill="#F8F5FF" font-weight="700">RamDog</text>
+  <rect x="255" y="50" width="146" height="54" rx="27" fill="#8E65E8"/>
+  <text x="281" y="87" font-size="25" fill="#FFFFFF" font-weight="700">v0.12.1</text>
+  <text x="56" y="145" font-size="25" fill="#F8F5FF" font-weight="700" letter-spacing="3">NOTAS DA ATUALIZAÇÃO</text>
+  <text x="1144" y="88" font-size="20" fill="#BCB1D2" text-anchor="end">22 SET 2026</text>
+  <path d="M56 178H1144" stroke="#76638C" opacity=".5"/>
+  <text x="56" y="224" font-size="24" fill="#D8CFE7">Patch interno da tabela. Os recursos da v0.12.0 continuam disponíveis.</text>
+  <rect x="56" y="264" width="6" height="28" rx="3" fill="#AA88FA"/>
+  <text x="80" y="287" font-size="26" fill="#AA88FA" font-weight="700">MANUTENÇÃO</text>
+  <text x="1144" y="287" font-size="20" fill="#BCB1D2" text-anchor="end">2 itens</text>
+  <circle cx="86" cy="340" r="6" fill="#AA88FA"/>
+  <text x="108" y="348" font-size="28" fill="#F8F5FF" font-weight="700">Cache e consultas em módulos próprios</text>
+  <text x="108" y="383" font-size="23" fill="#BCB1D2">Regras da tabela testáveis sem abrir a interface ou executar ações do sistema.</text>
+  <circle cx="86" cy="436" r="6" fill="#AA88FA"/>
+  <text x="108" y="444" font-size="28" fill="#F8F5FF" font-weight="700">22 testes do modelo da tabela</text>
+  <text x="108" y="479" font-size="23" fill="#BCB1D2">Cache, grupos, busca, filtros e ordenação. Suíte Linux: 101 aprovados, 3 ignorados.</text>
+  <path d="M56 522H1144" stroke="#76638C" opacity=".5"/>
+  <text x="56" y="566" font-size="23" fill="#D8CFE7">Sem novas funções visuais. Sem ganho de desempenho medido.</text>
+  <text x="56" y="605" font-size="20" fill="#BCB1D2">Notas e pacotes: github.com/LucasOl1337/RamDog/releases/tag/v0.12.1</text>
+</svg>

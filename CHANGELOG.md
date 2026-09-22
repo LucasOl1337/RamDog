@@ -2,6 +2,17 @@
 
 As mudanças são registradas por versão. As notas descrevem funcionalidades disponíveis e suas limitações; testes de hardware não equivalem a cobertura de todos os drivers e desktops.
 
+## [0.12.1] - 2026-09-22
+
+Patch de manutenção interna da tabela, sem novas funções de interface ou ganho de desempenho medido. Preserva os recursos e os idiomas da v0.12.0.
+
+Patch notes: [v0.12.1](docs/releases/v0.12.1.md).
+
+### Manutenção
+
+- Cache de linhas e consultas de processos separados da interface em módulos próprios, preservando filtros, ordenação e atualização sob o ponteiro.
+- 22 testes do modelo da tabela cobrem transições do cache, reconciliação de grupos, busca, limites de recursos, métricas e os 12 critérios de ordenação. Substituem cinco testes anteriores e elevam a suíte de 84 para 101 testes aprovados no Linux, com três integrações opt-in ignoradas.
+
 ## [0.12.0] - 2026-09-22
 
 O RamDog agora oferece a interface completa em inglês, preservando o português como padrão e todos os recursos das versões 0.11.x.

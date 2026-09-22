@@ -9,13 +9,13 @@
   ·
   <a href="README.en.md">English</a>
   ·
-  <a href="docs/releases/v0.12.0.md">Patch notes v0.12.0</a>
+  <a href="docs/releases/v0.12.1.md">Patch notes v0.12.1</a>
   ·
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 <p align="center">
-  <img alt="v0.12.0" src="https://img.shields.io/badge/v0.12.0-estável-73d8ee?style=flat-square">
+  <img alt="v0.12.1" src="https://img.shields.io/badge/v0.12.1-estável-73d8ee?style=flat-square">
   <img alt="Omarchy" src="https://img.shields.io/badge/Omarchy-suporte%20nativo-9ECE6A?style=flat-square&logo=archlinux&logoColor=white">
   <img alt="Hyprland" src="https://img.shields.io/badge/Hyprland-Telas%20nativo-7AA2F7?style=flat-square">
   <img alt="Windows x64" src="https://img.shields.io/badge/Windows-x64-0B3A4A?style=flat-square&logo=windows&logoColor=4FC3F7">
@@ -40,18 +40,15 @@ O Gerenciador de Tarefas não mostra a cadeia de origem — quem lançou o proce
 
 Este app existe por isso.
 
-## Novidades na v0.12.0
+## Atualização v0.12.1
 
-A **v0.12.0** acrescenta a interface completa em inglês sem tirar o português. O idioma fica salvo nas Preferências e cobre navegação, medidores, addons, confirmações, erros e os recursos recentes de Disputa, Quem abriu e zumbis. Também chega um README em inglês e uma vitrine atualizada.
+A **v0.12.1** é um patch de manutenção interna: separa o cache e as consultas da tabela da interface e amplia os testes de regressão. Filtros, ordenação, atualização sob o ponteiro e os recursos em português e inglês da v0.12.0 são preservados. Não há novas funções visuais nem ganho de desempenho medido.
 
-| Antes | Agora |
-|---|---|
-| Interface somente em português | seletor persistido **Português / English** |
-| Recursos 0.11 sem vocabulário inglês | **Contention**, **Launched by**, conta de recursos e zumbis localizados |
-| Documentação principal só em português | guia completo em português e inglês, com links recíprocos |
-| Mensagens systemd podiam expor erro cru | explicação localizada quando o barramento de usuário não existe |
+- Cache e consulta de processos em módulos testáveis sem abrir a janela.
+- 22 testes do modelo da tabela, incluindo transições sob hover, grupos, busca e critérios de ordenação.
+- Suíte Linux: 101 testes aprovados, três integrações opt-in ignoradas.
 
-Notas completas: [v0.12.0](docs/releases/v0.12.0.md) · [changelog](CHANGELOG.md).
+Notas completas: [v0.12.1](docs/releases/v0.12.1.md) · [v0.12.0](docs/releases/v0.12.0.md) · [changelog](CHANGELOG.md).
 
 ## Feito para Omarchy
 
@@ -112,9 +109,9 @@ curl -sSfL https://raw.githubusercontent.com/LucasOl1337/RamDog/main/install.sh 
 
 Baixa o tar do [release](https://github.com/LucasOl1337/RamDog/releases) (`RamDog-linux-x86_64.tar.gz`, `RamDog-linux-aarch64.tar.gz`, `RamDog-macos-aarch64.tar.gz` ou `…-x86_64.tar.gz`) para `~/.local/bin/ramdog` e abre. No Mac, se o Gatekeeper bloquear: Ajustes → Privacidade e segurança → Abrir mesmo assim.
 
-No Linux: lista, categorias, origem, árvore, kill, USS/PSS/RSS, GPU, sensores e ventoinhas, Partida/Desperdício via systemd e Telas via Hyprland. A **v0.12.0** acrescenta a interface inglesa; a v0.11 trouxe contabilidade precisa, origens systemd e Disputa, e a v0.10 introduziu a interface atual e a Limpeza. Veja as [patch notes](docs/releases/v0.12.0.md) e o [changelog](CHANGELOG.md). Consulte [dependências e limites](linux/README.md). Janela: Wayland ou X11 (eframe). Os binários Linux requerem glibc 2.39+ (Ubuntu 24.04, Omarchy/Arch atual, ou distribuição compatível); em sistemas anteriores, compile do código. Sem binário no release, o script cai no `cargo build` (precisa [rustup](https://rustup.rs) + git e libs nativas, ver abaixo).
+No Linux: lista, categorias, origem, árvore, kill, USS/PSS/RSS, GPU, sensores e ventoinhas, Partida/Desperdício via systemd e Telas via Hyprland. A **v0.12.0** acrescenta a interface inglesa; a v0.11 trouxe contabilidade precisa, origens systemd e Disputa, e a v0.10 introduziu a interface atual e a Limpeza. Veja as [patch notes](docs/releases/v0.12.1.md) e o [changelog](CHANGELOG.md). Consulte [dependências e limites](linux/README.md). Janela: Wayland ou X11 (eframe). Os binários Linux requerem glibc 2.39+ (Ubuntu 24.04, Omarchy/Arch atual, ou distribuição compatível); em sistemas anteriores, compile do código. Sem binário no release, o script cai no `cargo build` (precisa [rustup](https://rustup.rs) + git e libs nativas, ver abaixo).
 
-O instalador verifica SHA-256 e, no Linux, também instala `ramdog-launch`, que mantém o app independente do terminal usando systemd de usuário quando disponível. `RAMDOG_HOME` muda o destino, `RAMDOG_VERSION=v0.12.0` fixa a versão e `RAMDOG_NO_LAUNCH=1` instala sem abrir. Exemplo: `curl -sSfL https://raw.githubusercontent.com/LucasOl1337/RamDog/main/install.sh | RAMDOG_NO_LAUNCH=1 sh`.
+O instalador verifica SHA-256 e, no Linux, também instala `ramdog-launch`, que mantém o app independente do terminal usando systemd de usuário quando disponível. `RAMDOG_HOME` muda o destino, `RAMDOG_VERSION=v0.12.1` fixa a versão e `RAMDOG_NO_LAUNCH=1` instala sem abrir. Exemplo: `curl -sSfL https://raw.githubusercontent.com/LucasOl1337/RamDog/main/install.sh | RAMDOG_NO_LAUNCH=1 sh`.
 
 No Mac: lista, categorias, origem, árvore, kill. Sem Desperdício, sem Telas, sem temp de CPU, sem GPU NVML.
 
@@ -256,7 +253,7 @@ Os slots guardam posição em fração da **área de trabalho** do monitor, nunc
 
 ## Releases
 
-[Changelog](CHANGELOG.md) · [Patch notes v0.12.0](docs/releases/v0.12.0.md) · [v0.11.1](docs/releases/v0.11.1.md) · [v0.11.0](docs/releases/v0.11.0.md) · [Como publicar com `./release`](docs/RELEASING.md).
+[v0.12.1](docs/releases/v0.12.1.md) · [Changelog](CHANGELOG.md) · [Patch notes v0.12.0](docs/releases/v0.12.0.md) · [v0.11.1](docs/releases/v0.11.1.md) · [v0.11.0](docs/releases/v0.11.0.md) · [Como publicar com `./release`](docs/RELEASING.md).
 
 A imagem de preview social do repositório está em [`docs/media/banners/og.png`](docs/media/banners/og.png) (1280×640).
 
