@@ -21,8 +21,8 @@ use windows::Win32::Foundation::FILETIME;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
 use windows::Win32::System::Performance::{
     PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterArrayW,
-    PdhGetFormattedCounterValue, PdhOpenQueryW, PDH_FMT, PDH_FMT_COUNTERVALUE, PDH_FMT_COUNTERVALUE_ITEM_W,
-    PDH_FMT_DOUBLE, PDH_HCOUNTER, PDH_HQUERY,
+    PdhGetFormattedCounterValue, PdhOpenQueryW, PDH_FMT, PDH_FMT_COUNTERVALUE,
+    PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_DOUBLE, PDH_HCOUNTER, PDH_HQUERY,
 };
 use windows::Win32::System::Threading::GetSystemTimes;
 
@@ -92,7 +92,8 @@ impl Nvml {
                 return None;
             }
             let get_handle: FnHandle = std::mem::transmute(
-                sym("nvmlDeviceGetHandleByIndex_v2").or_else(|| sym("nvmlDeviceGetHandleByIndex"))?,
+                sym("nvmlDeviceGetHandleByIndex_v2")
+                    .or_else(|| sym("nvmlDeviceGetHandleByIndex"))?,
             );
             let mut dev: *mut c_void = std::ptr::null_mut();
             if get_handle(0, &mut dev) != 0 || dev.is_null() {
@@ -121,7 +122,10 @@ impl Nvml {
     }
 
     fn read(&self) -> GpuInfo {
-        let mut g = GpuInfo { name: self.name.clone(), ..Default::default() };
+        let mut g = GpuInfo {
+            name: self.name.clone(),
+            ..Default::default()
+        };
         unsafe {
             if let Some(f) = self.util {
                 let mut u = NvmlUtilization::default();
@@ -189,28 +193,53 @@ impl Pdh {
             if PdhOpenQueryW(PCWSTR::null(), 0, &mut query) != 0 {
                 return None;
             }
-            let path: Vec<u16> = GPU_ENGINE_COUNTER.encode_utf16().chain(std::iter::once(0)).collect();
+            let path: Vec<u16> = GPU_ENGINE_COUNTER
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
             let mut counter = PDH_HCOUNTER::default();
             if PdhAddEnglishCounterW(query, PCWSTR(path.as_ptr()), 0, &mut counter) != 0 {
                 let _ = PdhCloseQuery(query);
                 return None;
             }
-            let disk_path: Vec<u16> = DISK_IDLE_COUNTER.encode_utf16().chain(std::iter::once(0)).collect();
+            let disk_path: Vec<u16> = DISK_IDLE_COUNTER
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
             let mut disk_counter = PDH_HCOUNTER::default();
-            let disk_counter = if PdhAddEnglishCounterW(query, PCWSTR(disk_path.as_ptr()), 0, &mut disk_counter) == 0 {
-                Some(disk_counter)
-            } else {
-                None
-            };
-            let bytes_path: Vec<u16> = DISK_BYTES_COUNTER.encode_utf16().chain(std::iter::once(0)).collect();
+            let disk_counter =
+                if PdhAddEnglishCounterW(query, PCWSTR(disk_path.as_ptr()), 0, &mut disk_counter)
+                    == 0
+                {
+                    Some(disk_counter)
+                } else {
+                    None
+                };
+            let bytes_path: Vec<u16> = DISK_BYTES_COUNTER
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
             let mut disk_bytes_counter = PDH_HCOUNTER::default();
-            let disk_bytes_counter = if PdhAddEnglishCounterW(query, PCWSTR(bytes_path.as_ptr()), 0, &mut disk_bytes_counter) == 0 {
+            let disk_bytes_counter = if PdhAddEnglishCounterW(
+                query,
+                PCWSTR(bytes_path.as_ptr()),
+                0,
+                &mut disk_bytes_counter,
+            ) == 0
+            {
                 Some(disk_bytes_counter)
             } else {
                 None
             };
             let _ = PdhCollectQueryData(query);
-            Some(Self { query, counter, disk_counter, disk_bytes_counter, primed: false, buf: vec![0u8; 64 * 1024] })
+            Some(Self {
+                query,
+                counter,
+                disk_counter,
+                disk_bytes_counter,
+                primed: false,
+                buf: vec![0u8; 64 * 1024],
+            })
         }
     }
 
@@ -274,14 +303,18 @@ impl Pdh {
             if st != 0 {
                 return out;
             }
-            let items =
-                std::slice::from_raw_parts(self.buf.as_ptr() as *const PDH_FMT_COUNTERVALUE_ITEM_W, count as usize);
+            let items = std::slice::from_raw_parts(
+                self.buf.as_ptr() as *const PDH_FMT_COUNTERVALUE_ITEM_W,
+                count as usize,
+            );
             for it in items {
                 if it.szName.is_null() {
                     continue;
                 }
                 let name = it.szName.to_string().unwrap_or_default();
-                let Some(pid) = parse_pid(&name) else { continue };
+                let Some(pid) = parse_pid(&name) else {
+                    continue;
+                };
                 let v = it.FmtValue.Anonymous.doubleValue as f32;
                 if !v.is_finite() || v <= 0.0 {
                     continue;
@@ -328,7 +361,11 @@ pub struct Metrics {
 
 impl Metrics {
     pub fn new() -> Self {
-        Self { nvml: Nvml::load(), pdh: Pdh::open(), cpu_prev: None }
+        Self {
+            nvml: Nvml::load(),
+            pdh: Pdh::open(),
+            cpu_prev: None,
+        }
     }
 
     /// Por que a coluna de GPU pode vir vazia — a UI explica em vez de mentir.
@@ -347,7 +384,11 @@ impl Metrics {
             s.gpu = Some(n.read());
         }
         unsafe {
-            let (mut idle, mut kern, mut user) = (FILETIME::default(), FILETIME::default(), FILETIME::default());
+            let (mut idle, mut kern, mut user) = (
+                FILETIME::default(),
+                FILETIME::default(),
+                FILETIME::default(),
+            );
             if GetSystemTimes(Some(&mut idle), Some(&mut kern), Some(&mut user)).is_ok() {
                 // O tempo de kernel já inclui o idle.
                 let (i, t) = (ft(idle), ft(kern) + ft(user));

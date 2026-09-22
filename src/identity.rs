@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
+use crate::config::Locale;
+
 fn agent_slug(agent: &str) -> Option<&'static str> {
     match agent {
         "Claude Code" => Some("claude"),
@@ -144,10 +146,7 @@ pub fn resolve(facts: Facts<'_>) -> Identity {
     }
     if let Some(label) = windows_game_label(&facts) {
         if is_wine_runtime(facts.name, facts.exe_path) || looks_like_windows_game(facts.name) {
-            let key = format!(
-                "game:{}",
-                label.to_lowercase().replace(' ', "-")
-            );
+            let key = format!("game:{}", label.to_lowercase().replace(' ', "-"));
             return Identity {
                 key,
                 label,
@@ -245,7 +244,12 @@ pub fn steam_app_id_from(
 }
 
 pub fn parse_steam_id(text: &str) -> Option<u32> {
-    for marker in ["compatdata/", "rungameid/", "SteamAppId=", "STEAM_COMPAT_APP_ID="] {
+    for marker in [
+        "compatdata/",
+        "rungameid/",
+        "SteamAppId=",
+        "STEAM_COMPAT_APP_ID=",
+    ] {
         if let Some(rest) = find_ci(text, marker) {
             let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
             if let Ok(id) = digits.parse::<u32>() {
@@ -367,9 +371,19 @@ fn is_wine_helper(name: &str) -> bool {
     let n = n.rsplit(['/', '\\']).next().unwrap_or(&n);
     matches!(
         n,
-        "wine" | "wine64" | "wine64.exe" | "wine.exe" | "wineserver" | "wineserver.exe"
-            | "start.exe" | "plugplay.exe" | "services.exe" | "explorer.exe" | "rpcss.exe"
-            | "winedevice.exe" | "svchost.exe"
+        "wine"
+            | "wine64"
+            | "wine64.exe"
+            | "wine.exe"
+            | "wineserver"
+            | "wineserver.exe"
+            | "start.exe"
+            | "plugplay.exe"
+            | "services.exe"
+            | "explorer.exe"
+            | "rpcss.exe"
+            | "winedevice.exe"
+            | "svchost.exe"
     )
 }
 
@@ -379,9 +393,16 @@ fn is_steam_client(name: &str, exe: &str) -> bool {
     let e = exe.to_ascii_lowercase();
     matches!(
         n.as_str(),
-        "steam" | "steam.sh" | "steamwebhelper" | "steamwebhelper_sniper_wrap.sh" | "steamservice"
-            | "steam-runtime-launcher-service" | "steamerrorreporter" | "fossilize_replay"
-    ) || ((e.contains("/steam/ubuntu12_32/") || e.contains("/steam/ubuntu12_64/")) && !n.ends_with(".exe"))
+        "steam"
+            | "steam.sh"
+            | "steamwebhelper"
+            | "steamwebhelper_sniper_wrap.sh"
+            | "steamservice"
+            | "steam-runtime-launcher-service"
+            | "steamerrorreporter"
+            | "fossilize_replay"
+    ) || ((e.contains("/steam/ubuntu12_32/") || e.contains("/steam/ubuntu12_64/"))
+        && !n.ends_with(".exe"))
 }
 
 fn is_wine_runtime(name: &str, exe: &str) -> bool {
@@ -393,17 +414,23 @@ fn is_runtime_name(name: &str, exe: &str) -> bool {
     is_wine_helper(&n)
         || matches!(
             n.as_str(),
-            "python" | "python3" | "python3.11" | "python3.12" | "python3.13" | "python3.14"
-                | "node" | "nodejs" | "electron" | "java" | "qemu-system-x86_64" | "qemu-system-x86"
+            "python"
+                | "python3"
+                | "python3.11"
+                | "python3.12"
+                | "python3.13"
+                | "python3.14"
+                | "node"
+                | "nodejs"
+                | "electron"
+                | "java"
+                | "qemu-system-x86_64"
+                | "qemu-system-x86"
         )
 }
 
 fn project_name(facts: &Facts<'_>) -> Option<String> {
-    for hay in [
-        facts.exe_path,
-        facts.cmdline,
-        facts.init_cwd.unwrap_or(""),
-    ] {
+    for hay in [facts.exe_path, facts.cmdline, facts.init_cwd.unwrap_or("")] {
         if let Some(p) = project_from_path(hay) {
             return Some(p);
         }
@@ -506,11 +533,29 @@ pub fn leftover_reason(
     kernel_state: Option<char>,
     has_window: bool,
 ) -> Option<&'static str> {
+    leftover_reason_for(cmdline, kernel_state, has_window, Locale::Portuguese)
+}
+
+pub fn leftover_reason_for(
+    cmdline: &str,
+    kernel_state: Option<char>,
+    has_window: bool,
+    locale: Locale,
+) -> Option<&'static str> {
     if kernel_state == Some('Z') {
-        return Some("zombie: o processo já morreu e o pai não recolheu o estado");
+        return Some(locale.text(
+            "zombie: o processo já morreu e o pai não recolheu o estado",
+            "zombie: the process is dead and its parent has not reaped it",
+        ));
     }
-    if !has_window && qemu_avd(cmdline).is_some() && (cmdline.contains("-qt-hide-window") || cmdline.contains("-no-window")) {
-        return Some("emulador Android sem janela (-qt-hide-window)");
+    if !has_window
+        && qemu_avd(cmdline).is_some()
+        && (cmdline.contains("-qt-hide-window") || cmdline.contains("-no-window"))
+    {
+        return Some(locale.text(
+            "emulador Android sem janela (-qt-hide-window)",
+            "Android emulator without a window (-qt-hide-window)",
+        ));
     }
     None
 }
@@ -521,6 +566,22 @@ pub fn state_label(
     has_window: bool,
     leftover: Option<&str>,
 ) -> &'static str {
+    state_label_for(
+        kernel_state,
+        focused,
+        has_window,
+        leftover,
+        Locale::Portuguese,
+    )
+}
+
+pub fn state_label_for(
+    kernel_state: Option<char>,
+    focused: bool,
+    has_window: bool,
+    leftover: Option<&str>,
+    locale: Locale,
+) -> &'static str {
     if kernel_state == Some('Z') {
         return "zombie";
     }
@@ -528,12 +589,12 @@ pub fn state_label(
         return "leftover";
     }
     if focused {
-        return "em foco";
+        return locale.text("em foco", "focused");
     }
     if has_window {
-        return "janela";
+        return locale.text("janela", "window");
     }
-    "fundo"
+    locale.text("fundo", "background")
 }
 
 fn steam_name(id: u32) -> Option<String> {
@@ -602,7 +663,8 @@ mod tests {
 
     #[test]
     fn proton_overwatch_is_not_wine64() {
-        let wine = "/home/lol/.local/share/Steam/steamapps/common/Proton - Experimental/files/bin/wine64";
+        let wine =
+            "/home/lol/.local/share/Steam/steamapps/common/Proton - Experimental/files/bin/wine64";
         let cmd = format!(
             "{wine} /home/lol/.local/share/Steam/steamapps/compatdata/2357570/pfx/drive_c/Program Files (x86)/Overwatch/_retail_/Overwatch.exe"
         );
@@ -717,7 +779,10 @@ mod tests {
             Some("emulador Android sem janela (-qt-hide-window)")
         );
         assert_eq!(leftover_reason("sussurro", None, false), None);
-        assert_eq!(leftover_reason("wine64", Some('Z'), true), Some("zombie: o processo já morreu e o pai não recolheu o estado"));
+        assert_eq!(
+            leftover_reason("wine64", Some('Z'), true),
+            Some("zombie: o processo já morreu e o pai não recolheu o estado")
+        );
         assert_eq!(state_label(None, true, true, None), "em foco");
         assert_eq!(state_label(None, false, true, None), "janela");
         assert_eq!(state_label(None, false, false, None), "fundo");

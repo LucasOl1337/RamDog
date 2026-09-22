@@ -32,9 +32,13 @@ impl Metrics {
 
     pub fn gpu_per_process_available(&self) -> bool {
         #[cfg(target_os = "linux")]
-        { self.gpu.sample().process_supported }
+        {
+            self.gpu.sample().process_supported
+        }
         #[cfg(not(target_os = "linux"))]
-        { false }
+        {
+            false
+        }
     }
 
     pub fn sample(&mut self) -> SysSample {
@@ -94,7 +98,10 @@ struct DiskCounters {
 #[cfg(target_os = "linux")]
 impl DiskCounters {
     fn new() -> Self {
-        Self { previous: read_diskstats(), prev_at: Instant::now() }
+        Self {
+            previous: read_diskstats(),
+            prev_at: Instant::now(),
+        }
     }
 
     fn sample(&mut self) -> (Option<f32>, Option<f64>) {
@@ -112,20 +119,33 @@ impl DiskCounters {
 }
 
 #[cfg(target_os = "linux")]
-fn disk_delta(previous: &HashMap<String, [u64; 3]>, current: &HashMap<String, [u64; 3]>, dt: f64) -> (Option<f32>, Option<f64>) {
-    if dt <= 0.0 { return (None, None); }
+fn disk_delta(
+    previous: &HashMap<String, [u64; 3]>,
+    current: &HashMap<String, [u64; 3]>,
+    dt: f64,
+) -> (Option<f32>, Option<f64>) {
+    if dt <= 0.0 {
+        return (None, None);
+    }
     let mut bytes = 0.0f64;
     let mut busy = 0.0f64;
     let mut measured = false;
     for (name, now) in current {
-        let Some(old) = previous.get(name) else { continue };
-        if now.iter().zip(old).any(|(n, o)| n < o) { continue; }
+        let Some(old) = previous.get(name) else {
+            continue;
+        };
+        if now.iter().zip(old).any(|(n, o)| n < o) {
+            continue;
+        }
         measured = true;
         bytes += (now[0] - old[0]) as f64 + (now[1] - old[1]) as f64;
         busy = busy.max((now[2] - old[2]) as f64 / (dt * 1000.0) * 100.0);
     }
-    if measured { (Some(busy.clamp(0.0, 100.0) as f32), Some(bytes / dt)) }
-    else { (None, None) }
+    if measured {
+        (Some(busy.clamp(0.0, 100.0) as f32), Some(bytes / dt))
+    } else {
+        (None, None)
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -148,7 +168,10 @@ fn is_whole_disk(name: &str) -> bool {
         return !name.contains('p');
     }
     // sda, vda, xvda, hda — sem dígito de partição.
-    (name.starts_with("sd") || name.starts_with("vd") || name.starts_with("hd") || name.starts_with("xvd"))
+    (name.starts_with("sd")
+        || name.starts_with("vd")
+        || name.starts_with("hd")
+        || name.starts_with("xvd"))
         && name.chars().all(|c| c.is_ascii_lowercase())
 }
 
@@ -158,11 +181,26 @@ fn read_diskstats() -> Option<HashMap<String, [u64; 3]>> {
     let mut disks = HashMap::new();
     for line in text.lines() {
         let fields: Vec<_> = line.split_whitespace().collect();
-        if fields.len() < 13 || !is_whole_disk(fields[2]) { continue; }
-        let (Ok(read), Ok(write), Ok(ticks)) = (fields[5].parse::<u64>(), fields[9].parse::<u64>(), fields[12].parse::<u64>()) else { continue; };
-        disks.insert(fields[2].to_owned(), [read.saturating_mul(512), write.saturating_mul(512), ticks]);
+        if fields.len() < 13 || !is_whole_disk(fields[2]) {
+            continue;
+        }
+        let (Ok(read), Ok(write), Ok(ticks)) = (
+            fields[5].parse::<u64>(),
+            fields[9].parse::<u64>(),
+            fields[12].parse::<u64>(),
+        ) else {
+            continue;
+        };
+        disks.insert(
+            fields[2].to_owned(),
+            [read.saturating_mul(512), write.saturating_mul(512), ticks],
+        );
     }
-    if disks.is_empty() { None } else { Some(disks) }
+    if disks.is_empty() {
+        None
+    } else {
+        Some(disks)
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -172,8 +210,14 @@ mod tests {
     #[test]
     fn concurrent_disks_show_busiest_not_sum() {
         let previous = HashMap::from([("sda".into(), [0, 0, 0]), ("sdb".into(), [0, 0, 0])]);
-        let current = HashMap::from([("sda".into(), [1000, 2000, 600]), ("sdb".into(), [3000, 4000, 700])]);
-        assert_eq!(disk_delta(&previous, &current, 1.0), (Some(70.0), Some(10000.0)));
+        let current = HashMap::from([
+            ("sda".into(), [1000, 2000, 600]),
+            ("sdb".into(), [3000, 4000, 700]),
+        ]);
+        assert_eq!(
+            disk_delta(&previous, &current, 1.0),
+            (Some(70.0), Some(10000.0))
+        );
     }
 
     #[test]
@@ -184,12 +228,19 @@ mod tests {
         let reset = HashMap::from([("sda".into(), [0, 0, 0])]);
         assert_eq!(disk_delta(&previous, &reset, 1.0), (None, None));
         assert_eq!(disk_delta(&previous, &previous, 0.0), (None, None));
-        assert_eq!(disk_delta(&previous, &previous, 1.0), (Some(0.0), Some(0.0)));
+        assert_eq!(
+            disk_delta(&previous, &previous, 1.0),
+            (Some(0.0), Some(0.0))
+        );
     }
 
     #[test]
     fn excludes_partitions_and_virtual_duplicates() {
-        for name in ["nvme0n1", "sda", "vda", "mmcblk0"] { assert!(is_whole_disk(name)); }
-        for name in ["nvme0n1p1", "sda1", "dm-0", "zram0", "loop0", "mmcblk0p1"] { assert!(!is_whole_disk(name)); }
+        for name in ["nvme0n1", "sda", "vda", "mmcblk0"] {
+            assert!(is_whole_disk(name));
+        }
+        for name in ["nvme0n1p1", "sda1", "dm-0", "zram0", "loop0", "mmcblk0p1"] {
+            assert!(!is_whole_disk(name));
+        }
     }
 }

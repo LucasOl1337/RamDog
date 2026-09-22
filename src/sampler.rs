@@ -97,8 +97,22 @@ pub fn spawn(ctx: egui::Context, interval_ms: u64) -> SamplerHandle {
                     let mut hwtemp = hwtemp_reader.as_ref().map(|r| r.read()).unwrap_or_default();
                     #[cfg(target_os = "linux")]
                     for gpu in &sys.gpu_linux.cards {
-                        if let Some(temp)=gpu.temp_c { hwtemp.sensors.push(crate::hwtemp::SensorRow { hw:format!("GPU · {}",gpu.name),name:"Temperatura".into(),kind:"temp".into(),value:temp as f32 }); }
-                        if let Some(load)=gpu.util_pct { hwtemp.sensors.push(crate::hwtemp::SensorRow { hw:format!("GPU · {}",gpu.name),name:"Utilização".into(),kind:"load".into(),value:load }); }
+                        if let Some(temp) = gpu.temp_c {
+                            hwtemp.sensors.push(crate::hwtemp::SensorRow {
+                                hw: format!("GPU · {}", gpu.name),
+                                name: "Temperatura".into(),
+                                kind: "temp".into(),
+                                value: temp as f32,
+                            });
+                        }
+                        if let Some(load) = gpu.util_pct {
+                            hwtemp.sensors.push(crate::hwtemp::SensorRow {
+                                hw: format!("GPU · {}", gpu.name),
+                                name: "Utilização".into(),
+                                kind: "load".into(),
+                                value: load,
+                            });
+                        }
                     }
                     let snap = Snapshot {
                         procs,
@@ -154,7 +168,11 @@ mod tests {
     use crate::procs::ProcInfo;
 
     fn proc(raw: f32, children: f32) -> ProcInfo {
-        ProcInfo { cpu_raw_pct: raw, cpu_children_pct: children, ..Default::default() }
+        ProcInfo {
+            cpu_raw_pct: raw,
+            cpu_children_pct: children,
+            ..Default::default()
+        }
     }
 
     #[test]

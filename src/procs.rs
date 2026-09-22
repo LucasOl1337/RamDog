@@ -12,16 +12,22 @@ use windows::core::PWSTR;
 #[cfg(windows)]
 use windows::Wdk::System::SystemInformation::{NtQuerySystemInformation, SystemProcessInformation};
 #[cfg(windows)]
-use windows::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation, ProcessCommandLineInformation};
+use windows::Wdk::System::Threading::{
+    NtQueryInformationProcess, ProcessBasicInformation, ProcessCommandLineInformation,
+};
 #[cfg(windows)]
-use windows::Win32::Foundation::{CloseHandle, HANDLE, STATUS_INFO_LENGTH_MISMATCH, UNICODE_STRING};
+use windows::Win32::Foundation::FILETIME;
 #[cfg(windows)]
-use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+use windows::Win32::Foundation::{
+    CloseHandle, HANDLE, STATUS_INFO_LENGTH_MISMATCH, UNICODE_STRING,
+};
 #[cfg(windows)]
 use windows::Win32::Security::{
     AdjustTokenPrivileges, LookupPrivilegeValueW, SE_DEBUG_NAME, SE_PRIVILEGE_ENABLED,
     TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES,
 };
+#[cfg(windows)]
+use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 #[cfg(windows)]
 use windows::Win32::System::ProcessStatus::{GetPerformanceInfo, PERFORMANCE_INFORMATION};
 #[cfg(windows)]
@@ -32,8 +38,6 @@ use windows::Win32::System::Threading::{
     TerminateProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
     PROCESS_VM_READ,
 };
-#[cfg(windows)]
-use windows::Win32::Foundation::FILETIME;
 #[cfg(windows)]
 use windows::Win32::UI::Shell::IsUserAnAdmin;
 
@@ -117,7 +121,10 @@ pub struct Launcher {
 
 impl Launcher {
     pub fn is_empty(&self) -> bool {
-        self.agent.is_none() && self.host.is_none() && self.init_cwd.is_none() && self.unit_label().is_none()
+        self.agent.is_none()
+            && self.host.is_none()
+            && self.init_cwd.is_none()
+            && self.unit_label().is_none()
     }
     /// Rótulo curto: "Claude Code · Maestri", "Maestri", "VS Code"...
     pub fn short(&self) -> String {
@@ -147,10 +154,23 @@ pub(crate) fn unit_label(unit: &str) -> Option<String> {
     if let Some(rest) = stem.strip_prefix("app-") {
         let rest = rest.strip_prefix("graphical-").unwrap_or(rest);
         let rest = rest.strip_prefix("Hyprland-").unwrap_or(rest);
-        let body = rest.rsplit_once('-').map(|(b, id)| if id.chars().all(|c| c.is_ascii_hexdigit()) { b } else { rest }).unwrap_or(rest);
+        let body = rest
+            .rsplit_once('-')
+            .map(|(b, id)| {
+                if id.chars().all(|c| c.is_ascii_hexdigit()) {
+                    b
+                } else {
+                    rest
+                }
+            })
+            .unwrap_or(rest);
         return Some(match body {
-            "gtk-launch" | "xdg-terminal-exec" | "dmenu" | "walker" | "omarchy-launch" => "desktop".to_string(),
-            b if b.starts_with("org.chromium.") || b == "chromium" || b == "google-chrome" => "desktop (navegador)".to_string(),
+            "gtk-launch" | "xdg-terminal-exec" | "dmenu" | "walker" | "omarchy-launch" => {
+                "desktop".to_string()
+            }
+            b if b.starts_with("org.chromium.") || b == "chromium" || b == "google-chrome" => {
+                "desktop (navegador)".to_string()
+            }
             "com.anthropic.Claude" => "Claude Desktop".to_string(),
             b => format!("desktop · {b}"),
         });
@@ -158,11 +178,18 @@ pub(crate) fn unit_label(unit: &str) -> Option<String> {
     if stem.starts_with("tmux-spawn-") {
         return Some("tmux".into());
     }
-    if stem.starts_with("session-") || stem == "init" || stem.starts_with("user@") || stem.starts_with("wayland-wm@") {
+    if stem.starts_with("session-")
+        || stem == "init"
+        || stem.starts_with("user@")
+        || stem.starts_with("wayland-wm@")
+    {
         return None;
     }
     // `agent-bench@dailywork-campanhas` → "agent-bench · dailywork-campanhas".
-    let (name, inst) = stem.split_once('@').map(|(n, i)| (n, Some(i))).unwrap_or((stem, None));
+    let (name, inst) = stem
+        .split_once('@')
+        .map(|(n, i)| (n, Some(i)))
+        .unwrap_or((stem, None));
     let pretty = match name {
         "hermes-gateway" => "Hermes (gateway)".to_string(),
         "9router" => "9Router".to_string(),
@@ -293,9 +320,13 @@ impl MemStatus {
     }
     pub fn used_commit(&self) -> u64 {
         #[cfg(target_os = "linux")]
-        { self.linux_commit.map(|m| m.0).unwrap_or(0) }
+        {
+            self.linux_commit.map(|m| m.0).unwrap_or(0)
+        }
         #[cfg(not(target_os = "linux"))]
-        { self.total_commit.saturating_sub(self.avail_commit) }
+        {
+            self.total_commit.saturating_sub(self.avail_commit)
+        }
     }
 }
 
@@ -435,8 +466,11 @@ impl Sampler {
     /// diluindo o culpado exatamente quando você foi olhar quem era.
     fn capacity_delta(&mut self) -> Option<u64> {
         unsafe {
-            let (mut idle, mut kern, mut user) =
-                (FILETIME::default(), FILETIME::default(), FILETIME::default());
+            let (mut idle, mut kern, mut user) = (
+                FILETIME::default(),
+                FILETIME::default(),
+                FILETIME::default(),
+            );
             if GetSystemTimes(Some(&mut idle), Some(&mut kern), Some(&mut user)).is_err() {
                 return None;
             }
@@ -489,7 +523,11 @@ impl Sampler {
             );
 
             let name = if r.name.is_empty() {
-                if r.pid == 4 { "System".into() } else { format!("[pid {}]", r.pid) }
+                if r.pid == 4 {
+                    "System".into()
+                } else {
+                    format!("[pid {}]", r.pid)
+                }
             } else {
                 r.name.clone()
             };
@@ -562,10 +600,16 @@ impl Sampler {
     fn cpu_shares(&mut self, raw: &[RawProc], now: Instant) -> Vec<(f32, f32)> {
         let capacity = self.capacity_delta().map(|d| d as f64).unwrap_or_else(|| {
             // `GetSystemTimes` falhou: cai no relógio de parede × núcleos.
-            let dt = self.last_at.map(|t| now.duration_since(t).as_secs_f64()).unwrap_or(0.0);
+            let dt = self
+                .last_at
+                .map(|t| now.duration_since(t).as_secs_f64())
+                .unwrap_or(0.0);
             dt * self.ncpu * 1e7
         });
-        let dt_wall = self.last_at.map(|t| now.duration_since(t).as_secs_f64()).unwrap_or(0.0);
+        let dt_wall = self
+            .last_at
+            .map(|t| now.duration_since(t).as_secs_f64())
+            .unwrap_or(0.0);
         self.last_at = Some(now);
 
         // Deltas de quem existe nas duas amostras. Processo novo tem `create_time`, então
@@ -605,7 +649,11 @@ impl Sampler {
         let matched_pct = (sum_time as f64 / capacity * 100.0).clamp(0.0, 100.0);
         // Passo do EMA para este intervalo. Amarrado ao tempo, não à contagem de amostras:
         // trocar o intervalo de 0,5 s para 5 s não pode mudar o quanto a coluna alisa.
-        let alpha = if dt_wall > 0.0 { 1.0 - (-dt_wall / CPU_EMA_TAU).exp() } else { 1.0 };
+        let alpha = if dt_wall > 0.0 {
+            1.0 - (-dt_wall / CPU_EMA_TAU).exp()
+        } else {
+            1.0
+        };
 
         (0..raw.len())
             .map(|i| {
@@ -676,7 +724,8 @@ impl Sampler {
                         user_time: e.user_time,
                         kernel_time: e.kernel_time,
                         cycle_time: e.cycle_time,
-                        io_bytes: (e.read_transfer_count.max(0) + e.write_transfer_count.max(0)) as u64,
+                        io_bytes: (e.read_transfer_count.max(0) + e.write_transfer_count.max(0))
+                            as u64,
                     });
                 }
                 if e.next_entry_offset == 0 {
@@ -723,12 +772,20 @@ fn query_static(pid: u32) -> StaticInfo {
         // Caminho completo do executável
         let mut buf = vec![0u16; 1024];
         let mut size = buf.len() as u32;
-        if QueryFullProcessImageNameW(h.0, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut size).is_ok() {
+        if QueryFullProcessImageNameW(h.0, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut size)
+            .is_ok()
+        {
             st.exe_path = String::from_utf16_lossy(&buf[..size as usize]);
         }
         // Linha de comando (ProcessCommandLineInformation: não precisa de VM_READ)
         let mut ret: u32 = 0;
-        let status = NtQueryInformationProcess(h.0, ProcessCommandLineInformation, std::ptr::null_mut(), 0, &mut ret);
+        let status = NtQueryInformationProcess(
+            h.0,
+            ProcessCommandLineInformation,
+            std::ptr::null_mut(),
+            0,
+            &mut ret,
+        );
         if status == STATUS_INFO_LENGTH_MISMATCH && ret > 0 {
             let mut cbuf = vec![0u8; ret as usize + 16];
             let status = NtQueryInformationProcess(
@@ -763,7 +820,11 @@ fn read_launcher(pid: u32) -> Launcher {
     const RUPP_ENVIRONMENT_SIZE: usize = 0x3F0;
     const MAX_ENV: usize = 2 * 1024 * 1024;
     unsafe {
-        let h = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, false, pid) {
+        let h = match OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
+            false,
+            pid,
+        ) {
             Ok(h) => OwnedHandle(h),
             Err(_) => return Launcher::default(),
         };
@@ -787,14 +848,25 @@ fn read_launcher(pid: u32) -> Launcher {
         let read_usize = |addr: usize| -> Option<usize> {
             let mut b = [0u8; 8];
             let mut n: usize = 0;
-            ReadProcessMemory(h.0, addr as *const c_void, b.as_mut_ptr() as *mut c_void, 8, Some(&mut n)).ok()?;
+            ReadProcessMemory(
+                h.0,
+                addr as *const c_void,
+                b.as_mut_ptr() as *mut c_void,
+                8,
+                Some(&mut n),
+            )
+            .ok()?;
             (n == 8).then(|| usize::from_le_bytes(b))
         };
-        let Some(params) = read_usize(peb + PEB_PROCESS_PARAMETERS) else { return Launcher::default() };
+        let Some(params) = read_usize(peb + PEB_PROCESS_PARAMETERS) else {
+            return Launcher::default();
+        };
         if params == 0 {
             return Launcher::default();
         }
-        let Some(env) = read_usize(params + RUPP_ENVIRONMENT) else { return Launcher::default() };
+        let Some(env) = read_usize(params + RUPP_ENVIRONMENT) else {
+            return Launcher::default();
+        };
         if env == 0 {
             return Launcher::default();
         }
@@ -804,10 +876,22 @@ fn read_launcher(pid: u32) -> Launcher {
         }
         let mut buf = vec![0u8; size];
         let mut n: usize = 0;
-        if ReadProcessMemory(h.0, env as *const c_void, buf.as_mut_ptr() as *mut c_void, size, Some(&mut n)).is_err() || n < 4 {
+        if ReadProcessMemory(
+            h.0,
+            env as *const c_void,
+            buf.as_mut_ptr() as *mut c_void,
+            size,
+            Some(&mut n),
+        )
+        .is_err()
+            || n < 4
+        {
             return Launcher::default();
         }
-        let words: Vec<u16> = buf[..n].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let words: Vec<u16> = buf[..n]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
         parse_launcher(&words)
     }
 }
@@ -833,7 +917,9 @@ pub(crate) fn launcher_from_env_lines(lines: &[String]) -> Launcher {
     let mut l = Launcher::default();
     let mut host_rank = 0u8; // prioridade: Maestri > VS Code/Cursor > Windows Terminal/outros
     for s in lines {
-        let Some((k, v)) = s.split_once('=') else { continue };
+        let Some((k, v)) = s.split_once('=') else {
+            continue;
+        };
         let ku = k.to_ascii_uppercase();
         let mut set_host = |name: &str, rank: u8, l: &mut Launcher| {
             if host_rank < rank {
@@ -842,7 +928,10 @@ pub(crate) fn launcher_from_env_lines(lines: &[String]) -> Launcher {
             }
         };
         match ku.as_str() {
-            "CLAUDECODE" | "CLAUDE_CODE_ENTRYPOINT" | "CLAUDE_CODE_SESSION_ID" | "CLAUDE_CODE_CHILD_SESSION" => {
+            "CLAUDECODE"
+            | "CLAUDE_CODE_ENTRYPOINT"
+            | "CLAUDE_CODE_SESSION_ID"
+            | "CLAUDE_CODE_CHILD_SESSION" => {
                 l.agent.get_or_insert_with(|| "Claude Code".into());
                 if ku == "CLAUDE_CODE_SESSION_ID" {
                     l.session = Some(v.chars().take(8).collect());
@@ -852,8 +941,12 @@ pub(crate) fn launcher_from_env_lines(lines: &[String]) -> Launcher {
                 l.agent.get_or_insert_with(|| "Claude Code".into());
                 l.agent_pid = v.trim().parse().ok();
             }
-            "CODEX_SANDBOX" | "CODEX_SANDBOX_NETWORK_DISABLED" | "CODEX_THREAD_ID" | "CODEX_SESSION_ID"
-            | "CODEX_MANAGED_BY_NPM" | "CODEX_CI" => {
+            "CODEX_SANDBOX"
+            | "CODEX_SANDBOX_NETWORK_DISABLED"
+            | "CODEX_THREAD_ID"
+            | "CODEX_SESSION_ID"
+            | "CODEX_MANAGED_BY_NPM"
+            | "CODEX_CI" => {
                 l.agent.get_or_insert_with(|| "Codex".into());
                 if ku == "CODEX_THREAD_ID" || ku == "CODEX_SESSION_ID" {
                     l.session = Some(v.chars().take(8).collect());
@@ -869,14 +962,29 @@ pub(crate) fn launcher_from_env_lines(lines: &[String]) -> Launcher {
             "HERMES_SESSION_ID" | "HERMES_AGENT" => {
                 l.agent.get_or_insert_with(|| "Hermes".into());
             }
-            "MAESTRI_TERMINAL_ID" | "MAESTRI_WORKSPACE_ID" | "MAESTRI_PIPE" => set_host("Maestri", 3, &mut l),
+            "MAESTRI_TERMINAL_ID" | "MAESTRI_WORKSPACE_ID" | "MAESTRI_PIPE" => {
+                set_host("Maestri", 3, &mut l)
+            }
             "CURSOR_TRACE_ID" => set_host("Cursor", 2, &mut l),
             "TERM_PROGRAM" => {
                 let vl = v.to_ascii_lowercase();
-                let name = if vl == "vscode" { Some("VS Code") } else if vl.contains("cursor") { Some("Cursor") }
-                    else if vl.contains("zed") { Some("Zed") } else if vl.contains("warp") { Some("Warp") }
-                    else if vl.contains("iterm") { Some("iTerm") } else if vl.contains("apple_terminal") { Some("Terminal") }
-                    else if vl.contains("wezterm") { Some("WezTerm") } else { None };
+                let name = if vl == "vscode" {
+                    Some("VS Code")
+                } else if vl.contains("cursor") {
+                    Some("Cursor")
+                } else if vl.contains("zed") {
+                    Some("Zed")
+                } else if vl.contains("warp") {
+                    Some("Warp")
+                } else if vl.contains("iterm") {
+                    Some("iTerm")
+                } else if vl.contains("apple_terminal") {
+                    Some("Terminal")
+                } else if vl.contains("wezterm") {
+                    Some("WezTerm")
+                } else {
+                    None
+                };
                 if let Some(nm) = name {
                     set_host(nm, 2, &mut l);
                 }
@@ -886,7 +994,9 @@ pub(crate) fn launcher_from_env_lines(lines: &[String]) -> Launcher {
             "ALACRITTY_WINDOW_ID" | "ALACRITTY_SOCKET" => set_host("Alacritty", 1, &mut l),
             "KITTY_WINDOW_ID" | "KITTY_PID" => set_host("Kitty", 1, &mut l),
             "KONSOLE_VERSION" | "KONSOLE_DBUS_SESSION" => set_host("Konsole", 1, &mut l),
-            "GNOME_TERMINAL_SCREEN" | "GNOME_TERMINAL_SERVICE" => set_host("GNOME Terminal", 1, &mut l),
+            "GNOME_TERMINAL_SCREEN" | "GNOME_TERMINAL_SERVICE" => {
+                set_host("GNOME Terminal", 1, &mut l)
+            }
             "TILIX_ID" => set_host("Tilix", 1, &mut l),
             "GHOSTTY_BIN_DIR" => set_host("Ghostty", 1, &mut l),
             "CONEMUPID" => set_host("ConEmu", 1, &mut l),
@@ -969,7 +1079,10 @@ pub fn enable_debug_privilege() {
 #[path = "procs_unix.rs"]
 mod procs_unix;
 #[cfg(not(windows))]
-pub use procs_unix::{comm_of, enable_debug_privilege, is_admin, kernel_state, kill, live_state, mem_status, nudge_parent, terminate, Sampler};
+pub use procs_unix::{
+    comm_of, enable_debug_privilege, is_admin, kernel_state, kill, live_state, mem_status,
+    nudge_parent, terminate, Sampler,
+};
 
 #[cfg(windows)]
 pub fn terminate(pid: u32) -> KillOutcome {
@@ -1022,20 +1135,47 @@ mod unit_tests {
 
     #[test]
     fn service_units_name_the_launcher() {
-        assert_eq!(unit_label("hermes-gateway.service").as_deref(), Some("Hermes (gateway)"));
-        assert_eq!(unit_label("agent-bench@dailywork-campanhas.service").as_deref(), Some("agent-bench · dailywork-campanhas"));
+        assert_eq!(
+            unit_label("hermes-gateway.service").as_deref(),
+            Some("Hermes (gateway)")
+        );
+        assert_eq!(
+            unit_label("agent-bench@dailywork-campanhas.service").as_deref(),
+            Some("agent-bench · dailywork-campanhas")
+        );
         assert_eq!(unit_label("9router.service").as_deref(), Some("9Router"));
-        assert_eq!(unit_label("no-mistakes-daemon-335d9d88.service").as_deref(), Some("no-mistakes-daemon-335d9d88"));
+        assert_eq!(
+            unit_label("no-mistakes-daemon-335d9d88.service").as_deref(),
+            Some("no-mistakes-daemon-335d9d88")
+        );
     }
 
     #[test]
     fn desktop_scopes_collapse_to_desktop() {
-        assert_eq!(unit_label("app-Hyprland-gtk\\x2dlaunch-d25303f7.scope").as_deref(), Some("desktop"));
-        assert_eq!(unit_label("app-Hyprland-xdg\\x2dterminal\\x2dexec-b5376856.scope").as_deref(), Some("desktop"));
-        assert_eq!(unit_label("app-org.chromium.Chromium-1962181.scope").as_deref(), Some("desktop (navegador)"));
-        assert_eq!(unit_label("app-com.anthropic.Claude-155069.scope").as_deref(), Some("Claude Desktop"));
-        assert_eq!(unit_label("app-discord-3217129.scope").as_deref(), Some("desktop · discord"));
-        assert_eq!(unit_label("tmux-spawn-56e310aa-05c6.scope").as_deref(), Some("tmux"));
+        assert_eq!(
+            unit_label("app-Hyprland-gtk\\x2dlaunch-d25303f7.scope").as_deref(),
+            Some("desktop")
+        );
+        assert_eq!(
+            unit_label("app-Hyprland-xdg\\x2dterminal\\x2dexec-b5376856.scope").as_deref(),
+            Some("desktop")
+        );
+        assert_eq!(
+            unit_label("app-org.chromium.Chromium-1962181.scope").as_deref(),
+            Some("desktop (navegador)")
+        );
+        assert_eq!(
+            unit_label("app-com.anthropic.Claude-155069.scope").as_deref(),
+            Some("Claude Desktop")
+        );
+        assert_eq!(
+            unit_label("app-discord-3217129.scope").as_deref(),
+            Some("desktop · discord")
+        );
+        assert_eq!(
+            unit_label("tmux-spawn-56e310aa-05c6.scope").as_deref(),
+            Some("tmux")
+        );
     }
 
     #[test]

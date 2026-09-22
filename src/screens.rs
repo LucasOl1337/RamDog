@@ -20,6 +20,8 @@ use std::time::{Duration, Instant};
 
 use egui::{Color32, RichText, Sense, Stroke, StrokeKind};
 
+use crate::config::Locale;
+
 use windows::core::BOOL;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Dwm::{
@@ -68,7 +70,12 @@ pub struct R {
 
 impl R {
     fn of(rc: RECT) -> Self {
-        Self { l: rc.left, t: rc.top, r: rc.right, b: rc.bottom }
+        Self {
+            l: rc.left,
+            t: rc.top,
+            r: rc.right,
+            b: rc.bottom,
+        }
     }
     fn w(self) -> i32 {
         self.r - self.l
@@ -90,7 +97,12 @@ impl R {
         let (w, h) = (self.w() as f32, self.h() as f32);
         let l = self.l + (f[0] * w).round() as i32;
         let t = self.t + (f[1] * h).round() as i32;
-        R { l, t, r: l + (f[2] * w).round() as i32, b: t + (f[3] * h).round() as i32 }
+        R {
+            l,
+            t,
+            r: l + (f[2] * w).round() as i32,
+            b: t + (f[3] * h).round() as i32,
+        }
     }
     /// Onde este retângulo está dentro de `base`, em fração — o inverso de `frac`.
     fn frac_in(self, base: R) -> [f32; 4] {
@@ -115,7 +127,11 @@ pub struct Grid {
 
 /// As grades embutidas. Fração, nunca pixel — a mesma grade serve o ultrawide e o notebook.
 pub const GRIDS: &[Grid] = &[
-    Grid { id: "cheio", name: "Cheio", zones: &[[0.0, 0.0, 1.0, 1.0]] },
+    Grid {
+        id: "cheio",
+        name: "Cheio",
+        zones: &[[0.0, 0.0, 1.0, 1.0]],
+    },
     Grid {
         id: "metades",
         name: "Metades",
@@ -129,7 +145,11 @@ pub const GRIDS: &[Grid] = &[
     Grid {
         id: "tercos",
         name: "Terços",
-        zones: &[[0.0, 0.0, 1.0 / 3.0, 1.0], [1.0 / 3.0, 0.0, 1.0 / 3.0, 1.0], [2.0 / 3.0, 0.0, 1.0 / 3.0, 1.0]],
+        zones: &[
+            [0.0, 0.0, 1.0 / 3.0, 1.0],
+            [1.0 / 3.0, 0.0, 1.0 / 3.0, 1.0],
+            [2.0 / 3.0, 0.0, 1.0 / 3.0, 1.0],
+        ],
     },
     Grid {
         id: "quadrantes",
@@ -144,17 +164,38 @@ pub const GRIDS: &[Grid] = &[
     Grid {
         id: "principal2",
         name: "Principal + 2",
-        zones: &[[0.0, 0.0, 0.6, 1.0], [0.6, 0.0, 0.4, 0.5], [0.6, 0.5, 0.4, 0.5]],
+        zones: &[
+            [0.0, 0.0, 0.6, 1.0],
+            [0.6, 0.0, 0.4, 0.5],
+            [0.6, 0.5, 0.4, 0.5],
+        ],
     },
     Grid {
         id: "centro",
         name: "Centro largo",
-        zones: &[[0.0, 0.0, 0.25, 1.0], [0.25, 0.0, 0.5, 1.0], [0.75, 0.0, 0.25, 1.0]],
+        zones: &[
+            [0.0, 0.0, 0.25, 1.0],
+            [0.25, 0.0, 0.5, 1.0],
+            [0.75, 0.0, 0.25, 1.0],
+        ],
     },
 ];
 
 fn grid_by_id(id: &str) -> &'static Grid {
     GRIDS.iter().find(|g| g.id == id).unwrap_or(&GRIDS[1])
+}
+
+fn grid_name(grid: &Grid, locale: Locale) -> &'static str {
+    match grid.id {
+        "cheio" => locale.text("Cheio", "Full screen"),
+        "metades" => locale.text("Metades", "Halves"),
+        "deitadas" => locale.text("Deitadas", "Horizontal halves"),
+        "tercos" => locale.text("Terços", "Thirds"),
+        "quadrantes" => locale.text("Quadrantes", "Quadrants"),
+        "principal2" => locale.text("Principal + 2", "Main + 2"),
+        "centro" => locale.text("Centro largo", "Wide center"),
+        _ => grid.name,
+    }
 }
 
 // ---------- leitura do sistema ----------
@@ -183,7 +224,12 @@ pub struct Win {
     pub minimized: bool,
 }
 
-unsafe extern "system" fn push_monitor(hmon: HMONITOR, _hdc: HDC, _rc: *mut RECT, lp: LPARAM) -> BOOL {
+unsafe extern "system" fn push_monitor(
+    hmon: HMONITOR,
+    _hdc: HDC,
+    _rc: *mut RECT,
+    lp: LPARAM,
+) -> BOOL {
     let out = unsafe { &mut *(lp.0 as *mut Vec<Monitor>) };
     let mut mi = MONITORINFOEXW::default();
     mi.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
@@ -252,7 +298,10 @@ fn is_manageable(hwnd: HWND) -> bool {
         let mut cls = [0u16; 128];
         let n = GetClassNameW(hwnd, &mut cls) as usize;
         let cls = String::from_utf16_lossy(&cls[..n]);
-        !matches!(cls.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Button")
+        !matches!(
+            cls.as_str(),
+            "Progman" | "WorkerW" | "Shell_TrayWnd" | "Button"
+        )
     }
 }
 
@@ -330,6 +379,10 @@ pub fn scan_windows(mons: &[Monitor], procs: &[ProcInfo]) -> Vec<Win> {
 /// janela maximizada ignora `SetWindowPos`) e compensar a sombra do DWM, medindo a
 /// diferença entre o retângulo cru e o visual *depois* de restaurar.
 pub fn place(hwnd_raw: isize, target: R) -> Result<(), String> {
+    place_for(hwnd_raw, target, Locale::Portuguese)
+}
+
+pub fn place_for(hwnd_raw: isize, target: R, _locale: Locale) -> Result<(), String> {
     let hwnd = HWND(hwnd_raw as *mut c_void);
     unsafe {
         if IsIconic(hwnd).as_bool() || IsZoomed(hwnd).as_bool() {
@@ -403,8 +456,14 @@ fn work_dir(exe: &str) -> Option<std::path::PathBuf> {
 }
 
 fn launch(slot: &ScreenSlot) -> Result<(), String> {
+    launch_for(slot, Locale::Portuguese)
+}
+
+fn launch_for(slot: &ScreenSlot, locale: Locale) -> Result<(), String> {
     if slot.exe.trim().is_empty() {
-        return Err("sem caminho de executável".into());
+        return Err(locale
+            .text("sem caminho de executável", "executable path is missing")
+            .into());
     }
     let mut cmd = std::process::Command::new(&slot.exe);
     cmd.args(split_args(&slot.args));
@@ -415,7 +474,10 @@ fn launch(slot: &ScreenSlot) -> Result<(), String> {
 }
 
 fn file_name_lower(path: &str) -> String {
-    path.rsplit(['\\', '/']).next().unwrap_or(path).to_lowercase()
+    path.rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(path)
+        .to_lowercase()
 }
 
 fn slot_label(slot: &ScreenSlot) -> String {
@@ -520,38 +582,66 @@ impl Screens {
 
     // ---------- UI ----------
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, procs: &[ProcInfo], cfg: &mut Config) -> Vec<ScreenOut> {
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        procs: &[ProcInfo],
+        cfg: &mut Config,
+    ) -> Vec<ScreenOut> {
+        let locale = cfg.locale;
         self.maybe_rescan(procs);
         if self.icons.poll(ui.ctx()) {
             ui.ctx().request_repaint();
         }
         let mut out = Vec::new();
-        self.pump_waiting(&mut out);
+        self.pump_waiting(cfg.locale, &mut out);
 
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Telas").strong().size(16.0));
             ui.label(
-                RichText::new("— arraste as janelas no mapa, encaixe na grade e monte cenários")
-                    .color(MUTED),
+                RichText::new(locale.text("Telas", "Screens"))
+                    .strong()
+                    .size(16.0),
+            );
+            ui.label(
+                RichText::new(locale.text(
+                    "— arraste as janelas no mapa, encaixe na grade e monte cenários",
+                    "— drag windows on the map, snap them to a grid, and build scenes",
+                ))
+                .color(MUTED),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Atualizar").on_hover_text("Relê monitores e janelas agora").clicked() {
+                if ui
+                    .small_button(locale.text("Atualizar", "Refresh"))
+                    .on_hover_text(locale.text(
+                        "Relê monitores e janelas agora",
+                        "Rereads monitors and windows now",
+                    ))
+                    .clicked()
+                {
                     self.last_scan = None;
                 }
                 if !self.waiting.is_empty() {
                     ui.spinner();
                     ui.label(
-                        RichText::new(format!("abrindo {}…", self.waiting.len())).small().color(MUTED),
+                        RichText::new(format!(
+                            "{} {}…",
+                            locale.text("abrindo", "opening"),
+                            self.waiting.len()
+                        ))
+                        .small()
+                        .color(MUTED),
                     );
                 }
             });
         });
         ui.label(
             RichText::new(format!(
-                "{} monitor(es) · {} janela(s) organizáveis",
+                "{} {} · {} {}",
                 self.mons.len(),
-                self.wins.len()
+                locale.text("monitor(es)", "monitor(s)"),
+                self.wins.len(),
+                locale.text("janela(s) organizáveis", "arrangeable window(s)"),
             ))
             .small()
             .color(MUTED),
@@ -581,7 +671,8 @@ impl Screens {
             p.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "nenhum monitor lido",
+                cfg.locale
+                    .text("nenhum monitor lido", "no monitor detected"),
                 egui::FontId::proportional(13.0),
                 MUTED,
             );
@@ -645,12 +736,23 @@ impl Screens {
             let sel = self.sel == Some(w.hwnd);
             let dragging = self.drag.as_ref().is_some_and(|d| d.hwnd == w.hwnd);
             let fill = if sel { ACCENT_BG } else { SURFACE_HI };
-            let fill = if resp.hovered() { fill.gamma_multiply(1.35) } else { fill };
-            p.rect_filled(wr, 3.0, fill.gamma_multiply(if dragging { 0.4 } else { 1.0 }));
+            let fill = if resp.hovered() {
+                fill.gamma_multiply(1.35)
+            } else {
+                fill
+            };
+            p.rect_filled(
+                wr,
+                3.0,
+                fill.gamma_multiply(if dragging { 0.4 } else { 1.0 }),
+            );
             p.rect_stroke(
                 wr,
                 3.0,
-                Stroke::new(if sel { 1.6_f32 } else { 1.0_f32 }, if sel { ACCENT } else { LINE }),
+                Stroke::new(
+                    if sel { 1.6_f32 } else { 1.0_f32 },
+                    if sel { ACCENT } else { LINE },
+                ),
                 StrokeKind::Inside,
             );
             if wr.width() > 46.0 && wr.height() > 16.0 {
@@ -731,7 +833,12 @@ impl Screens {
                     p.rect_filled(tr, 3.0, ACCENT.gamma_multiply(0.22));
                     p.rect_stroke(tr, 3.0, Stroke::new(1.5_f32, ACCENT), StrokeKind::Inside);
                 }
-                p.rect_stroke(ghost, 3.0, Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.6)), StrokeKind::Inside);
+                p.rect_stroke(
+                    ghost,
+                    3.0,
+                    Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.6)),
+                    StrokeKind::Inside,
+                );
                 ui.ctx().request_repaint();
             }
         }
@@ -747,7 +854,11 @@ impl Screens {
                 mr.left_bottom() + egui::vec2(4.0, -18.0),
                 egui::vec2(if m.primary { 26.0 } else { 15.0 }, 14.0),
             );
-            p.rect_filled(chip, 3.0, Color32::from_rgb(13, 15, 19).gamma_multiply(0.92));
+            p.rect_filled(
+                chip,
+                3.0,
+                Color32::from_rgb(13, 15, 19).gamma_multiply(0.92),
+            );
             p.text(
                 chip.center(),
                 egui::Align2::CENTER_CENTER,
@@ -765,9 +876,16 @@ impl Screens {
         }
 
         if let Some((hwnd, tgt)) = drop_at {
-            match place(hwnd, tgt) {
+            match place_for(hwnd, tgt, cfg.locale) {
                 Ok(()) => self.last_scan = None,
-                Err(e) => out.push(ScreenOut::Toast(format!("não deu para mover: {e}"), true)),
+                Err(e) => out.push(ScreenOut::Toast(
+                    if cfg.locale == Locale::Portuguese {
+                        format!("não deu para mover: {e}")
+                    } else {
+                        format!("could not move window: {e}")
+                    },
+                    true,
+                )),
             }
         }
         if let Some(h) = click_focus {
@@ -778,15 +896,15 @@ impl Screens {
     /// Grade, encaixe e distribuição — a fileira embaixo do mapa.
     fn controls(&mut self, ui: &mut egui::Ui, cfg: &mut Config, out: &mut Vec<ScreenOut>) {
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Grade:").small().color(MUTED));
+            ui.label(RichText::new(cfg.locale.text("Grade:", "Grid:")).small().color(MUTED));
             let cur = self.grid(cfg);
             let mut id = cur.id.to_string();
             egui::ComboBox::from_id_salt("scr_grid")
-                .selected_text(RichText::new(cur.name).size(12.0))
+                .selected_text(RichText::new(grid_name(cur, cfg.locale)).size(12.0))
                 .width(130.0)
                 .show_ui(ui, |ui| {
                     for g in GRIDS {
-                        ui.selectable_value(&mut id, g.id.to_string(), g.name);
+                        ui.selectable_value(&mut id, g.id.to_string(), grid_name(g, cfg.locale));
                     }
                 });
             if id != cur.id {
@@ -795,11 +913,8 @@ impl Screens {
             }
             let mut snap = cfg.screen_snap;
             if ui
-                .checkbox(&mut snap, RichText::new("encaixar ao arrastar").small())
-                .on_hover_text(
-                    "Ligado: soltar a janela no mapa a encaixa na zona da grade embaixo do cursor.\n\
-                     Desligado: a janela vai exatamente para onde você soltou, do tamanho que estava.",
-                )
+                .checkbox(&mut snap, RichText::new(cfg.locale.text("encaixar ao arrastar", "snap while dragging")).small())
+                .on_hover_text(cfg.locale.text("Ligado: soltar a janela no mapa a encaixa na zona da grade embaixo do cursor.\nDesligado: a janela vai exatamente para onde você soltou, do tamanho que estava.", "On: dropping a window on the map snaps it to the grid zone below the cursor.\nOff: the window goes exactly where you dropped it, keeping its size."))
                 .changed()
             {
                 cfg.screen_snap = snap;
@@ -809,28 +924,38 @@ impl Screens {
             ui.separator();
             let grid = self.grid(cfg);
             for i in 0..self.mons.len() {
-                let label = format!("Distribuir {}", i + 1);
+                let label = format!("{} {}", cfg.locale.text("Distribuir", "Arrange"), i + 1);
                 let n = self.wins.iter().filter(|w| w.monitor == i && !w.minimized).count();
                 if ui
                     .add_enabled(n > 0, egui::Button::new(RichText::new(label).small()))
-                    .on_hover_text(format!(
+                    .on_hover_text(if cfg.locale == Locale::Portuguese { format!(
                         "{}
 Encaixa as {n} janela(s) deste monitor nas {} zona(s) da grade \"{}\"",
                         self.mons[i].name,
                         grid.zones.len(),
-                        grid.name
-                    ))
+                        grid_name(grid, cfg.locale)
+                    ) } else {
+                        format!("{}\nArranges {n} window(s) on this monitor into {} zone(s) of the grid \"{}\"", self.mons[i].name, grid.zones.len(), grid_name(grid, cfg.locale))
+                    })
                     .clicked()
                 {
-                    self.distribute(i, grid, out);
+                    self.distribute(i, grid, cfg.locale, out);
                 }
             }
         });
     }
 
     /// Enfileira as janelas de um monitor nas zonas da grade, na ordem da pilha Z.
-    fn distribute(&mut self, mi: usize, grid: &'static Grid, out: &mut Vec<ScreenOut>) {
-        let Some(m) = self.mons.get(mi).cloned() else { return };
+    fn distribute(
+        &mut self,
+        mi: usize,
+        grid: &'static Grid,
+        locale: Locale,
+        out: &mut Vec<ScreenOut>,
+    ) {
+        let Some(m) = self.mons.get(mi).cloned() else {
+            return;
+        };
         let targets: Vec<isize> = self
             .wins
             .iter()
@@ -841,19 +966,37 @@ Encaixa as {n} janela(s) deste monitor nas {} zona(s) da grade \"{}\"",
         let mut erros = 0;
         for (i, hwnd) in targets.iter().enumerate() {
             let tgt = m.work.frac(grid.zones[i]);
-            if place(*hwnd, tgt).is_err() {
+            if place_for(*hwnd, tgt, locale).is_err() {
                 erros += 1;
             }
         }
         self.last_scan = None;
         if erros > 0 {
             out.push(ScreenOut::Toast(
-                format!("{erros} janela(s) não aceitaram mover — provavelmente rodam como admin"),
+                if locale == Locale::Portuguese {
+                    format!(
+                        "{erros} janela(s) não aceitaram mover — provavelmente rodam como admin"
+                    )
+                } else {
+                    format!("{erros} window(s) could not be moved — they may be running as admin")
+                },
                 true,
             ));
         } else {
             out.push(ScreenOut::Toast(
-                format!("{} janela(s) encaixadas em \"{}\"", targets.len(), grid.name),
+                if locale == Locale::Portuguese {
+                    format!(
+                        "{} janela(s) encaixadas em \"{}\"",
+                        targets.len(),
+                        grid_name(grid, locale)
+                    )
+                } else {
+                    format!(
+                        "{} window(s) arranged in \"{}\"",
+                        targets.len(),
+                        grid_name(grid, locale)
+                    )
+                },
                 false,
             ));
         }
@@ -862,10 +1005,14 @@ Encaixa as {n} janela(s) deste monitor nas {} zona(s) da grade \"{}\"",
     /// Coluna esquerda: as janelas abertas agora.
     fn windows_panel(&mut self, ui: &mut egui::Ui, cfg: &mut Config, out: &mut Vec<ScreenOut>) {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Janelas abertas").strong().size(13.0));
+            ui.label(
+                RichText::new(cfg.locale.text("Janelas abertas", "Open windows"))
+                    .strong()
+                    .size(13.0),
+            );
             ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
-                    .hint_text("filtrar…")
+                    .hint_text(cfg.locale.text("filtrar…", "filter…"))
                     .desired_width(110.0),
             );
         });
@@ -875,9 +1022,7 @@ Encaixa as {n} janela(s) deste monitor nas {} zona(s) da grade \"{}\"",
             .wins
             .iter()
             .filter(|w| {
-                q.is_empty()
-                    || w.title.to_lowercase().contains(&q)
-                    || w.exe_name.contains(&q)
+                q.is_empty() || w.title.to_lowercase().contains(&q) || w.exe_name.contains(&q)
             })
             .cloned()
             .collect();
@@ -915,18 +1060,18 @@ Encaixa as {n} janela(s) deste monitor nas {} zona(s) da grade \"{}\"",
                             focus(w.hwnd);
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("+").on_hover_text("Põe esta janela no cenário selecionado, na posição em que ela está").clicked() {
+                            if ui.small_button("+").on_hover_text(cfg.locale.text("Põe esta janela no cenário selecionado, na posição em que ela está", "Adds this window to the selected scene at its current position")).clicked() {
                                 add_slot = Some(w.clone());
                             }
                             if ui
                                 .add_enabled(!w.maximized, egui::Button::new("□").small())
-                                .on_hover_text(if w.maximized { "já está maximizada" } else { "Maximizar" })
+                                .on_hover_text(if w.maximized { cfg.locale.text("já está maximizada", "already maximized") } else { cfg.locale.text("Maximizar", "Maximize") })
                                 .clicked()
                             {
                                 show(w.hwnd, SW_SHOWMAXIMIZED);
                                 self.last_scan = None;
                             }
-                            if ui.small_button("—").on_hover_text("Minimizar").clicked() {
+                            if ui.small_button("—").on_hover_text(cfg.locale.text("Minimizar", "Minimize")).clicked() {
                                 show(w.hwnd, SW_MINIMIZE);
                                 self.last_scan = None;
                             }
@@ -937,27 +1082,28 @@ Encaixa as {n} janela(s) deste monitor nas {} zona(s) da grade \"{}\"",
                                 }
                                 if ui
                                     .small_button(RichText::new(format!("→{}", i + 1)).size(10.0))
-                                    .on_hover_text(format!("Mandar para o monitor {}", i + 1))
+                                    .on_hover_text(format!("{} {}", cfg.locale.text("Mandar para o monitor", "Send to monitor"), i + 1))
                                     .clicked()
                                 {
                                     let src = self.mons[w.monitor].work;
                                     let f = w.rect.frac_in(src);
-                                    if let Err(e) = place(w.hwnd, m.work.frac(f)) {
-                                        out.push(ScreenOut::Toast(format!("não deu para mover: {e}"), true));
+                                    if let Err(e) = place_for(w.hwnd, m.work.frac(f), cfg.locale) {
+                                        out.push(ScreenOut::Toast(if cfg.locale == Locale::Portuguese { format!("não deu para mover: {e}") } else { format!("could not move window: {e}") }, true));
                                     }
                                     self.last_scan = None;
                                 }
                             }
                             let estado = if w.minimized {
-                                " · minimizada"
+                                cfg.locale.text(" · minimizada", " · minimized")
                             } else if w.maximized {
-                                " · máx"
+                                cfg.locale.text(" · máx", " · max")
                             } else {
                                 ""
                             };
                             ui.label(
                                 RichText::new(format!(
-                                    "tela {} · {}×{}{estado}",
+                                    "{} {} · {}×{}{estado}",
+                                    cfg.locale.text("tela", "screen"),
                                     w.monitor + 1,
                                     w.rect.w(),
                                     w.rect.h()
@@ -979,17 +1125,37 @@ Encaixa as {n} janela(s) deste monitor nas {} zona(s) da grade \"{}\"",
 
     fn add_slot_from(&mut self, w: &Win, cfg: &mut Config, out: &mut Vec<ScreenOut>) {
         if self.preset_sel.is_empty() || !cfg.screen_presets.contains_key(&self.preset_sel) {
-            out.push(ScreenOut::Toast("escolha ou crie um cenário antes".into(), true));
-            return;
-        }
-        if w.exe.is_empty() {
             out.push(ScreenOut::Toast(
-                format!("sem caminho do executável de \"{}\" — cenário não conseguiria reabrir", w.title),
+                cfg.locale
+                    .text(
+                        "escolha ou crie um cenário antes",
+                        "choose or create a scene first",
+                    )
+                    .into(),
                 true,
             ));
             return;
         }
-        let Some(m) = self.mons.get(w.monitor) else { return };
+        if w.exe.is_empty() {
+            out.push(ScreenOut::Toast(
+                if cfg.locale == Locale::Portuguese {
+                    format!(
+                        "sem caminho do executável de \"{}\" — cenário não conseguiria reabrir",
+                        w.title
+                    )
+                } else {
+                    format!(
+                        "no executable path for \"{}\" — the scene could not reopen it",
+                        w.title
+                    )
+                },
+                true,
+            ));
+            return;
+        }
+        let Some(m) = self.mons.get(w.monitor) else {
+            return;
+        };
         let f = w.rect.frac_in(m.work);
         let slot = ScreenSlot {
             exe: w.exe.clone(),
@@ -1007,17 +1173,32 @@ Encaixa as {n} janela(s) deste monitor nas {} zona(s) da grade \"{}\"",
         if let Some(p) = cfg.screen_presets.get_mut(&name) {
             p.slots.push(slot);
         }
-        out.push(ScreenOut::Toast(format!("adicionado ao cenário \"{name}\""), false));
+        out.push(ScreenOut::Toast(
+            if cfg.locale == Locale::Portuguese {
+                format!("adicionado ao cenário \"{name}\"")
+            } else {
+                format!("added to scene \"{name}\"")
+            },
+            false,
+        ));
         out.push(ScreenOut::SaveCfg);
     }
 
     /// Coluna direita: cenários salvos e o conteúdo do selecionado.
     fn preset_panel(&mut self, ui: &mut egui::Ui, cfg: &mut Config, out: &mut Vec<ScreenOut>) {
-        ui.label(RichText::new("Cenários").strong().size(13.0));
+        ui.label(
+            RichText::new(cfg.locale.text("Cenários", "Scenes"))
+                .strong()
+                .size(13.0),
+        );
         ui.add_space(2.0);
         ui.horizontal_wrapped(|ui| {
             let names: Vec<String> = cfg.screen_presets.keys().cloned().collect();
-            let shown = if self.preset_sel.is_empty() { "—".into() } else { self.preset_sel.clone() };
+            let shown = if self.preset_sel.is_empty() {
+                "—".into()
+            } else {
+                self.preset_sel.clone()
+            };
             egui::ComboBox::from_id_salt("scr_preset")
                 .selected_text(RichText::new(shown).size(12.0))
                 .width(130.0)
@@ -1029,24 +1210,43 @@ Encaixa as {n} janela(s) deste monitor nas {} zona(s) da grade \"{}\"",
                 });
             let has = cfg.screen_presets.contains_key(&self.preset_sel);
             if ui
-                .add_enabled(has, egui::Button::new(RichText::new("Aplicar").small()))
-                .on_hover_text("Abre o que não estiver aberto e põe cada janela no lugar")
+                .add_enabled(
+                    has,
+                    egui::Button::new(RichText::new(cfg.locale.text("Aplicar", "Apply")).small()),
+                )
+                .on_hover_text(cfg.locale.text(
+                    "Abre o que não estiver aberto e põe cada janela no lugar",
+                    "Opens what is not open and places each window",
+                ))
                 .clicked()
             {
-                let p = cfg.screen_presets.get(&self.preset_sel).cloned().unwrap_or_default();
-                self.apply_preset(&p, out);
+                let p = cfg
+                    .screen_presets
+                    .get(&self.preset_sel)
+                    .cloned()
+                    .unwrap_or_default();
+                self.apply_preset(&p, cfg.locale, out);
             }
             if ui
                 .add_enabled(
                     has,
                     egui::Button::new(
-                        RichText::new("Excluir").small().color(Color32::from_rgb(232, 120, 100)),
+                        RichText::new(cfg.locale.text("Excluir", "Delete"))
+                            .small()
+                            .color(Color32::from_rgb(232, 120, 100)),
                     ),
                 )
                 .clicked()
             {
                 cfg.screen_presets.remove(&self.preset_sel);
-                out.push(ScreenOut::Toast(format!("cenário \"{}\" excluído", self.preset_sel), false));
+                out.push(ScreenOut::Toast(
+                    if cfg.locale == Locale::Portuguese {
+                        format!("cenário \"{}\" excluído", self.preset_sel)
+                    } else {
+                        format!("scene \"{}\" deleted", self.preset_sel)
+                    },
+                    false,
+                ));
                 self.preset_sel.clear();
                 out.push(ScreenOut::SaveCfg);
             }
@@ -1054,23 +1254,43 @@ Encaixa as {n} janela(s) deste monitor nas {} zona(s) da grade \"{}\"",
         ui.horizontal_wrapped(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.preset_name)
-                    .hint_text("nome do cenário")
+                    .hint_text(cfg.locale.text("nome do cenário", "scene name"))
                     .desired_width(120.0),
             );
             let name = self.preset_name.trim().to_string();
             if ui
-                .add_enabled(!name.is_empty(), egui::Button::new(RichText::new("Novo vazio").small()))
+                .add_enabled(
+                    !name.is_empty(),
+                    egui::Button::new(
+                        RichText::new(cfg.locale.text("Novo vazio", "New empty")).small(),
+                    ),
+                )
                 .clicked()
             {
                 cfg.screen_presets.entry(name.clone()).or_default();
                 self.preset_sel = name.clone();
                 self.preset_name.clear();
-                out.push(ScreenOut::Toast(format!("cenário \"{name}\" criado"), false));
+                out.push(ScreenOut::Toast(
+                    if cfg.locale == Locale::Portuguese {
+                        format!("cenário \"{name}\" criado")
+                    } else {
+                        format!("scene \"{name}\" created")
+                    },
+                    false,
+                ));
                 out.push(ScreenOut::SaveCfg);
             }
             if ui
-                .add_enabled(!name.is_empty(), egui::Button::new(RichText::new("Salvar atual").small()))
-                .on_hover_text("Guarda todas as janelas de agora, cada uma com sua tela e seu retângulo")
+                .add_enabled(
+                    !name.is_empty(),
+                    egui::Button::new(
+                        RichText::new(cfg.locale.text("Salvar atual", "Save current")).small(),
+                    ),
+                )
+                .on_hover_text(cfg.locale.text(
+                    "Guarda todas as janelas de agora, cada uma com sua tela e seu retângulo",
+                    "Saves all current windows with their screen and rectangle",
+                ))
                 .clicked()
             {
                 let p = self.snapshot();
@@ -1078,7 +1298,14 @@ Encaixa as {n} janela(s) deste monitor nas {} zona(s) da grade \"{}\"",
                 cfg.screen_presets.insert(name.clone(), p);
                 self.preset_sel = name.clone();
                 self.preset_name.clear();
-                out.push(ScreenOut::Toast(format!("cenário \"{name}\" salvo com {n} janela(s)"), false));
+                out.push(ScreenOut::Toast(
+                    if cfg.locale == Locale::Portuguese {
+                        format!("cenário \"{name}\" salvo com {n} janela(s)")
+                    } else {
+                        format!("scene \"{name}\" saved with {n} window(s)")
+                    },
+                    false,
+                ));
                 out.push(ScreenOut::SaveCfg);
             }
         });
@@ -1087,7 +1314,7 @@ Encaixa as {n} janela(s) deste monitor nas {} zona(s) da grade \"{}\"",
         let Some(preset) = cfg.screen_presets.get_mut(&self.preset_sel) else {
             ui.label(
                 RichText::new(
-                    "Escolha um cenário, ou arrume as janelas como você quer e clique \"Salvar atual\".",
+                    cfg.locale.text("Escolha um cenário, ou arrume as janelas como você quer e clique \"Salvar atual\".", "Choose a scene, or arrange the windows and click \"Save current\"."),
                 )
                 .small()
                 .color(MUTED),
@@ -1097,72 +1324,103 @@ Encaixa as {n} janela(s) deste monitor nas {} zona(s) da grade \"{}\"",
         let n_mon = self.mons.len().max(1);
         let mut remove: Option<usize> = None;
         let mut changed = false;
-        egui::ScrollArea::vertical().id_salt("scr_slots").show(ui, |ui| {
-            for (i, slot) in preset.slots.iter_mut().enumerate() {
-                egui::Frame::new()
-                    .fill(SURFACE)
-                    .stroke(Stroke::new(1.0_f32, LINE))
-                    .corner_radius(5.0)
-                    .inner_margin(egui::Margin::symmetric(6, 4))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            if let Some(tex) = self.icons.get(&slot.exe) {
-                                ui.add(egui::Image::new((tex.id(), egui::Vec2::splat(16.0))));
-                            } else {
-                                ui.add_space(16.0);
-                            }
-                            ui.label(RichText::new(slot_label(slot)).size(12.0))
-                                .on_hover_text(&slot.exe);
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.small_button("✖").on_hover_text("Tirar do cenário").clicked() {
-                                    remove = Some(i);
+        egui::ScrollArea::vertical()
+            .id_salt("scr_slots")
+            .show(ui, |ui| {
+                for (i, slot) in preset.slots.iter_mut().enumerate() {
+                    egui::Frame::new()
+                        .fill(SURFACE)
+                        .stroke(Stroke::new(1.0_f32, LINE))
+                        .corner_radius(5.0)
+                        .inner_margin(egui::Margin::symmetric(6, 4))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                if let Some(tex) = self.icons.get(&slot.exe) {
+                                    ui.add(egui::Image::new((tex.id(), egui::Vec2::splat(16.0))));
+                                } else {
+                                    ui.add_space(16.0);
                                 }
-                                let mut m = slot.monitor + 1;
-                                if ui
-                                    .add(egui::DragValue::new(&mut m).range(1..=n_mon).prefix("tela "))
-                                    .changed()
-                                {
-                                    slot.monitor = m - 1;
-                                    changed = true;
-                                }
-                                if ui
-                                    .checkbox(&mut slot.launch, RichText::new("abrir").small())
-                                    .on_hover_text("Abrir o programa se não houver janela dele")
-                                    .changed()
-                                {
-                                    changed = true;
-                                }
+                                ui.label(RichText::new(slot_label(slot)).size(12.0))
+                                    .on_hover_text(&slot.exe);
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui
+                                            .small_button("✖")
+                                            .on_hover_text(
+                                                cfg.locale
+                                                    .text("Tirar do cenário", "Remove from scene"),
+                                            )
+                                            .clicked()
+                                        {
+                                            remove = Some(i);
+                                        }
+                                        let mut m = slot.monitor + 1;
+                                        if ui
+                                            .add(
+                                                egui::DragValue::new(&mut m)
+                                                    .range(1..=n_mon)
+                                                    .prefix(cfg.locale.text("tela ", "screen ")),
+                                            )
+                                            .changed()
+                                        {
+                                            slot.monitor = m - 1;
+                                            changed = true;
+                                        }
+                                        if ui
+                                            .checkbox(
+                                                &mut slot.launch,
+                                                RichText::new(cfg.locale.text("abrir", "open"))
+                                                    .small(),
+                                            )
+                                            .on_hover_text(cfg.locale.text(
+                                                "Abrir o programa se não houver janela dele",
+                                                "Open the program if none of its windows exists",
+                                            ))
+                                            .changed()
+                                        {
+                                            changed = true;
+                                        }
+                                    },
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{:.0}% × {:.0}% em ({:.0}%, {:.0}%)",
+                                        slot.w * 100.0,
+                                        slot.h * 100.0,
+                                        slot.x * 100.0,
+                                        slot.y * 100.0
+                                    ))
+                                    .small()
+                                    .color(MUTED),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui
+                                            .add(
+                                                egui::TextEdit::singleline(&mut slot.title_match)
+                                                    .hint_text(
+                                                        cfg.locale.text(
+                                                            "título contém…",
+                                                            "title contains…",
+                                                        ),
+                                                    )
+                                                    .desired_width(100.0),
+                                            )
+                                            .changed()
+                                        {
+                                            changed = true;
+                                        }
+                                    },
+                                );
                             });
                         });
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(format!(
-                                    "{:.0}% × {:.0}% em ({:.0}%, {:.0}%)",
-                                    slot.w * 100.0,
-                                    slot.h * 100.0,
-                                    slot.x * 100.0,
-                                    slot.y * 100.0
-                                ))
-                                .small()
-                                .color(MUTED),
-                            );
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui
-                                    .add(
-                                        egui::TextEdit::singleline(&mut slot.title_match)
-                                            .hint_text("título contém…")
-                                            .desired_width(100.0),
-                                    )
-                                    .changed()
-                                {
-                                    changed = true;
-                                }
-                            });
-                        });
-                    });
-                ui.add_space(2.0);
-            }
-        });
+                    ui.add_space(2.0);
+                }
+            });
         if let Some(i) = remove {
             preset.slots.remove(i);
             changed = true;
@@ -1179,7 +1437,9 @@ Encaixa as {n} janela(s) deste monitor nas {} zona(s) da grade \"{}\"",
             if w.exe.is_empty() || w.minimized {
                 continue;
             }
-            let Some(m) = self.mons.get(w.monitor) else { continue };
+            let Some(m) = self.mons.get(w.monitor) else {
+                continue;
+            };
             let f = w.rect.frac_in(m.work);
             slots.push(ScreenSlot {
                 exe: w.exe.clone(),
@@ -1199,47 +1459,70 @@ Encaixa as {n} janela(s) deste monitor nas {} zona(s) da grade \"{}\"",
 
     /// Aplica um cenário: o que já está aberto vai para o lugar agora; o que falta é
     /// aberto e entra na fila de espera — a UI não pode travar esperando o Chrome subir.
-    fn apply_preset(&mut self, preset: &ScreenPreset, out: &mut Vec<ScreenOut>) {
+    fn apply_preset(&mut self, preset: &ScreenPreset, locale: Locale, out: &mut Vec<ScreenOut>) {
         let mut used: HashSet<isize> = HashSet::new();
         let mut movidas = 0;
         let mut abrindo = 0;
         let mut erros: Vec<String> = Vec::new();
         for slot in &preset.slots {
-            let Some(target) = slot_target(slot, &self.mons) else { continue };
+            let Some(target) = slot_target(slot, &self.mons) else {
+                continue;
+            };
             match match_window(slot, &self.wins, &used) {
                 Some(hwnd) => {
                     used.insert(hwnd);
-                    match place(hwnd, target) {
+                    match place_for(hwnd, target, locale) {
                         Ok(()) => movidas += 1,
                         Err(e) => erros.push(format!("{}: {e}", slot_label(slot))),
                     }
                 }
-                None if slot.launch => match launch(slot) {
+                None if slot.launch => match launch_for(slot, locale) {
                     Ok(()) => {
                         abrindo += 1;
-                        self.waiting.push(Waiting { slot: slot.clone(), since: Instant::now() });
+                        self.waiting.push(Waiting {
+                            slot: slot.clone(),
+                            since: Instant::now(),
+                        });
                     }
                     Err(e) => erros.push(format!("{}: {e}", slot_label(slot))),
                 },
-                None => erros.push(format!("{}: sem janela aberta", slot_label(slot))),
+                None => erros.push(format!(
+                    "{}: {}",
+                    slot_label(slot),
+                    locale.text("sem janela aberta", "no open window")
+                )),
             }
         }
         self.last_scan = None;
         if erros.is_empty() {
             out.push(ScreenOut::Toast(
-                format!("{movidas} posicionada(s), {abrindo} abrindo"),
+                if locale == Locale::Portuguese {
+                    format!("{movidas} posicionada(s), {abrindo} abrindo")
+                } else {
+                    format!("{movidas} arranged, {abrindo} opening")
+                },
                 false,
             ));
         } else {
             out.push(ScreenOut::Toast(
-                format!("{movidas} posicionada(s), {abrindo} abrindo · {}", erros.join(" · ")),
+                if locale == Locale::Portuguese {
+                    format!(
+                        "{movidas} posicionada(s), {abrindo} abrindo · {}",
+                        erros.join(" · ")
+                    )
+                } else {
+                    format!(
+                        "{movidas} arranged, {abrindo} opening · {}",
+                        erros.join(" · ")
+                    )
+                },
                 true,
             ));
         }
     }
 
     /// A cada frame: as janelas que os cenários estão esperando já apareceram?
-    fn pump_waiting(&mut self, out: &mut Vec<ScreenOut>) {
+    fn pump_waiting(&mut self, locale: Locale, out: &mut Vec<ScreenOut>) {
         if self.waiting.is_empty() {
             return;
         }
@@ -1251,7 +1534,7 @@ Encaixa as {n} janela(s) deste monitor nas {} zona(s) da grade \"{}\"",
             match match_window(&w.slot, &wins, &used) {
                 Some(hwnd) => {
                     if let Some(t) = slot_target(&w.slot, &mons) {
-                        if let Err(e) = place(hwnd, t) {
+                        if let Err(e) = place_for(hwnd, t, locale) {
                             out.push(ScreenOut::Toast(
                                 format!("{}: {e}", slot_label(&w.slot)),
                                 true,
@@ -1262,7 +1545,19 @@ Encaixa as {n} janela(s) deste monitor nas {} zona(s) da grade \"{}\"",
                 }
                 None if w.since.elapsed() > LAUNCH_TIMEOUT => {
                     out.push(ScreenOut::Toast(
-                        format!("{}: a janela não apareceu em {}s", slot_label(&w.slot), LAUNCH_TIMEOUT.as_secs()),
+                        if locale == Locale::Portuguese {
+                            format!(
+                                "{}: a janela não apareceu em {}s",
+                                slot_label(&w.slot),
+                                LAUNCH_TIMEOUT.as_secs()
+                            )
+                        } else {
+                            format!(
+                                "{}: window did not appear within {}s",
+                                slot_label(&w.slot),
+                                LAUNCH_TIMEOUT.as_secs()
+                            )
+                        },
                         true,
                     ));
                 }
@@ -1288,9 +1583,22 @@ mod testes {
 
     #[test]
     fn fracao_ida_e_volta() {
-        let base = R { l: 100, t: 50, r: 2020, b: 1130 };
+        let base = R {
+            l: 100,
+            t: 50,
+            r: 2020,
+            b: 1130,
+        };
         let alvo = base.frac([0.5, 0.0, 0.5, 1.0]);
-        assert_eq!(alvo, R { l: 1060, t: 50, r: 2020, b: 1130 });
+        assert_eq!(
+            alvo,
+            R {
+                l: 1060,
+                t: 50,
+                r: 2020,
+                b: 1130
+            }
+        );
         let f = alvo.frac_in(base);
         assert!((f[0] - 0.5).abs() < 1e-3 && (f[2] - 0.5).abs() < 1e-3);
     }
@@ -1308,11 +1616,36 @@ mod testes {
         let mons = vec![Monitor {
             hmon: 1,
             name: "\\\\.\\DISPLAY1".into(),
-            full: R { l: 0, t: 0, r: 1920, b: 1080 },
-            work: R { l: 0, t: 0, r: 1920, b: 1040 },
+            full: R {
+                l: 0,
+                t: 0,
+                r: 1920,
+                b: 1080,
+            },
+            work: R {
+                l: 0,
+                t: 0,
+                r: 1920,
+                b: 1040,
+            },
             primary: true,
         }];
-        let slot = ScreenSlot { monitor: 3, x: 0.0, y: 0.0, w: 1.0, h: 1.0, ..Default::default() };
-        assert_eq!(slot_target(&slot, &mons), Some(R { l: 0, t: 0, r: 1920, b: 1040 }));
+        let slot = ScreenSlot {
+            monitor: 3,
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            slot_target(&slot, &mons),
+            Some(R {
+                l: 0,
+                t: 0,
+                r: 1920,
+                b: 1040
+            })
+        );
     }
 }

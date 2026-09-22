@@ -40,7 +40,7 @@ pub struct AppUsage {
     /// Segundos com o processo aberto, somados enquanto o RamDog esteve rodando.
     pub open_secs: u64,
     #[serde(default)]
-    pub linux_focus_secs:u64,
+    pub linux_focus_secs: u64,
     /// Quantas vezes o RamDog viu o app aparecer do nada.
     pub launches: u32,
     /// Unix secs da última vez visto aberto.
@@ -96,7 +96,11 @@ impl Tracker {
             return;
         }
         self.last_tick = Some(now);
-        let add = if dt > TICK_MAX_SECS { 0 } else { dt.round() as u64 };
+        let add = if dt > TICK_MAX_SECS {
+            0
+        } else {
+            dt.round() as u64
+        };
         let live = live_paths(procs);
         let stamp = unix_now();
         for (path, proper) in &live {
@@ -110,8 +114,13 @@ impl Tracker {
             }
             e.open_secs += add;
             #[cfg(target_os = "linux")]
-            if let Some(pid)=crate::desktop_linux::focused_pid(){
-                if procs.iter().any(|p|p.pid==pid&&p.exe_path.to_lowercase()==*path){e.linux_focus_secs+=add;}
+            if let Some(pid) = crate::desktop_linux::focused_pid() {
+                if procs
+                    .iter()
+                    .any(|p| p.pid == pid && p.exe_path.to_lowercase() == *path)
+                {
+                    e.linux_focus_secs += add;
+                }
             }
             e.last_seen = stamp;
             if fresh {
@@ -133,7 +142,9 @@ impl Tracker {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let store = Store { apps: self.apps.clone() };
+        let store = Store {
+            apps: self.apps.clone(),
+        };
         if let Ok(s) = serde_json::to_string(&store) {
             let _ = std::fs::write(&path, s);
         }
@@ -143,7 +154,11 @@ impl Tracker {
         if self.apps.len() <= MAX_APPS {
             return;
         }
-        let mut v: Vec<(String, u64)> = self.apps.iter().map(|(k, a)| (k.clone(), a.open_secs)).collect();
+        let mut v: Vec<(String, u64)> = self
+            .apps
+            .iter()
+            .map(|(k, a)| (k.clone(), a.open_secs))
+            .collect();
         v.sort_by(|a, b| b.1.cmp(&a.1));
         for (k, _) in v.drain(MAX_APPS..) {
             self.apps.remove(&k);
@@ -162,7 +177,12 @@ fn live_paths(procs: &[ProcInfo]) -> HashMap<String, String> {
     procs
         .iter()
         .filter(|p| !p.exe_path.is_empty())
-        .filter(|p| windowed.as_ref().map(|w| w.contains(&p.pid)).unwrap_or(true))
+        .filter(|p| {
+            windowed
+                .as_ref()
+                .map(|w| w.contains(&p.pid))
+                .unwrap_or(true)
+        })
         .map(|p| (p.exe_path.to_lowercase(), p.name.clone()))
         .filter(|(p, _)| !in_windows_dir(p))
         .collect()
@@ -171,9 +191,11 @@ fn live_paths(procs: &[ProcInfo]) -> HashMap<String, String> {
 /// PIDs donos de alguma janela de topo visível e com título. `None` fora do Windows —
 /// aí a contagem volta a valer para todo processo.
 #[cfg(target_os = "linux")]
-fn windowed_pids()->Option<HashSet<u32>>{crate::desktop_linux::windowed_pids()}
+fn windowed_pids() -> Option<HashSet<u32>> {
+    crate::desktop_linux::windowed_pids()
+}
 
-#[cfg(not(any(windows,target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn windowed_pids() -> Option<HashSet<u32>> {
     None
 }
@@ -214,7 +236,10 @@ fn store_path() -> PathBuf {
 }
 
 fn unix_now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn file_name(path: &str) -> String {
@@ -258,7 +283,9 @@ pub fn user_assist() -> Vec<UaEntry> {
     };
     for guid in crate::sys::reg_subkeys(&root) {
         let count_path = format!("{BASE}\\{guid}\\Count");
-        let Some(k) = crate::sys::reg_open(HKEY_CURRENT_USER, &count_path, false) else { continue };
+        let Some(k) = crate::sys::reg_open(HKEY_CURRENT_USER, &count_path, false) else {
+            continue;
+        };
         for (name, _ty, data) in crate::sys::reg_values(&k) {
             // Win7+ grava 72 bytes; o formato antigo (16) não tem tempo de foco.
             if data.len() < 72 {
@@ -308,8 +335,15 @@ fn id_token(name: &str) -> String {
     let base = base.split('.').next_back().unwrap_or(base);
     let base = base.split('_').next().unwrap_or(base);
     let t = base.trim().to_lowercase();
-    let ok = t.len() >= 4 && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '+') && t.chars().any(|c| c.is_ascii_alphabetic());
-    if ok { t } else { String::new() }
+    let ok = t.len() >= 4
+        && t.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '+')
+        && t.chars().any(|c| c.is_ascii_alphabetic());
+    if ok {
+        t
+    } else {
+        String::new()
+    }
 }
 
 fn rot13(s: &str) -> String {
@@ -357,10 +391,15 @@ fn known_folders() -> HashMap<String, String> {
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     let mut put = |guid: &str, val: Option<String>| {
         if let Some(v) = val {
-            m.insert(guid.to_ascii_uppercase(), v.trim_end_matches('\\').to_string());
+            m.insert(
+                guid.to_ascii_uppercase(),
+                v.trim_end_matches('\\').to_string(),
+            );
         }
     };
-    let win = env("WINDIR").or_else(|| env("SystemRoot")).unwrap_or_else(|| r"C:\Windows".into());
+    let win = env("WINDIR")
+        .or_else(|| env("SystemRoot"))
+        .unwrap_or_else(|| r"C:\Windows".into());
     let profile = env("USERPROFILE");
     let appdata = env("APPDATA");
     let local = env("LOCALAPPDATA");
@@ -371,30 +410,60 @@ fn known_folders() -> HashMap<String, String> {
     put("6D809377-6AF0-444B-8957-A3773F02200E", pf64.clone());
     put("7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FA8E", pf86.clone());
     put("905E63B6-C1BF-494E-B29C-65B732D3D21A", pf64.clone());
-    put("F7F1ED05-9F6D-47A2-AAAE-29D317C6F066", pf64.as_ref().map(|p| format!(r"{p}\Common Files")));
-    put("DE974D24-D9C6-4D3E-BF91-F4455120B917", pf86.as_ref().map(|p| format!(r"{p}\Common Files")));
+    put(
+        "F7F1ED05-9F6D-47A2-AAAE-29D317C6F066",
+        pf64.as_ref().map(|p| format!(r"{p}\Common Files")),
+    );
+    put(
+        "DE974D24-D9C6-4D3E-BF91-F4455120B917",
+        pf86.as_ref().map(|p| format!(r"{p}\Common Files")),
+    );
     put("F38BF404-1D43-42F2-9305-67DE0B28FC23", Some(win.clone()));
-    put("1AC14E77-02E7-4E5D-B744-2EB1AE5198B7", Some(format!(r"{win}\System32")));
-    put("D65231B0-B2F1-4857-A4CE-A8E7C6EA7D27", Some(format!(r"{win}\SysWOW64")));
+    put(
+        "1AC14E77-02E7-4E5D-B744-2EB1AE5198B7",
+        Some(format!(r"{win}\System32")),
+    );
+    put(
+        "D65231B0-B2F1-4857-A4CE-A8E7C6EA7D27",
+        Some(format!(r"{win}\SysWOW64")),
+    );
     put("5E6C858F-0E22-4760-9AFE-EA3317B67173", profile.clone());
     put("3EB685DB-65F9-4CF6-A03A-E3EF65729F3D", appdata.clone());
     put("F1B32785-6FBA-4FCF-9D55-7B8E7F157091", local.clone());
-    put("A520A1A4-1780-4FF6-BD18-167343C5AF16", local.as_ref().map(|p| format!(r"{p}Low")));
+    put(
+        "A520A1A4-1780-4FF6-BD18-167343C5AF16",
+        local.as_ref().map(|p| format!(r"{p}Low")),
+    );
     put("62AB5D82-FDC1-4DC3-A9DD-070D1D495D97", progdata.clone());
-    put("B4BFCC3A-DB2C-424C-B029-7FE99A87C641", profile.as_ref().map(|p| format!(r"{p}\Desktop")));
-    put("FDD39AD0-238F-46AF-ADB4-6C85480369C7", profile.as_ref().map(|p| format!(r"{p}\Documents")));
-    put("374DE290-123F-4565-9164-39C4925E467B", profile.as_ref().map(|p| format!(r"{p}\Downloads")));
+    put(
+        "B4BFCC3A-DB2C-424C-B029-7FE99A87C641",
+        profile.as_ref().map(|p| format!(r"{p}\Desktop")),
+    );
+    put(
+        "FDD39AD0-238F-46AF-ADB4-6C85480369C7",
+        profile.as_ref().map(|p| format!(r"{p}\Documents")),
+    );
+    put(
+        "374DE290-123F-4565-9164-39C4925E467B",
+        profile.as_ref().map(|p| format!(r"{p}\Downloads")),
+    );
     put(
         "A77F5D77-2E2B-44C3-A6A2-ABA601054A51",
-        appdata.as_ref().map(|p| format!(r"{p}\Microsoft\Windows\Start Menu\Programs")),
+        appdata
+            .as_ref()
+            .map(|p| format!(r"{p}\Microsoft\Windows\Start Menu\Programs")),
     );
     put(
         "0139D44E-6AFE-49F2-8690-3DAFCAE6FFB8",
-        progdata.as_ref().map(|p| format!(r"{p}\Microsoft\Windows\Start Menu\Programs")),
+        progdata
+            .as_ref()
+            .map(|p| format!(r"{p}\Microsoft\Windows\Start Menu\Programs")),
     );
     put(
         "9E3995AB-1F9C-4F13-B827-48B24B6C7174",
-        appdata.as_ref().map(|p| format!(r"{p}\Microsoft\Internet Explorer\Quick Launch\User Pinned")),
+        appdata
+            .as_ref()
+            .map(|p| format!(r"{p}\Microsoft\Internet Explorer\Quick Launch\User Pinned")),
     );
     m
 }
@@ -464,7 +533,11 @@ pub fn rank(live: &HashMap<String, AppUsage>, ua: &[UaEntry], limit: usize) -> V
             continue;
         }
         // O caminho do registro vem com a caixa de verdade; a chave é só minúscula.
-        let shown = if e.path.is_empty() { key.clone() } else { e.path.clone() };
+        let shown = if e.path.is_empty() {
+            key.clone()
+        } else {
+            e.path.clone()
+        };
         let r = by_path.entry(key).or_insert_with(|| Ranked {
             name: file_name(&shown),
             path: shown,
@@ -486,7 +559,11 @@ pub fn rank(live: &HashMap<String, AppUsage>, ua: &[UaEntry], limit: usize) -> V
         }
         let r = by_path.entry(key.clone()).or_insert_with(|| Ranked {
             path: key.clone(),
-            name: if a.name.is_empty() { file_name(key) } else { a.name.clone() },
+            name: if a.name.is_empty() {
+                file_name(key)
+            } else {
+                a.name.clone()
+            },
             focus_secs: 0,
             open_secs: 0,
             launches: 0,
@@ -510,7 +587,11 @@ pub fn rank(live: &HashMap<String, AppUsage>, ua: &[UaEntry], limit: usize) -> V
         })
         .filter(|r| r.score > 0.0)
         .collect();
-    out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    out.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     if limit > 0 {
         out.truncate(limit);
     }
@@ -582,7 +663,10 @@ mod tests {
     fn token_reduz_identificador_ao_nome_do_exe() {
         assert_eq!(id_token("Brave"), "brave");
         assert_eq!(id_token("com.squirrel.Discord.Discord"), "discord");
-        assert_eq!(id_token("Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"), "windowsterminal");
+        assert_eq!(
+            id_token("Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"),
+            "windowsterminal"
+        );
         assert_eq!(id_token("Exafunction.Windsurf"), "windsurf");
         // Curto ou sem letra não vale casar: daria falso positivo.
         assert_eq!(id_token("com.sharingan.app"), "");
@@ -594,11 +678,17 @@ mod tests {
         let f = known_folders();
         let pf = f.get("6D809377-6AF0-444B-8957-A3773F02200E").cloned();
         if let Some(pf) = pf {
-            let got = resolve_ua_path(r"{6D809377-6AF0-444B-8957-A3773F02200E}\Notepad++\notepad++.exe", &f);
+            let got = resolve_ua_path(
+                r"{6D809377-6AF0-444B-8957-A3773F02200E}\Notepad++\notepad++.exe",
+                &f,
+            );
             assert_eq!(got, Some(format!(r"{pf}\Notepad++\notepad++.exe")));
         }
         // GUID desconhecido e coisa que não é .exe ficam de fora.
-        assert_eq!(resolve_ua_path(r"{00000000-0000-0000-0000-000000000000}\x.exe", &f), None);
+        assert_eq!(
+            resolve_ua_path(r"{00000000-0000-0000-0000-000000000000}\x.exe", &f),
+            None
+        );
         assert_eq!(resolve_ua_path(r"C:\algo\arquivo.txt", &f), None);
     }
 
@@ -608,7 +698,13 @@ mod tests {
         let mut live = HashMap::new();
         live.insert(
             r"c:\program files\bravesoftware\brave-browser\application\brave.exe".to_string(),
-            AppUsage { name: "brave.exe".into(), open_secs: 100, launches: 1, last_seen: 1, linux_focus_secs:0 },
+            AppUsage {
+                name: "brave.exe".into(),
+                open_secs: 100,
+                launches: 1,
+                last_seen: 1,
+                linux_focus_secs: 0,
+            },
         );
         let ua = vec![UaEntry {
             path: String::new(),
@@ -622,7 +718,10 @@ mod tests {
         for k in live.keys() {
             by_stem.insert(stem(k), k.clone());
         }
-        assert_eq!(by_stem.get(&ua[0].token).map(String::as_str), Some(r"c:\program files\bravesoftware\brave-browser\application\brave.exe"));
+        assert_eq!(
+            by_stem.get(&ua[0].token).map(String::as_str),
+            Some(r"c:\program files\bravesoftware\brave-browser\application\brave.exe")
+        );
     }
 
     #[test]
@@ -640,11 +739,18 @@ mod tests {
     #[ignore]
     fn dump_do_ranking_real() {
         let ua = user_assist();
-        println!("UserAssist: {} entradas ({} com caminho)", ua.len(), ua.iter().filter(|e| !e.path.is_empty()).count());
+        println!(
+            "UserAssist: {} entradas ({} com caminho)",
+            ua.len(),
+            ua.iter().filter(|e| !e.path.is_empty()).count()
+        );
         let t = Tracker::load();
         println!("contagem local: {} apps", t.apps().len());
         let r = rank(t.apps(), &ua, 25);
-        println!("{:<34} {:>10} {:>10} {:>7}  {}", "app", "foco", "aberto", "vezes", "caminho");
+        println!(
+            "{:<34} {:>10} {:>10} {:>7}  {}",
+            "app", "foco", "aberto", "vezes", "caminho"
+        );
         for x in &r {
             println!(
                 "{:<34} {:>10} {:>10} {:>7}  {}",
@@ -655,6 +761,9 @@ mod tests {
                 x.path
             );
         }
-        assert!(!r.is_empty(), "ranking vazio: o Scan não teria o que mostrar");
+        assert!(
+            !r.is_empty(),
+            "ranking vazio: o Scan não teria o que mostrar"
+        );
     }
 }

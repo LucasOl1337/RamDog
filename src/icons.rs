@@ -6,8 +6,8 @@ use std::ffi::c_void;
 use windows::core::PCWSTR;
 #[cfg(windows)]
 use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetObjectW, BITMAP, BITMAPINFO, BITMAPINFOHEADER,
-    BI_RGB, DIB_RGB_COLORS, HGDIOBJ,
+    CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetObjectW, BITMAP, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HGDIOBJ,
 };
 #[cfg(windows)]
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
@@ -24,9 +24,11 @@ pub struct RgbaIcon {
 }
 
 #[cfg(target_os = "linux")]
-pub fn icon_for_exe(path:&str)->Option<RgbaIcon>{crate::desktop_linux::icon(path)}
+pub fn icon_for_exe(path: &str) -> Option<RgbaIcon> {
+    crate::desktop_linux::icon(path)
+}
 
-#[cfg(not(any(windows,target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn icon_for_exe(_path: &str) -> Option<RgbaIcon> {
     None
 }
@@ -64,7 +66,12 @@ unsafe fn hicon_to_rgba(hicon: HICON) -> Option<RgbaIcon> {
     let result = (|| {
         let mut bm = BITMAP::default();
         let target = if color.is_invalid() { mask } else { color };
-        if GetObjectW(HGDIOBJ(target.0), std::mem::size_of::<BITMAP>() as i32, Some(&mut bm as *mut _ as *mut c_void)) == 0 {
+        if GetObjectW(
+            HGDIOBJ(target.0),
+            std::mem::size_of::<BITMAP>() as i32,
+            Some(&mut bm as *mut _ as *mut c_void),
+        ) == 0
+        {
             return None;
         }
         let w = bm.bmWidth.max(1) as usize;
@@ -92,7 +99,15 @@ unsafe fn hicon_to_rgba(hicon: HICON) -> Option<RgbaIcon> {
         let mut px = vec![0u8; w * h * 4];
         let mut ok = false;
         if !color.is_invalid() {
-            ok = GetDIBits(hdc, color, 0, h as u32, Some(px.as_mut_ptr() as *mut c_void), &mut bmi, DIB_RGB_COLORS) != 0;
+            ok = GetDIBits(
+                hdc,
+                color,
+                0,
+                h as u32,
+                Some(px.as_mut_ptr() as *mut c_void),
+                &mut bmi,
+                DIB_RGB_COLORS,
+            ) != 0;
         }
         // máscara (para ícones sem canal alfa)
         let mut mask_px = vec![0u8; w * h * 4];
@@ -100,7 +115,15 @@ unsafe fn hicon_to_rgba(hicon: HICON) -> Option<RgbaIcon> {
         if !mask.is_invalid() {
             let mut bmi2 = bmi;
             bmi2.bmiHeader.biHeight = -(h as i32);
-            have_mask = GetDIBits(hdc, mask, 0, h as u32, Some(mask_px.as_mut_ptr() as *mut c_void), &mut bmi2, DIB_RGB_COLORS) != 0;
+            have_mask = GetDIBits(
+                hdc,
+                mask,
+                0,
+                h as u32,
+                Some(mask_px.as_mut_ptr() as *mut c_void),
+                &mut bmi2,
+                DIB_RGB_COLORS,
+            ) != 0;
         }
         let _ = DeleteDC(hdc);
         if !ok {
@@ -115,7 +138,11 @@ unsafe fn hicon_to_rgba(hicon: HICON) -> Option<RgbaIcon> {
                 c[3] = if transparent { 0 } else { 255 };
             }
         }
-        Some(RgbaIcon { width: w, height: h, rgba: px })
+        Some(RgbaIcon {
+            width: w,
+            height: h,
+            rgba: px,
+        })
     })();
     if !color.is_invalid() {
         let _ = DeleteObject(HGDIOBJ(color.0));
@@ -159,7 +186,12 @@ impl IconBank {
                 }
             })
             .expect("spawn icon thread");
-        Self { tex: HashMap::new(), pending: HashSet::new(), req, done }
+        Self {
+            tex: HashMap::new(),
+            pending: HashSet::new(),
+            req,
+            done,
+        }
     }
 
     /// Sobe para textura tudo que a thread devolveu desde o frame anterior.

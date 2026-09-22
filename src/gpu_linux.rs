@@ -32,7 +32,9 @@ impl Reader {
                 for (pid, v) in sample.by_pid.iter_mut() {
                     let decayed = held
                         .get(pid)
-                        .map(|(old, at)| old * 0.5f32.powf(now.duration_since(*at).as_secs_f32() / 5.0))
+                        .map(|(old, at)| {
+                            old * 0.5f32.powf(now.duration_since(*at).as_secs_f32() / 5.0)
+                        })
                         .unwrap_or(0.0);
                     let merged = v.max(decayed);
                     held.insert(*pid, (merged, now));

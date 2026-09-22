@@ -3,6 +3,8 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
+use crate::config::Locale;
+
 #[derive(Clone, Debug)]
 pub enum Source {
     Unit { user: bool, unit: String },
@@ -22,6 +24,30 @@ pub struct Entry {
     pub pid: u32,
     pub memory: Option<u64>,
     pub source: Source,
+}
+
+impl Entry {
+    pub fn kind_for(&self, locale: Locale) -> String {
+        match &self.source {
+            Source::Unit { user: _, unit } => format!(
+                "{} · {}",
+                locale.text("Usuário", "User"),
+                unit.rsplit('.').next().unwrap_or("unit")
+            ),
+            Source::Desktop { .. } => locale.text("Autostart XDG", "XDG autostart").to_string(),
+        }
+    }
+
+    pub fn state_for(&self, locale: Locale) -> String {
+        match self.state.as_str() {
+            "habilitado" | "enabled" | "enabled-runtime" | "linked" | "linked-runtime" => {
+                locale.text("habilitado", "enabled").to_string()
+            }
+            "desabilitado" | "disabled" => locale.text("desabilitado", "disabled").to_string(),
+            "transient" => locale.text("temporário", "transient").to_string(),
+            other => other.to_string(),
+        }
+    }
 }
 #[derive(Default, Clone)]
 pub struct Inventory {
@@ -410,7 +436,8 @@ mod tests {
         let msg = friendly_scan_warning(true, raw);
         assert!(!msg.contains("systemctl:"));
         assert!(msg.contains("Sessão de usuário"));
-        let other = friendly_scan_warning(false, "systemctl: Unit not found (exit status: 1)".into());
+        let other =
+            friendly_scan_warning(false, "systemctl: Unit not found (exit status: 1)".into());
         assert!(other.contains("systemctl:"));
     }
 }

@@ -29,7 +29,9 @@ fn desktop() -> Desktop {
             let windows = parsed.as_ref().map(|v| {
                 let mut set = HashSet::new();
                 for w in v {
-                    let Some(pid) = w["pid"].as_u64().map(|n| n as u32) else { continue };
+                    let Some(pid) = w["pid"].as_u64().map(|n| n as u32) else {
+                        continue;
+                    };
                     let mapped = w["mapped"].as_bool().unwrap_or(true);
                     let info = WindowInfo {
                         title: w["title"].as_str().unwrap_or("").to_string(),
@@ -56,7 +58,11 @@ fn desktop() -> Desktop {
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
                 .and_then(|w| w["pid"].as_u64().map(|n| n as u32));
             if let Ok(mut d) = target.lock() {
-                *d = Desktop { windows, focused, by_pid };
+                *d = Desktop {
+                    windows,
+                    focused,
+                    by_pid,
+                };
             }
             std::thread::sleep(std::time::Duration::from_secs(2));
         });
@@ -120,7 +126,12 @@ fn icon_index() -> &'static HashMap<String, String> {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into_owned();
-                let stem = e.path().file_stem().unwrap_or_default().to_string_lossy().to_lowercase();
+                let stem = e
+                    .path()
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_lowercase();
                 let rank = if stem == name.to_lowercase() {
                     3
                 } else if words.iter().any(|w| w.contains("://")) {

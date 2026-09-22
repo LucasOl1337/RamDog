@@ -7,6 +7,8 @@
   ·
   <a href="https://lucasol1337.github.io/RamDog/guia.html">Guia completo</a>
   ·
+  <a href="README.en.md">English</a>
+  ·
   <a href="docs/releases/v0.10.0.md">Patch notes v0.10.0</a>
   ·
   <a href="CHANGELOG.md">Changelog</a>
@@ -73,6 +75,10 @@ Outros desktops Linux continuam com processos, categorias, origem, kill, GPU, Pa
 Detalhes, dependências e limites: [linux/README.md](linux/README.md).
 
 ## O que faz
+
+### Idioma / Language
+
+The interface starts in Portuguese for existing installs. Open **Preferências / Preferences** and choose **English** under **Idioma / Language**; the choice is saved in the RamDog config and applies to navigation, metrics, startup, screens, and addon entry points without changing existing settings. See the full [English README](README.en.md).
 
 - **Origem / lançado por.** Coluna Origem = primeiro ancestral vivo que não seja host genérico (`cmd`, `bash`, `node`…). Quando a cadeia de pais morreu, o RamDog lê o ambiente herdado e mostra em roxo o agente (Claude Code + sessão + PID, Codex, Cursor Agent, Gemini CLI, Hermes…) e o host (Maestri, VS Code, Cursor, Windows Terminal…), além de `npm run <script>` no projeto.
 - **Categorias.** IA / Agentes, Dev, Navegador, Jogos, Pessoal, Sistema, Outros — regra automática, com override manual por processo.

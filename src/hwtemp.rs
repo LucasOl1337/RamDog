@@ -87,7 +87,10 @@ pub struct HwTemp {
 
 impl HwTemp {
     pub fn ram_max(&self) -> Option<f32> {
-        self.dimm_temps.iter().cloned().fold(None, |acc, v| Some(acc.map_or(v, |a: f32| a.max(v))))
+        self.dimm_temps
+            .iter()
+            .cloned()
+            .fold(None, |acc, v| Some(acc.map_or(v, |a: f32| a.max(v))))
     }
 }
 
@@ -108,7 +111,7 @@ impl HwCmd {
         }
         #[cfg(target_os = "linux")]
         crate::fans_linux::send(line);
-        #[cfg(not(any(windows,target_os = "linux")))]
+        #[cfg(not(any(windows, target_os = "linux")))]
         let _ = line;
     }
 }
@@ -156,21 +159,27 @@ impl HwTempReader {
             let stdin = Arc::new(Mutex::new(child.stdin.take()?));
             let latest = Arc::new(Mutex::new(HwTemp::default()));
             let latest2 = latest.clone();
-            let _ = std::thread::Builder::new().name("hwtemp-reader".into()).spawn(move || {
-                for line in BufReader::new(stdout).lines() {
-                    let Ok(line) = line else { break };
-                    if let Ok(msg) = serde_json::from_str::<HwTempMsg>(&line) {
-                        if let Ok(mut g) = latest2.lock() {
-                            g.cpu_temp = msg.cpu_temp;
-                            g.dimm_temps = msg.dimm;
-                            g.sensors = msg.sensors;
-                            g.fans = msg.fans;
-                            g.stab = msg.stab;
+            let _ = std::thread::Builder::new()
+                .name("hwtemp-reader".into())
+                .spawn(move || {
+                    for line in BufReader::new(stdout).lines() {
+                        let Ok(line) = line else { break };
+                        if let Ok(msg) = serde_json::from_str::<HwTempMsg>(&line) {
+                            if let Ok(mut g) = latest2.lock() {
+                                g.cpu_temp = msg.cpu_temp;
+                                g.dimm_temps = msg.dimm;
+                                g.sensors = msg.sensors;
+                                g.fans = msg.fans;
+                                g.stab = msg.stab;
+                            }
                         }
                     }
-                }
-            });
-            Some(Self { latest, stdin, child })
+                });
+            Some(Self {
+                latest,
+                stdin,
+                child,
+            })
         }
     }
 
@@ -178,8 +187,13 @@ impl HwTempReader {
         #[cfg(target_os = "linux")]
         {
             let _ = self;
-            let mut reading=linux_hwmon_read();
-            if let Some(control)=crate::fans_linux::state(){reading.fans=control.fans;reading.stab=control.stab;reading.control_ready=true;reading.control_error=control.error;}
+            let mut reading = linux_hwmon_read();
+            if let Some(control) = crate::fans_linux::state() {
+                reading.fans = control.fans;
+                reading.stab = control.stab;
+                reading.control_ready = true;
+                reading.control_error = control.error;
+            }
             return reading;
         }
         #[cfg(windows)]
@@ -194,7 +208,9 @@ impl HwTempReader {
 
     #[cfg(windows)]
     pub fn sender(&self) -> HwCmd {
-        HwCmd { stdin: self.stdin.clone() }
+        HwCmd {
+            stdin: self.stdin.clone(),
+        }
     }
     #[cfg(not(windows))]
     pub fn sender(&self) -> HwCmd {
@@ -246,7 +262,9 @@ fn linux_hwmon_read() -> HwTemp {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            let Ok(milli) = raw.trim().parse::<i64>() else { continue };
+            let Ok(milli) = raw.trim().parse::<i64>() else {
+                continue;
+            };
             let c = milli as f32 / 1000.0;
             if !(1.0..=150.0).contains(&c) {
                 continue;
@@ -274,7 +292,9 @@ fn linux_hwmon_read() -> HwTemp {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            let Ok(rpm) = raw.trim().parse::<f32>() else { continue };
+            let Ok(rpm) = raw.trim().parse::<f32>() else {
+                continue;
+            };
             if rpm < 0.0 {
                 continue;
             }
@@ -292,8 +312,8 @@ fn linux_hwmon_read() -> HwTemp {
         }
     }
     HwTemp {
-        control_ready:false,
-        control_error:None,
+        control_ready: false,
+        control_error: None,
         cpu_temp: cpu_temps.iter().cloned().reduce(f32::max),
         dimm_temps: dimm,
         sensors,
@@ -305,8 +325,8 @@ fn linux_hwmon_read() -> HwTemp {
 #[cfg(target_os = "linux")]
 fn hwmon_group(name: &str) -> &'static str {
     match name.to_ascii_lowercase().as_str() {
-        "k10temp" | "coretemp" | "zenpower" | "zenpower3" | "cpu_thermal" | "k8temp" | "via_cputemp"
-        => "CPU",
+        "k10temp" | "coretemp" | "zenpower" | "zenpower3" | "cpu_thermal" | "k8temp"
+        | "via_cputemp" => "CPU",
         "acpitz" => "Placa-mãe",
         "amdgpu" | "nouveau" | "nvidia" | "radeon" | "i915" | "xe" => "GPU",
         "spd5118" | "jc42" | "ee1004" | "dimm" => "RAM",

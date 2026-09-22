@@ -7,13 +7,13 @@ use std::time::Instant;
 use egui::{Align, Color32, Layout, Rect, RichText, Stroke, StrokeKind, TextureHandle, Vec2};
 use egui_extras::{Column, TableBuilder, TableRow};
 
-use crate::categories::{self, classify, is_critical, Category};
-use crate::config::{Config, MemMetric, ViewMode};
-use crate::identity;
 use crate::boot::{Boot, BootOut};
+use crate::categories::{self, classify, is_critical, Category};
 use crate::clean::{Clean, CleanOut};
+use crate::config::{Config, Locale, MemMetric, ViewMode};
 use crate::drains::{DrainOut, Drains};
 use crate::hwtemp::HwTemp;
+use crate::identity;
 use crate::knowledge;
 use crate::metrics::SysSample;
 use crate::pressure::{self, StealKind};
@@ -30,6 +30,14 @@ const ROW_H: f32 = 40.0;
 const AVATAR: f32 = 26.0;
 /// Barra lateral, cards e histórico dos medidores.
 const NAV_W: f32 = 200.0;
+
+fn launcher_label(label: String, locale: Locale) -> String {
+    if locale == Locale::English {
+        label.replace("desktop (navegador)", "desktop (browser)")
+    } else {
+        label
+    }
+}
 const NAV_ITEM_H: f32 = 34.0;
 const CARD_R: f32 = 12.0;
 const CARD_PAD: f32 = 12.0;
@@ -53,7 +61,6 @@ pub const MINI_H: f32 = 166.0;
 /// exatamente o mesmo limite que `main` aplica na abertura.
 pub const FULL_MIN_W: f32 = 1000.0;
 pub const FULL_MIN_H: f32 = 420.0;
-
 
 /// Temperatura de um bloco de medidor. `Missing` existe porque "sem sensor" e "este
 /// medidor não tem temperatura" são coisas diferentes: a CPU sem admin tem que mostrar um
@@ -100,15 +107,10 @@ enum Row {
     /// Cabeçalho de um app: índice em `App::groups`. O conteúdo não fica aqui de
     /// propósito — as somas são recalculadas a cada amostra, inclusive quando a ordem
     /// está congelada porque o mouse está em cima da tabela.
-    AppHeader {
-        gi: usize,
-    },
+    AppHeader { gi: usize },
     /// Linha sintética: memória em uso que não pertence a processo nenhum.
     /// Sem PID, sem kill — existe para a soma da lista bater com o "em uso" do topo.
-    System {
-        kind: SysRow,
-        bytes: u64,
-    },
+    System { kind: SysRow, bytes: u64 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -235,31 +237,62 @@ enum SysRow {
 
 impl SysRow {
     fn label(self) -> &'static str {
+        self.label_for(Locale::Portuguese)
+    }
+
+    fn label_for(self, locale: Locale) -> &'static str {
         match self {
-            SysRow::PagedPool => "Kernel — pool paginado",
-            SysRow::NonPagedPool => "Kernel — pool não-paginado",
-            SysRow::SharedAndCache => "Compartilhado, cache e tabelas",
+            SysRow::PagedPool => locale.text("Kernel — pool paginado", "Kernel — paged pool"),
+            SysRow::NonPagedPool => {
+                locale.text("Kernel — pool não-paginado", "Kernel — non-paged pool")
+            }
+            SysRow::SharedAndCache => locale.text(
+                "Compartilhado, cache e tabelas",
+                "Shared, cache, and tables",
+            ),
         }
     }
 
     fn tip(self) -> &'static str {
+        self.tip_for(Locale::Portuguese)
+    }
+
+    fn tip_for(self, locale: Locale) -> &'static str {
         match self {
-            SysRow::PagedPool => concat!(
-                "Memória do kernel e dos drivers que pode ser paginada ao disco.\n\n",
-                "Não pertence a processo nenhum, por isso nunca aparece no Gerenciador de ",
-                "Tarefas. Acima de ~2 GB costuma indicar vazamento de driver."
+            SysRow::PagedPool => locale.text(
+                concat!(
+                    "Memória do kernel e dos drivers que pode ser paginada ao disco.\n\n",
+                    "Não pertence a processo nenhum, por isso nunca aparece no Gerenciador de ",
+                    "Tarefas. Acima de ~2 GB costuma indicar vazamento de driver."
+                ),
+                concat!(
+                    "Kernel and driver memory that can be paged to disk.\n\n",
+                    "It belongs to no process, so it never appears in Task Manager. Above ~2 GB often points to a driver leak."
+                ),
             ),
-            SysRow::NonPagedPool => concat!(
-                "Memória do kernel que nunca sai da RAM física — filas de I/O, estruturas de ",
-                "driver, buffers de rede.\n\nSempre residente, sempre invisível na lista de processos."
+            SysRow::NonPagedPool => locale.text(
+                concat!(
+                    "Memória do kernel que nunca sai da RAM física — filas de I/O, estruturas de ",
+                    "driver, buffers de rede.\n\nSempre residente, sempre invisível na lista de processos."
+                ),
+                concat!(
+                    "Kernel memory that never leaves physical RAM — I/O queues, driver structures, and network buffers.\n\nAlways resident, always invisible in the process list."
+                ),
             ),
-            SysRow::SharedAndCache => concat!(
-                "O que sobra do \"em uso\" depois de descontar a memória privada dos processos ",
-                "e os dois pools do kernel.\n\n",
-                "É sobretudo memória compartilhada residente (DLLs e seções mapeadas em vários ",
-                "processos, contadas uma vez só aqui), mais cache de arquivos residente, tabelas ",
-                "de página e páginas travadas por driver de GPU.\n\n",
-                "Calculado por diferença — é um resto, não uma medição direta."
+            SysRow::SharedAndCache => locale.text(
+                concat!(
+                    "O que sobra do \"em uso\" depois de descontar a memória privada dos processos ",
+                    "e os dois pools do kernel.\n\n",
+                    "É sobretudo memória compartilhada residente (DLLs e seções mapeadas em vários ",
+                    "processos, contadas uma vez só aqui), mais cache de arquivos residente, tabelas ",
+                    "de página e páginas travadas por driver de GPU.\n\n",
+                    "Calculado por diferença — é um resto, não uma medição direta."
+                ),
+                concat!(
+                    "What remains of \"in use\" after subtracting private process memory and the two kernel pools.\n\n",
+                    "Mostly resident shared memory (DLLs and mapped sections counted once here), resident file cache, page tables, and GPU-driver locked pages.\n\n",
+                    "Calculated by difference — it is a remainder, not a direct measurement."
+                ),
             ),
         }
     }
@@ -415,11 +448,17 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         setup_style(&cc.egui_ctx);
         let mut cfg = Config::load();
-        if !cfg.view.available() { cfg.view = ViewMode::List; }
+        if !cfg.view.available() {
+            cfg.view = ViewMode::List;
+        }
         let mini = cfg.mini;
         // Abrir direto num addon é legítimo (foi assim que fechou), mas o botão de voltar
         // precisa de um destino desde o primeiro frame.
-        let last_core = if cfg.view.is_addon() { ViewMode::List } else { cfg.view };
+        let last_core = if cfg.view.is_addon() {
+            ViewMode::List
+        } else {
+            cfg.view
+        };
         let is_admin = procs::is_admin();
         let sampler = sampler::spawn(cc.egui_ctx.clone(), cfg.refresh_ms);
         let (sig_tx, sig_rx) = std::sync::mpsc::channel();
@@ -427,7 +466,9 @@ impl App {
             #[cfg(target_os = "linux")]
             gpu_index: 0,
             #[cfg(target_os = "linux")]
-            smoke_started: std::env::args().any(|a| a == "--smoke-test").then(Instant::now),
+            smoke_started: std::env::args()
+                .any(|a| a == "--smoke-test")
+                .then(Instant::now),
             cfg,
             cfg_dirty: false,
             sampler,
@@ -449,7 +490,9 @@ impl App {
             sig_rx,
             last_sample: None,
             sample_ms: 0.0,
-            ncpu: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
+            ncpu: std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1),
             sys: SysSample::default(),
             gpu_per_proc: true,
             hwtemp: HwTemp::default(),
@@ -492,12 +535,18 @@ impl App {
             hist_gpu: VecDeque::with_capacity(HIST_LEN),
             hist_disk: VecDeque::with_capacity(HIST_LEN),
             show_prefs: false,
-            logo: image::load_from_memory(include_bytes!("../assets/ramdog-256.png")).ok().map(|img| {
-                let img = img.into_rgba8();
-                let (w, h) = img.dimensions();
-                let ci = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &img.into_raw());
-                cc.egui_ctx.load_texture("ramdog-logo", ci, egui::TextureOptions::LINEAR)
-            }),
+            logo: image::load_from_memory(include_bytes!("../assets/ramdog-256.png"))
+                .ok()
+                .map(|img| {
+                    let img = img.into_rgba8();
+                    let (w, h) = img.dimensions();
+                    let ci = egui::ColorImage::from_rgba_unmultiplied(
+                        [w as usize, h as usize],
+                        &img.into_raw(),
+                    );
+                    cc.egui_ctx
+                        .load_texture("ramdog-logo", ci, egui::TextureOptions::LINEAR)
+                }),
         }
     }
 
@@ -523,13 +572,25 @@ impl App {
         self.sample_ms = snap.sample_ms;
         // Primeira amostra de GetSystemTimes não tem delta — guarda o % anterior
         // pra o medidor não piscar "–" no primeiro tick.
-        let cpu_keep = if snap.sys.cpu_pct.is_none() { self.sys.cpu_pct } else { None };
+        let cpu_keep = if snap.sys.cpu_pct.is_none() {
+            self.sys.cpu_pct
+        } else {
+            None
+        };
         self.sys = snap.sys;
         if let Some(p) = cpu_keep {
             self.sys.cpu_pct = Some(p);
         }
         #[cfg(target_os = "linux")]
-        { self.sys.gpu = self.sys.gpu_linux.cards.get(self.gpu_index).or_else(|| self.sys.gpu_linux.cards.first()).cloned(); }
+        {
+            self.sys.gpu = self
+                .sys
+                .gpu_linux
+                .cards
+                .get(self.gpu_index)
+                .or_else(|| self.sys.gpu_linux.cards.first())
+                .cloned();
+        }
         self.gpu_per_proc = snap.gpu_per_proc;
         self.hwtemp = snap.hwtemp;
         self.push_hist();
@@ -539,7 +600,9 @@ impl App {
         // Nome de cada PID guardado enquanto ele existe: é o que permite dizer
         // "smss.exe (1208), já encerrado" em vez do número solto quando o pai morre.
         for p in &self.procs {
-            self.seen_names.entry(p.pid).or_insert_with(|| p.name.clone());
+            self.seen_names
+                .entry(p.pid)
+                .or_insert_with(|| p.name.clone());
         }
         self.refresh_services();
         self.rebuild_indexes();
@@ -553,14 +616,24 @@ impl App {
     }
 
     fn rebuild_indexes(&mut self) {
-        self.by_pid = self.procs.iter().enumerate().map(|(i, p)| (p.pid, i)).collect();
+        self.by_pid = self
+            .procs
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.pid, i))
+            .collect();
         self.children.clear();
         for p in &self.procs {
             if p.ppid != 0 {
                 self.children.entry(p.ppid).or_default().push(p.pid);
             }
         }
-        let overrides: HashMap<String, Category> = self.cfg.overrides.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        let overrides: HashMap<String, Category> = self
+            .cfg
+            .overrides
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
         self.cats = classify(&self.procs, &overrides);
         // soma de subárvore (memo por DFS)
         self.subtree.clear();
@@ -573,9 +646,11 @@ impl App {
     }
 
     fn subtree_total(&mut self, pid: u32, depth: usize) -> (u64, usize, f32) {
-        if let (Some(&t), Some(&c), Some(&u)) =
-            (self.subtree.get(&pid), self.subtree_count.get(&pid), self.subtree_cpu.get(&pid))
-        {
+        if let (Some(&t), Some(&c), Some(&u)) = (
+            self.subtree.get(&pid),
+            self.subtree_count.get(&pid),
+            self.subtree_cpu.get(&pid),
+        ) {
             return (t, c, u);
         }
         let m = self.cfg.mem_metric;
@@ -602,11 +677,16 @@ impl App {
         (total, count, cpu)
     }
 
-    fn gpu_pid_available(&self,pid:u32)->bool {
+    fn gpu_pid_available(&self, pid: u32) -> bool {
         #[cfg(target_os = "linux")]
-        { self.sys.gpu_linux.by_pid.contains_key(&pid) }
+        {
+            self.sys.gpu_linux.by_pid.contains_key(&pid)
+        }
         #[cfg(not(target_os = "linux"))]
-        { let _=pid; self.gpu_per_proc }
+        {
+            let _ = pid;
+            self.gpu_per_proc
+        }
     }
 
     fn proc(&self, pid: u32) -> Option<&ProcInfo> {
@@ -623,7 +703,10 @@ impl App {
     fn refresh_services(&mut self) {
         #[cfg(windows)]
         {
-            let due = self.services_at.map(|t| t.elapsed().as_secs() >= 10).unwrap_or(true);
+            let due = self
+                .services_at
+                .map(|t| t.elapsed().as_secs() >= 10)
+                .unwrap_or(true);
             if due {
                 self.services = crate::sys::services_by_pid();
                 self.services_at = Some(Instant::now());
@@ -645,7 +728,10 @@ impl App {
     /// `None` = ainda verificando.
     fn signature_of(&mut self, path: &str, ctx: &egui::Context) -> Option<SigInfo> {
         if path.is_empty() {
-            return Some(SigInfo { trust: signature::Trust::Unknown("sem acesso ao caminho".into()), signer: String::new() });
+            return Some(SigInfo {
+                trust: signature::Trust::Unknown("sem acesso ao caminho".into()),
+                signer: String::new(),
+            });
         }
         let key = path.to_lowercase();
         if let Some(s) = self.sigs.get(&key) {
@@ -676,9 +762,18 @@ impl App {
         let mut pending = vec![pid];
         let mut seen = HashSet::new();
         while let Some(pid) = pending.pop() {
-            if !seen.insert(pid) { continue; }
-            if self.proc(pid).is_some_and(|p| !metric_available(self.cfg.mem_metric, p)) { return false; }
-            if let Some(children) = self.children.get(&pid) { pending.extend(children); }
+            if !seen.insert(pid) {
+                continue;
+            }
+            if self
+                .proc(pid)
+                .is_some_and(|p| !metric_available(self.cfg.mem_metric, p))
+            {
+                return false;
+            }
+            if let Some(children) = self.children.get(&pid) {
+                pending.extend(children);
+            }
         }
         true
     }
@@ -733,8 +828,16 @@ impl App {
             for p in self.procs.iter_mut() {
                 if let Some(w) = by_pid.get(&p.pid) {
                     p.has_window = w.mapped;
-                    p.window_title = if w.title.is_empty() { None } else { Some(w.title.clone()) };
-                    p.window_class = if w.class.is_empty() { None } else { Some(w.class.clone()) };
+                    p.window_title = if w.title.is_empty() {
+                        None
+                    } else {
+                        Some(w.title.clone())
+                    };
+                    p.window_class = if w.class.is_empty() {
+                        None
+                    } else {
+                        Some(w.class.clone())
+                    };
                 }
                 p.focused = focused == Some(p.pid);
             }
@@ -746,7 +849,9 @@ impl App {
     }
 
     fn is_locked(&self, p: &ProcInfo) -> bool {
-        is_critical(&p.name_lower, p.pid) || self.cfg.locked.contains(&p.name_lower) || p.pid == std::process::id()
+        is_critical(&p.name_lower, p.pid)
+            || self.cfg.locked.contains(&p.name_lower)
+            || p.pid == std::process::id()
     }
 
     fn grouping(&self) -> bool {
@@ -787,7 +892,10 @@ impl App {
                 || p.exe_path.to_lowercase().contains(search)
                 || p.cmdline.to_lowercase().contains(search)
                 || p.launcher.short().to_lowercase().contains(search)
-                || p.window_title.as_deref().map(|t| t.to_lowercase().contains(search)).unwrap_or(false);
+                || p.window_title
+                    .as_deref()
+                    .map(|t| t.to_lowercase().contains(search))
+                    .unwrap_or(false);
             if !hit {
                 return false;
             }
@@ -817,19 +925,22 @@ impl App {
     /// Origem "inteligente" para a coluna: primeiro ancestral vivo que não seja host genérico
     /// (cmd, node, bash...). Se a cadeia morreu, cai na impressão digital do ambiente
     /// (Claude Code / Codex / Maestri...). Retorna (rótulo, pid clicável, dica, via_ambiente).
-    fn origin_label(&self, p: &ProcInfo) -> (String, Option<u32>, String, bool) {
+    fn origin_label(&self, p: &ProcInfo, locale: Locale) -> (String, Option<u32>, String, bool) {
         let id = identity::of(p);
-        if matches!(id.kind, identity::Kind::Game | identity::Kind::Project | identity::Kind::Emulator) {
+        if matches!(
+            id.kind,
+            identity::Kind::Game | identity::Kind::Project | identity::Kind::Emulator
+        ) {
             if let Some(origin) = id.origin {
                 let mut tip = origin.clone();
                 if let Some(title) = &p.window_title {
-                    tip.push_str(&format!("\njanela: {title}"));
+                    tip.push_str(&format!("\n{}: {title}", locale.text("janela", "window")));
                 }
                 return (origin, None, tip, true);
             }
         }
         let l = &p.launcher;
-        let unit = l.unit_label();
+        let unit = l.unit_label().map(|u| launcher_label(u, locale));
         let mut cur = p.ppid;
         let mut chain: Vec<String> = Vec::new();
         let mut guard = 0;
@@ -844,22 +955,33 @@ impl App {
             chain.push(format!("{} ({})", a.name, a.pid));
             if !categories::is_generic_host(&a.name_lower) {
                 let mut tip = if chain.len() > 1 {
-                    format!("{}\nclique para selecionar", chain.iter().rev().cloned().collect::<Vec<_>>().join(" › "))
+                    format!(
+                        "{}\n{}",
+                        chain.iter().rev().cloned().collect::<Vec<_>>().join(" › "),
+                        locale.text("clique para selecionar", "click to select")
+                    )
                 } else {
-                    format!("PID {} — clique para selecionar o pai", a.pid)
+                    format!(
+                        "PID {} — {}",
+                        a.pid,
+                        locale.text("clique para selecionar o pai", "click to select the parent")
+                    )
                 };
                 // `devin (1896666)` dentro de `hermes-gateway.service`: o pai imediato é o
                 // devin, mas quem mandou foi o Hermes. Os dois aparecem.
                 let mut label = a.name.clone();
                 let redundant = |u: &str| {
-                    let (u, n) = (u.to_lowercase(), a.name_lower.trim_end_matches(": server").to_string());
+                    let (u, n) = (
+                        u.to_lowercase(),
+                        a.name_lower.trim_end_matches(": server").to_string(),
+                    );
                     u.starts_with("desktop") || u.contains(&n) || n.contains(&u)
                 };
                 if let Some(u) = unit.as_deref().filter(|u| !redundant(u)) {
                     label = format!("{label} · {u}");
                 }
                 if let Some(raw) = &l.unit {
-                    tip.push_str(&format!("\nunidade: {raw}"));
+                    tip.push_str(&format!("\n{}: {raw}", locale.text("unidade", "unit")));
                 }
                 return (label, Some(a.pid), tip, false);
             }
@@ -868,33 +990,77 @@ impl App {
         // Cadeia só de hosts genéricos ou interrompida: usa o ambiente herdado e o cgroup.
         if !l.short().is_empty() {
             let mut tip = if l.agent.is_some() || l.host.is_some() {
-                String::from("Deduzido das variáveis de ambiente herdadas")
+                locale
+                    .text(
+                        "Deduzido das variáveis de ambiente herdadas",
+                        "Inferred from inherited environment variables",
+                    )
+                    .to_string()
             } else {
-                String::from("Deduzido da unidade do systemd (cgroup) que contém o processo")
+                locale
+                    .text(
+                        "Deduzido da unidade do systemd (cgroup) que contém o processo",
+                        "Inferred from the systemd unit (cgroup) containing the process",
+                    )
+                    .to_string()
             };
             if let Some(raw) = &l.unit {
-                tip.push_str(&format!("\nunidade: {raw}"));
+                tip.push_str(&format!("\n{}: {raw}", locale.text("unidade", "unit")));
             }
             if let Some(sid) = &l.session {
-                tip.push_str(&format!(" · sessão {sid}"));
+                tip.push_str(&format!(" · {} {sid}", locale.text("sessão", "session")));
             }
             if let Some(apid) = l.agent_pid.filter(|x| self.proc(*x).is_some()) {
                 let an = self.proc(apid).map(|a| a.name.clone()).unwrap_or_default();
-                tip.push_str(&format!("\n{an} (PID {apid}) — clique para selecionar"));
-                return (format!("{} · {an}", l.agent.clone().unwrap_or_default()), Some(apid), tip, true);
+                tip.push_str(&format!(
+                    "\n{an} (PID {apid}) — {}",
+                    locale.text("clique para selecionar", "click to select")
+                ));
+                return (
+                    format!("{} · {an}", l.agent.clone().unwrap_or_default()),
+                    Some(apid),
+                    tip,
+                    true,
+                );
             }
             if !chain.is_empty() {
-                tip.push_str(&format!("\ncadeia: {}", chain.iter().rev().cloned().collect::<Vec<_>>().join(" › ")));
+                tip.push_str(&format!(
+                    "\n{}: {}",
+                    locale.text("cadeia", "chain"),
+                    chain.iter().rev().cloned().collect::<Vec<_>>().join(" › ")
+                ));
             } else if p.raw_ppid != 0 {
-                tip.push_str(&format!("\npai (PID {}) já encerrado", p.raw_ppid));
+                tip.push_str(&format!(
+                    "\n{} (PID {})",
+                    locale.text("pai já encerrado", "parent exited"),
+                    p.raw_ppid
+                ));
             }
-            return (l.short(), None, tip, true);
+            return (launcher_label(l.short(), locale), None, tip, true);
         }
         if let Some(pp) = self.proc(p.ppid) {
-            return (pp.name.clone(), Some(pp.pid), format!("PID {} — clique para selecionar o pai", pp.pid), false);
+            return (
+                pp.name.clone(),
+                Some(pp.pid),
+                format!(
+                    "PID {} — {}",
+                    pp.pid,
+                    locale.text("clique para selecionar o pai", "click to select the parent")
+                ),
+                false,
+            );
         }
         if p.raw_ppid != 0 {
-            (format!("(pid {} encerrado)", p.raw_ppid), None, String::new(), false)
+            (
+                format!(
+                    "(pid {} {})",
+                    p.raw_ppid,
+                    locale.text("encerrado", "exited")
+                ),
+                None,
+                String::new(),
+                false,
+            )
         } else {
             ("–".into(), None, String::new(), false)
         }
@@ -909,6 +1075,7 @@ impl App {
     ///
     /// Devolve (texto da célula, tooltip, PID do pai imediato para o clique).
     fn invoker_of(&self, p: &ProcInfo) -> (String, String, Option<u32>) {
+        let locale = self.cfg.locale;
         let mut chain: Vec<(String, u32)> = Vec::new();
         let mut cur = p.ppid;
         let mut guard = 0;
@@ -941,7 +1108,11 @@ impl App {
         let mut tip = String::new();
         let known = |what: &str| {
             let w = what.to_lowercase();
-            let head = w.split(|c: char| !c.is_alphanumeric()).next().unwrap_or("").to_string();
+            let head = w
+                .split(|c: char| !c.is_alphanumeric())
+                .next()
+                .unwrap_or("")
+                .to_string();
             let hit = |n: &str| {
                 let n = n.to_lowercase();
                 n == w || (head.len() >= 4 && (n.contains(&head) || head.contains(&n)))
@@ -949,7 +1120,7 @@ impl App {
             hit(&p.name) || names.iter().any(|n| hit(n))
         };
         let mut prefix: Vec<String> = Vec::new();
-        if let Some(u) = l.unit_label() {
+        if let Some(u) = l.unit_label().map(|u| launcher_label(u, locale)) {
             // "desktop" (menu, atalho, `uwsm app`) só vale quando não há cadeia para mostrar.
             let desktop = u.to_lowercase().starts_with("desktop");
             if (!desktop || names.is_empty()) && !known(&u) {
@@ -972,12 +1143,23 @@ impl App {
         let label = if parts.is_empty() {
             if from_desktop {
                 "desktop".to_string()
-            } else if p.raw_ppid == 1 || self.proc(p.raw_ppid).map(|a| a.name_lower == "systemd").unwrap_or(false) {
-                "sistema (systemd)".to_string()
+            } else if p.raw_ppid == 1
+                || self
+                    .proc(p.raw_ppid)
+                    .map(|a| a.name_lower == "systemd")
+                    .unwrap_or(false)
+            {
+                locale
+                    .text("sistema (systemd)", "system (systemd)")
+                    .to_string()
             } else if p.raw_ppid != 0 {
                 match self.seen_names.get(&p.raw_ppid) {
-                    Some(n) => format!("{n} (já saiu)"),
-                    None => format!("pai {} (já saiu)", p.raw_ppid),
+                    Some(n) if locale == Locale::Portuguese => format!("{n} (já saiu)"),
+                    Some(n) => format!("{n} (exited)"),
+                    None if locale == Locale::Portuguese => {
+                        format!("pai {} (já saiu)", p.raw_ppid)
+                    }
+                    None => format!("parent {} (exited)", p.raw_ppid),
                 }
             } else {
                 "–".to_string()
@@ -986,30 +1168,56 @@ impl App {
             parts.join(" › ")
         };
         if !chain.is_empty() {
-            tip.push_str("Quem chamou quem, da raiz até este processo:\n");
+            tip.push_str(locale.text(
+                "Quem chamou quem, da raiz até este processo:\n",
+                "Who launched whom, from the root to this process:\n",
+            ));
             for (n, pid) in &chain {
                 tip.push_str(&format!("  {n} ({pid})\n"));
             }
-            tip.push_str(&format!("  {} ({})\nclique: selecionar o pai", p.name, p.pid));
+            tip.push_str(&format!(
+                "  {} ({})\n{}",
+                p.name,
+                p.pid,
+                locale.text("clique: selecionar o pai", "click: select the parent")
+            ));
         } else if p.raw_ppid > 1 {
-            tip.push_str(&format!("O pai (PID {}) já saiu; a cadeia acima dele não dá para reconstruir.", p.raw_ppid));
+            if locale == Locale::Portuguese {
+                tip.push_str(&format!(
+                    "O pai (PID {}) já saiu; a cadeia acima dele não dá para reconstruir.",
+                    p.raw_ppid
+                ));
+            } else {
+                tip.push_str(&format!(
+                    "The parent (PID {}) has exited; its ancestry cannot be reconstructed.",
+                    p.raw_ppid
+                ));
+            }
         }
         if let Some(raw) = &l.unit {
-            tip.push_str(&format!("\nunidade: {raw}"));
+            tip.push_str(&format!("\n{}: {raw}", locale.text("unidade", "unit")));
         }
         if let Some(a) = &l.agent {
-            tip.push_str(&format!("\nagente: {a}"));
+            tip.push_str(&format!("\n{}: {a}", locale.text("agente", "agent")));
             if let Some(sid) = &l.session {
-                tip.push_str(&format!(" (sessão {sid})"));
+                tip.push_str(&format!(" ({} {sid})", locale.text("sessão", "session")));
             }
         }
         if let Some(cwd) = &l.init_cwd {
-            tip.push_str(&format!("\nprojeto: {cwd}"));
+            tip.push_str(&format!("\n{}: {cwd}", locale.text("projeto", "project")));
         }
-        let cmd = if p.cmdline.is_empty() { p.exe_path.as_str() } else { p.cmdline.as_str() };
+        let cmd = if p.cmdline.is_empty() {
+            p.exe_path.as_str()
+        } else {
+            p.cmdline.as_str()
+        };
         if !cmd.is_empty() {
             let short: String = cmd.chars().take(400).collect();
-            tip.push_str(&format!("\n\ncomando: {short}{}", if cmd.chars().count() > 400 { "…" } else { "" }));
+            tip.push_str(&format!(
+                "\n\n{}: {short}{}",
+                locale.text("comando", "command"),
+                if cmd.chars().count() > 400 { "…" } else { "" }
+            ));
         }
         (label, tip.trim_start_matches('\n').to_string(), target)
     }
@@ -1039,12 +1247,18 @@ impl App {
                 SortKey::Name => pa.name_lower.cmp(&pb.name_lower).then(pa.pid.cmp(&pb.pid)),
                 SortKey::Ram => {
                     if tree {
-                        self.subtree.get(a).unwrap_or(&0).cmp(self.subtree.get(b).unwrap_or(&0))
+                        self.subtree
+                            .get(a)
+                            .unwrap_or(&0)
+                            .cmp(self.subtree.get(b).unwrap_or(&0))
                     } else {
                         self.mem_of(pa).cmp(&self.mem_of(pb))
                     }
                 }
-                SortKey::Cat => self.cat(*a).cmp(&self.cat(*b)).then(self.mem_of(pb).cmp(&self.mem_of(pa))),
+                SortKey::Cat => self
+                    .cat(*a)
+                    .cmp(&self.cat(*b))
+                    .then(self.mem_of(pb).cmp(&self.mem_of(pa))),
                 SortKey::Pid => pa.pid.cmp(&pb.pid),
                 SortKey::Cpu => {
                     // Na Árvore compara a subárvore, como a RAM: o pai sobe junto com
@@ -1057,28 +1271,45 @@ impl App {
                     } else {
                         // Filhos já encerrados contam: o shell que disparou dez `rg` de
                         // 0,3 s é quem explica o CPU, e sem isso ele ficava no fim da lista.
-                        (pa.cpu_pct + pa.cpu_children_pct, pb.cpu_pct + pb.cpu_children_pct)
+                        (
+                            pa.cpu_pct + pa.cpu_children_pct,
+                            pb.cpu_pct + pb.cpu_children_pct,
+                        )
                     };
                     ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
                 }
-                SortKey::Gpu => pa.gpu_load.unwrap_or(-1.0).partial_cmp(&pb.gpu_load.unwrap_or(-1.0)).unwrap_or(std::cmp::Ordering::Equal),
+                SortKey::Gpu => pa
+                    .gpu_load
+                    .unwrap_or(-1.0)
+                    .partial_cmp(&pb.gpu_load.unwrap_or(-1.0))
+                    .unwrap_or(std::cmp::Ordering::Equal),
                 SortKey::Vram => pa.gpu_vram.unwrap_or(0).cmp(&pb.gpu_vram.unwrap_or(0)),
                 SortKey::State => {
                     let sa = (pa.focused, pa.has_window, pa.kernel_state == Some('Z'));
                     let sb = (pb.focused, pb.has_window, pb.kernel_state == Some('Z'));
                     sa.cmp(&sb)
                 }
-                SortKey::Disk => pa.disk_bps.partial_cmp(&pb.disk_bps).unwrap_or(std::cmp::Ordering::Equal),
+                SortKey::Disk => pa
+                    .disk_bps
+                    .partial_cmp(&pb.disk_bps)
+                    .unwrap_or(std::cmp::Ordering::Equal),
                 SortKey::Age => pb.create_time.cmp(&pa.create_time),
                 SortKey::Parent => {
-                    let na = self.proc(pa.ppid).map(|p| p.name_lower.as_str()).unwrap_or("");
-                    let nb = self.proc(pb.ppid).map(|p| p.name_lower.as_str()).unwrap_or("");
+                    let na = self
+                        .proc(pa.ppid)
+                        .map(|p| p.name_lower.as_str())
+                        .unwrap_or("");
+                    let nb = self
+                        .proc(pb.ppid)
+                        .map(|p| p.name_lower.as_str())
+                        .unwrap_or("");
                     na.cmp(nb).then(self.mem_of(pb).cmp(&self.mem_of(pa)))
                 }
-                SortKey::Steal => self
-                    .steal_rank(pa)
-                    .cmp(&self.steal_rank(pb))
-                    .then(pa.cpu_pct.partial_cmp(&pb.cpu_pct).unwrap_or(std::cmp::Ordering::Equal)),
+                SortKey::Steal => self.steal_rank(pa).cmp(&self.steal_rank(pb)).then(
+                    pa.cpu_pct
+                        .partial_cmp(&pb.cpu_pct)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                ),
             };
             // Desempate por PID depois da inversão. Sem ele, as dezenas de processos
             // empatados em "–" na coluna CPU trocavam de lugar a cada amostra e a lista
@@ -1093,7 +1324,8 @@ impl App {
     }
 
     fn steal_of(&self, p: &ProcInfo) -> Option<StealKind> {
-        let leftover = identity::leftover_reason(&p.cmdline, p.kernel_state, p.has_window).is_some();
+        let leftover =
+            identity::leftover_reason(&p.cmdline, p.kernel_state, p.has_window).is_some();
         pressure::steal_kind(
             leftover,
             &p.cmdline,
@@ -1124,7 +1356,10 @@ impl App {
             swap_used: self.mem.swap_used,
             swap_total: self.mem.swap_total,
             gpu_pct: self.sys.gpu.as_ref().and_then(|g| g.util_pct),
-            game_open: self.procs.iter().any(|p| self.cat(p.pid) == Category::Games),
+            game_open: self
+                .procs
+                .iter()
+                .any(|p| self.cat(p.pid) == Category::Games),
         }
     }
 
@@ -1150,7 +1385,11 @@ impl App {
             b.kind
                 .rank()
                 .cmp(&a.kind.rank())
-                .then(b.cores.partial_cmp(&a.cores).unwrap_or(std::cmp::Ordering::Equal))
+                .then(
+                    b.cores
+                        .partial_cmp(&a.cores)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
                 .then(a.pid.cmp(&b.pid))
         });
         out.truncate(5);
@@ -1182,7 +1421,11 @@ impl App {
             ui.label(num("–").color(Color32::from_gray(110)));
             return;
         }
-        let cores_txt = if cores >= 10.0 { format!("{cores:.0}×") } else { format!("{cores:.1}×") };
+        let cores_txt = if cores >= 10.0 {
+            format!("{cores:.0}×")
+        } else {
+            format!("{cores:.1}×")
+        };
         // Layout da célula é direita→esquerda: o × fica encostado na borda, o % antes dele.
         ui.label(num(cores_txt).color(c).strong());
         ui.add_space(3.0);
@@ -1194,7 +1437,10 @@ impl App {
     /// Só aparecem sem busca e sem filtro de categoria — buscar "chrome" não pode devolver
     /// o pool do kernel. Ordenadas por tamanho, junto do resto.
     fn system_rows(&self, search: &str) -> Vec<Row> {
-        if !self.cfg.show_kernel_rows || !search.is_empty() || self.cat_enabled.len() != Category::ALL.len() {
+        if !self.cfg.show_kernel_rows
+            || !search.is_empty()
+            || self.cat_enabled.len() != Category::ALL.len()
+        {
             return Vec::new();
         }
         let b = self.breakdown();
@@ -1211,17 +1457,29 @@ impl App {
         ];
         out.retain(|(_, bytes)| *bytes > 0);
         out.sort_by_key(|(_, bytes)| std::cmp::Reverse(*bytes));
-        out.into_iter().map(|(kind, bytes)| Row::System { kind, bytes }).collect()
+        out.into_iter()
+            .map(|(kind, bytes)| Row::System { kind, bytes })
+            .collect()
     }
 
     fn build_rows(&mut self) -> Vec<Row> {
         let search = self.search.trim().to_lowercase();
-        let hits: Vec<u32> = self.procs.iter().filter(|p| self.passes(p, &search)).map(|p| p.pid).collect();
+        let hits: Vec<u32> = self
+            .procs
+            .iter()
+            .filter(|p| self.passes(p, &search))
+            .map(|p| p.pid)
+            .collect();
         let sys_rows = self.system_rows(&search);
         match self.cfg.view {
             // Térmico, Partida e Telas não desenham tabela de processos — o braço só
             // existe pra exaustividade.
-            ViewMode::List | ViewMode::Drains | ViewMode::Thermal | ViewMode::Boot | ViewMode::Screens | ViewMode::Clean => {
+            ViewMode::List
+            | ViewMode::Drains
+            | ViewMode::Thermal
+            | ViewMode::Boot
+            | ViewMode::Screens
+            | ViewMode::Clean => {
                 let list = self.cfg.view == ViewMode::List;
                 // Os addons não desenham esta tabela; nas outras as linhas de sistema
                 // ficam no topo, onde o usuário procura "quem está comendo a RAM".
@@ -1233,10 +1491,13 @@ impl App {
                 self.groups.clear();
                 let mut pids = hits;
                 self.sort_pids(&mut pids, false);
-                rows.extend(
-                    pids.into_iter()
-                        .map(|pid| Row::Proc { pid, depth: 0, has_children: false, expanded: false, dim: false }),
-                );
+                rows.extend(pids.into_iter().map(|pid| Row::Proc {
+                    pid,
+                    depth: 0,
+                    has_children: false,
+                    expanded: false,
+                    dim: false,
+                }));
                 rows
             }
             ViewMode::Category => {
@@ -1247,7 +1508,10 @@ impl App {
                 let mut cats: Vec<(Category, u64, Vec<u32>)> = groups
                     .into_iter()
                     .map(|(c, pids)| {
-                        let total = pids.iter().map(|p| self.proc(*p).map(|x| self.mem_of(x)).unwrap_or(0)).sum();
+                        let total = pids
+                            .iter()
+                            .map(|p| self.proc(*p).map(|x| self.mem_of(x)).unwrap_or(0))
+                            .sum();
                         (c, total, pids)
                     })
                     .collect();
@@ -1255,11 +1519,22 @@ impl App {
                 let mut rows = Vec::new();
                 for (cat, total, mut pids) in cats {
                     let collapsed = self.collapsed_cats.contains(&cat);
-                    rows.push(Row::CatHeader { cat, count: pids.len(), total, collapsed });
+                    rows.push(Row::CatHeader {
+                        cat,
+                        count: pids.len(),
+                        total,
+                        collapsed,
+                    });
                     if !collapsed {
                         self.sort_pids(&mut pids, false);
                         for pid in pids {
-                            rows.push(Row::Proc { pid, depth: 1, has_children: false, expanded: false, dim: false });
+                            rows.push(Row::Proc {
+                                pid,
+                                depth: 1,
+                                has_children: false,
+                                expanded: false,
+                                dim: false,
+                            });
                         }
                     }
                 }
@@ -1300,8 +1575,15 @@ impl App {
                         .unwrap_or_default();
                     let has_children = !kids.is_empty();
                     let expanded = has_children
-                        && (self.expanded.contains(&pid) || (filtering && auto_expand.contains(&pid)));
-                    rows.push(Row::Proc { pid, depth, has_children, expanded, dim: filtering && !hitset.contains(&pid) });
+                        && (self.expanded.contains(&pid)
+                            || (filtering && auto_expand.contains(&pid)));
+                    rows.push(Row::Proc {
+                        pid,
+                        depth,
+                        has_children,
+                        expanded,
+                        dim: filtering && !hitset.contains(&pid),
+                    });
                     if expanded && depth < 60 {
                         self.sort_pids(&mut kids, true);
                         for k in kids.into_iter().rev() {
@@ -1323,12 +1605,17 @@ impl App {
         let mut by_key: HashMap<String, Vec<u32>> = HashMap::new();
         for pid in hits {
             let Some(p) = self.proc(pid) else { continue };
-            by_key.entry(categories::group_key(p)).or_default().push(pid);
+            by_key
+                .entry(categories::group_key(p))
+                .or_default()
+                .push(pid);
         }
         let mut groups: Vec<AppGroup> = Vec::with_capacity(by_key.len());
         for (key, mut pids) in by_key {
             self.sort_pids(&mut pids, false);
-            let Some(p) = pids.first().and_then(|pid| self.proc(*pid)) else { continue };
+            let Some(p) = pids.first().and_then(|pid| self.proc(*pid)) else {
+                continue;
+            };
             let mut best = identity::of(p);
             for pid in &pids {
                 if let Some(m) = self.proc(*pid) {
@@ -1378,11 +1665,23 @@ impl App {
             let ord = match sort {
                 SortKey::Name => ga.name_lower.cmp(&gb.name_lower),
                 SortKey::Ram => ga.ram.cmp(&gb.ram),
-                SortKey::Cpu => ga.cpu.partial_cmp(&gb.cpu).unwrap_or(std::cmp::Ordering::Equal),
-                SortKey::Gpu => ga.gpu.partial_cmp(&gb.gpu).unwrap_or(std::cmp::Ordering::Equal),
+                SortKey::Cpu => ga
+                    .cpu
+                    .partial_cmp(&gb.cpu)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                SortKey::Gpu => ga
+                    .gpu
+                    .partial_cmp(&gb.gpu)
+                    .unwrap_or(std::cmp::Ordering::Equal),
                 SortKey::Vram => ga.vram.cmp(&gb.vram),
-                SortKey::State => ga.focused.cmp(&gb.focused).then(ga.has_window.cmp(&gb.has_window)),
-                SortKey::Disk => ga.disk.partial_cmp(&gb.disk).unwrap_or(std::cmp::Ordering::Equal),
+                SortKey::State => ga
+                    .focused
+                    .cmp(&gb.focused)
+                    .then(ga.has_window.cmp(&gb.has_window)),
+                SortKey::Disk => ga
+                    .disk
+                    .partial_cmp(&gb.disk)
+                    .unwrap_or(std::cmp::Ordering::Equal),
                 SortKey::Cat => ga.cat.cmp(&gb.cat).then(gb.ram.cmp(&ga.ram)),
                 SortKey::Pid => ga.pids.iter().min().cmp(&gb.pids.iter().min()),
                 SortKey::Age => gb.oldest.cmp(&ga.oldest),
@@ -1392,7 +1691,11 @@ impl App {
                 SortKey::Steal => self
                     .group_steal_rank(ga)
                     .cmp(&self.group_steal_rank(gb))
-                    .then(ga.cpu.partial_cmp(&gb.cpu).unwrap_or(std::cmp::Ordering::Equal)),
+                    .then(
+                        ga.cpu
+                            .partial_cmp(&gb.cpu)
+                            .unwrap_or(std::cmp::Ordering::Equal),
+                    ),
             };
             let ord = if desc { ord.reverse() } else { ord };
             ord.then(ga.key.cmp(&gb.key))
@@ -1403,14 +1706,26 @@ impl App {
         for gi in order {
             let g = &self.groups[gi];
             if g.pids.len() < 2 {
-                rows.push(Row::Proc { pid: g.pids[0], depth: 0, has_children: false, expanded: false, dim: false });
+                rows.push(Row::Proc {
+                    pid: g.pids[0],
+                    depth: 0,
+                    has_children: false,
+                    expanded: false,
+                    dim: false,
+                });
                 continue;
             }
             rows.push(Row::AppHeader { gi });
             let searching = !self.search.trim().is_empty();
             if searching || self.expanded_apps.contains(&g.key) {
                 for &pid in &g.pids {
-                    rows.push(Row::Proc { pid, depth: 1, has_children: false, expanded: false, dim: false });
+                    rows.push(Row::Proc {
+                        pid,
+                        depth: 1,
+                        has_children: false,
+                        expanded: false,
+                        dim: false,
+                    });
                 }
             }
         }
@@ -1457,8 +1772,13 @@ impl App {
                 best = Some(id);
             }
             if leftover.is_none() {
-                leftover = identity::leftover_reason(&p.cmdline, p.kernel_state, p.has_window)
-                    .map(|s| s.to_string());
+                leftover = identity::leftover_reason_for(
+                    &p.cmdline,
+                    p.kernel_state,
+                    p.has_window,
+                    self.cfg.locale,
+                )
+                .map(|s| s.to_string());
             }
         }
         g.ram = ram;
@@ -1541,7 +1861,12 @@ impl App {
             RowCacheAction::ReconcileSnapshot => {
                 // mantém a ordem; remove só o que morreu ou deixou de passar no filtro
                 let search = self.search.trim().to_lowercase();
-                let mut keep: HashSet<u32> = self.procs.iter().filter(|p| self.passes(p, &search)).map(|p| p.pid).collect();
+                let mut keep: HashSet<u32> = self
+                    .procs
+                    .iter()
+                    .filter(|p| self.passes(p, &search))
+                    .map(|p| p.pid)
+                    .collect();
                 self.shown_count = keep.len();
                 if self.cfg.view == ViewMode::Tree {
                     let hits: Vec<u32> = keep.iter().copied().collect();
@@ -1558,17 +1883,19 @@ impl App {
                     .into_iter()
                     .flat_map(|r| match r {
                         Row::Proc { pid, .. } if !keep.contains(&pid) => Vec::new(),
-                        Row::AppHeader { gi } => match self.groups.get(gi).map(|g| g.pids.as_slice()) {
-                            Some([pid]) => vec![Row::Proc {
-                                pid: *pid,
-                                depth: 0,
-                                has_children: false,
-                                expanded: false,
-                                dim: false,
-                            }],
-                            Some(pids) if pids.len() > 1 => vec![Row::AppHeader { gi }],
-                            _ => Vec::new(),
-                        },
+                        Row::AppHeader { gi } => {
+                            match self.groups.get(gi).map(|g| g.pids.as_slice()) {
+                                Some([pid]) => vec![Row::Proc {
+                                    pid: *pid,
+                                    depth: 0,
+                                    has_children: false,
+                                    expanded: false,
+                                    dim: false,
+                                }],
+                                Some(pids) if pids.len() > 1 => vec![Row::AppHeader { gi }],
+                                _ => Vec::new(),
+                            }
+                        }
                         other => vec![other],
                     })
                     .collect();
@@ -1580,7 +1907,11 @@ impl App {
             RowCacheAction::Rebuild => {
                 let rows = self.build_rows();
                 let search = self.search.trim().to_lowercase();
-                self.shown_count = self.procs.iter().filter(|p| self.passes(p, &search)).count();
+                self.shown_count = self
+                    .procs
+                    .iter()
+                    .filter(|p| self.passes(p, &search))
+                    .count();
                 self.cached_rows = Some(rows.clone());
                 self.cached_key = key;
                 self.snapshot_dirty = false;
@@ -1600,21 +1931,41 @@ impl App {
     /// é a proteção de verdade, e ele é verificado aqui.
     fn request_kill(&mut self, pid: u32, tree: bool) {
         let Some(p) = self.proc(pid).cloned() else {
-            self.toast(format!("PID {pid} já tinha saído"), false);
+            self.toast(
+                format!(
+                    "PID {pid} {}",
+                    self.cfg.locale.text("já tinha saído", "had already exited")
+                ),
+                false,
+            );
             self.after_kill();
             return;
         };
         let mut pids = vec![];
         let mut skipped_locked = 0;
         if self.is_locked(&p) {
-            self.toast(format!("{} está protegido (lock)", identity::of(&p).label), true);
+            self.toast(
+                format!(
+                    "{} {}",
+                    identity::of(&p).label,
+                    self.cfg
+                        .locale
+                        .text("está protegido (lock)", "is protected (lock)")
+                ),
+                true,
+            );
             return;
         }
         if p.kernel_state == Some('Z') {
             self.request_reap_zombie(&p, tree);
             return;
         }
-        pids.push((p.pid, p.create_time, identity::of(&p).label, self.mem_of(&p)));
+        pids.push((
+            p.pid,
+            p.create_time,
+            identity::of(&p).label,
+            self.mem_of(&p),
+        ));
         if tree {
             for d in self.descendants(pid) {
                 if let Some(c) = self.proc(d) {
@@ -1637,7 +1988,10 @@ impl App {
         if let Some(n) = procs::comm_of(pid) {
             return n;
         }
-        self.seen_names.get(&pid).cloned().unwrap_or_else(|| format!("PID {pid}"))
+        self.seen_names
+            .get(&pid)
+            .cloned()
+            .unwrap_or_else(|| format!("PID {pid}"))
     }
 
     /// Quem segura um zumbi agora: pai vivo (nome, pid) ou `None` quando o pai é o init /
@@ -1666,7 +2020,18 @@ impl App {
         let label = identity::of(p).label;
         let sampled_ppid = if p.ppid != 0 { p.ppid } else { p.raw_ppid };
         let Some((pname, ppid)) = self.zombie_holder(p.pid, sampled_ppid) else {
-            self.toast(format!("{label} ({}) é zumbi e o pai já saiu: o init recolhe sozinho em instantes", p.pid), false);
+            let msg = if self.cfg.locale == Locale::Portuguese {
+                format!(
+                    "{label} ({}) é zumbi e o pai já saiu: o init recolhe sozinho em instantes",
+                    p.pid
+                )
+            } else {
+                format!(
+                    "{label} ({}) is a zombie and its parent exited: init will reap it shortly",
+                    p.pid
+                )
+            };
+            self.toast(msg, false);
             self.after_kill();
             return;
         };
@@ -1676,34 +2041,82 @@ impl App {
                 // O pai existe no kernel mas ainda não entrou numa amostra: sinal direto.
                 match procs::terminate(ppid) {
                     procs::KillOutcome::Signaled | procs::KillOutcome::AlreadyGone => {
-                        self.toast(format!("pai {pname} finalizado; o zumbi {label} some em instantes"), false)
+                        let msg = if self.cfg.locale == Locale::Portuguese {
+                            format!("pai {pname} finalizado; o zumbi {label} some em instantes")
+                        } else {
+                            format!(
+                                "parent {pname} terminated; zombie {label} will disappear shortly"
+                            )
+                        };
+                        self.toast(msg, false)
                     }
-                    procs::KillOutcome::Denied => self.toast(format!("sem permissão para finalizar o pai {pname}"), true),
-                    other => self.toast(format!("falha ao finalizar o pai {pname}: {other:?}"), true),
+                    procs::KillOutcome::Denied => {
+                        let msg = if self.cfg.locale == Locale::Portuguese {
+                            format!("sem permissão para finalizar o pai {pname}")
+                        } else {
+                            format!("permission denied while terminating parent {pname}")
+                        };
+                        self.toast(msg, true)
+                    }
+                    other => {
+                        let msg = if self.cfg.locale == Locale::Portuguese {
+                            format!("falha ao finalizar o pai {pname}: {other:?}")
+                        } else {
+                            format!("failed to terminate parent {pname}: {other:?}")
+                        };
+                        self.toast(msg, true)
+                    }
                 }
                 self.after_kill();
                 return;
             };
             if is_critical(&parent.name_lower, parent.pid) {
-                self.toast(format!("{label} é zumbi segurado por {pname}, que é crítico do sistema: não dá para finalizar. Não ocupa memória"), true);
+                let msg = if self.cfg.locale == Locale::Portuguese {
+                    format!("{label} é zumbi segurado por {pname}, que é crítico do sistema: não dá para finalizar. Não ocupa memória")
+                } else {
+                    format!("{label} is a zombie held by {pname}, which is system-critical and cannot be terminated. It uses no memory")
+                };
+                self.toast(msg, true);
                 return;
             }
             if self.is_locked(&parent) {
-                self.toast(format!("{label} é zumbi segurado por {pname}, que está protegido (lock). Não ocupa memória; desproteja o pai para finalizar"), true);
+                let msg = if self.cfg.locale == Locale::Portuguese {
+                    format!("{label} é zumbi segurado por {pname}, que está protegido (lock). Não ocupa memória; desproteja o pai para finalizar")
+                } else {
+                    format!("{label} is a zombie held by {pname}, which is protected (lock). It uses no memory; unlock the parent to terminate it")
+                };
+                self.toast(msg, true);
                 return;
             }
-            let entry = (parent.pid, parent.create_time, identity::of(&parent).label, self.mem_of(&parent));
+            let entry = (
+                parent.pid,
+                parent.create_time,
+                identity::of(&parent).label,
+                self.mem_of(&parent),
+            );
             self.execute_kill(vec![entry], 0);
             return;
         }
         match procs::nudge_parent(ppid) {
             procs::KillOutcome::Signaled => {}
             procs::KillOutcome::Denied => {
-                self.toast(format!("{label} é zumbi; sem permissão para sinalizar o pai {pname}. Não ocupa memória"), true);
+                let msg = if self.cfg.locale == Locale::Portuguese {
+                    format!("{label} é zumbi; sem permissão para sinalizar o pai {pname}. Não ocupa memória")
+                } else {
+                    format!("{label} is a zombie; permission denied while signaling parent {pname}. It uses no memory")
+                };
+                self.toast(msg, true);
                 return;
             }
             _ => {
-                self.toast(format!("{label} é zumbi e o pai {pname} já saiu: o init recolhe em instantes"), false);
+                let msg = if self.cfg.locale == Locale::Portuguese {
+                    format!("{label} é zumbi e o pai {pname} já saiu: o init recolhe em instantes")
+                } else {
+                    format!(
+                        "{label} is a zombie and parent {pname} exited: init will reap it shortly"
+                    )
+                };
+                self.toast(msg, false);
                 self.after_kill();
                 return;
             }
@@ -1715,12 +2128,19 @@ impl App {
             // O painel de detalhes tem o botão "Finalizar pai"; selecionar aqui poupa o
             // usuário de descobrir o Shift.
             self.selected = Some(p.pid);
-            self.toast(
-                format!("{label} ({}) já morreu e não ocupa memória. A linha fica porque {pname} não recolheu: some quando ele recolher ou for finalizado (Shift+✖ ou o botão no painel)", p.pid),
-                true,
-            );
+            let msg = if self.cfg.locale == Locale::Portuguese {
+                format!("{label} ({}) já morreu e não ocupa memória. A linha fica porque {pname} não recolheu: some quando ele recolher ou for finalizado (Shift+✖ ou o botão no painel)", p.pid)
+            } else {
+                format!("{label} ({}) is already dead and uses no memory. Its row remains because {pname} has not reaped it; it disappears when the parent reaps it or is terminated (Shift+✖ or the button in the details panel)", p.pid)
+            };
+            self.toast(msg, true);
         } else {
-            self.toast(format!("zumbi {label} ({}) recolhido por {pname}", p.pid), false);
+            let msg = if self.cfg.locale == Locale::Portuguese {
+                format!("zumbi {label} ({}) recolhido por {pname}", p.pid)
+            } else {
+                format!("zombie {label} ({}) reaped by {pname}", p.pid)
+            };
+            self.toast(msg, false);
         }
     }
 
@@ -1743,7 +2163,12 @@ impl App {
             }
         }
         if pids.is_empty() {
-            self.toast(format!("{name}: todos os {count} processos estão protegidos (lock)"), true);
+            let msg = if self.cfg.locale == Locale::Portuguese {
+                format!("{name}: todos os {count} processos estão protegidos (lock)")
+            } else {
+                format!("{name}: all {count} processes are protected (lock)")
+            };
+            self.toast(msg, true);
             return;
         }
         self.execute_kill(pids, skipped);
@@ -1757,6 +2182,7 @@ impl App {
     /// continuar, diz quem está segurando. Antes isso era "1 finalizado" seguido de uma linha
     /// que não saía nunca, e o clique seguinte caía na mensagem de zumbi sem contexto.
     fn execute_kill(&mut self, pids: Vec<(u32, i64, String, u64)>, skipped_locked: usize) {
+        let english = self.cfg.locale == Locale::English;
         let mut signaled = 0;
         let mut gone = 0;
         let mut freed = 0u64;
@@ -1777,8 +2203,16 @@ impl App {
             match procs::terminate(*pid) {
                 procs::KillOutcome::Signaled => pending.push((*pid, *created, name.clone(), *ram)),
                 procs::KillOutcome::AlreadyGone => gone += 1,
-                procs::KillOutcome::Denied => errs.push(format!("{name} ({pid}): acesso negado")),
-                procs::KillOutcome::Invalid => errs.push(format!("{name} ({pid}): PID inválido")),
+                procs::KillOutcome::Denied => errs.push(if english {
+                    format!("{name} ({pid}): access denied")
+                } else {
+                    format!("{name} ({pid}): acesso negado")
+                }),
+                procs::KillOutcome::Invalid => errs.push(if english {
+                    format!("{name} ({pid}): invalid PID")
+                } else {
+                    format!("{name} ({pid}): PID inválido")
+                }),
                 procs::KillOutcome::Failed(e) => errs.push(format!("{name} ({pid}): {e}")),
             }
         }
@@ -1798,8 +2232,16 @@ impl App {
                     freed += ram;
                     killed.push((pid, name, 0));
                 }
-                procs::KillOutcome::Denied => errs.push(format!("{name} ({pid}): acesso negado")),
-                procs::KillOutcome::Invalid => errs.push(format!("{name} ({pid}): PID inválido")),
+                procs::KillOutcome::Denied => errs.push(if english {
+                    format!("{name} ({pid}): access denied")
+                } else {
+                    format!("{name} ({pid}): acesso negado")
+                }),
+                procs::KillOutcome::Invalid => errs.push(if english {
+                    format!("{name} ({pid}): invalid PID")
+                } else {
+                    format!("{name} ({pid}): PID inválido")
+                }),
                 procs::KillOutcome::Failed(e) => errs.push(format!("{name} ({pid}): {e}")),
             }
         }
@@ -1807,27 +2249,48 @@ impl App {
         let held = self.settle_zombies(&killed);
         self.after_kill();
         let poupados = if skipped_locked > 0 {
-            format!(", {skipped_locked} protegido(s) poupado(s)")
+            if english {
+                format!(", {skipped_locked} protected process(es) skipped")
+            } else {
+                format!(", {skipped_locked} protegido(s) poupado(s)")
+            }
         } else {
             String::new()
         };
         let mut parts = Vec::new();
         if signaled > 0 {
-            parts.push(format!(
-                "{signaled} finalizado(s), ~{} liberados",
-                fmt_bytes(freed)
-            ));
+            parts.push(if english {
+                format!("{signaled} terminated, ~{} freed", fmt_bytes(freed))
+            } else {
+                format!("{signaled} finalizado(s), ~{} liberados", fmt_bytes(freed))
+            });
         }
         if gone > 0 {
-            parts.push(format!("{gone} já tinham saído"));
+            parts.push(if english {
+                format!("{gone} had already exited")
+            } else {
+                format!("{gone} já tinham saído")
+            });
         }
         // Zumbis que já eram zumbis e o pai recolheu no cutucão: contam como resolvidos.
-        let reaped = zombies.iter().filter(|(pid, _, _)| !held.iter().any(|h| h.0 == *pid)).count();
+        let reaped = zombies
+            .iter()
+            .filter(|(pid, _, _)| !held.iter().any(|h| h.0 == *pid))
+            .count();
         if reaped > 0 {
-            parts.push(format!("{reaped} zumbi(s) recolhido(s) pelo pai"));
+            parts.push(if english {
+                format!("{reaped} zombie(s) reaped by the parent")
+            } else {
+                format!("{reaped} zumbi(s) recolhido(s) pelo pai")
+            });
         }
         if parts.is_empty() && errs.is_empty() && held.is_empty() {
-            parts.push("nada a encerrar".into());
+            parts.push(
+                self.cfg
+                    .locale
+                    .text("nada a encerrar", "nothing to terminate")
+                    .into(),
+            );
         }
         let mut msg = parts.join(", ");
         let mut warn = false;
@@ -1843,7 +2306,12 @@ impl App {
             if !msg.is_empty() {
                 msg.push_str("; ");
             }
-            msg.push_str(&format!("{} falha(s): {}", errs.len(), errs[0]));
+            msg.push_str(&format!(
+                "{} {}: {}",
+                errs.len(),
+                self.cfg.locale.text("falha(s)", "failure(s)"),
+                errs[0]
+            ));
             if errs.len() > 1 {
                 msg.push_str(&format!(" (+{})", errs.len() - 1));
             }
@@ -1892,6 +2360,7 @@ impl App {
 
     /// Frase da barra de status para zumbis que o pai não recolheu, agrupada por pai.
     fn held_zombies_note(&self, held: &[(u32, String, u32)]) -> String {
+        let english = self.cfg.locale == Locale::English;
         let mut by_parent: Vec<(u32, Vec<&(u32, String, u32)>)> = Vec::new();
         for h in held {
             match by_parent.iter_mut().find(|(pp, _)| *pp == h.2) {
@@ -1904,12 +2373,22 @@ impl App {
             let pname = self.name_for(ppid);
             let who = if list.len() == 1 {
                 format!("{} ({})", list[0].1, list[0].0)
+            } else if english {
+                format!("{} processes ({})", list.len(), list[0].1)
             } else {
                 format!("{} processos ({})", list.len(), list[0].1)
             };
-            parts.push(format!("{who} morreu mas ficou como zumbi: {pname} ({ppid}) não recolheu"));
+            parts.push(if english {
+                format!("{who} exited but remained a zombie: {pname} ({ppid}) did not reap it")
+            } else {
+                format!("{who} morreu mas ficou como zumbi: {pname} ({ppid}) não recolheu")
+            });
         }
-        format!("{}. Zumbi não ocupa memória; some quando o pai recolher ou for finalizado (selecione a linha: o painel tem o botão)", parts.join("; "))
+        if english {
+            format!("{}. Zombies use no memory; they disappear when the parent reaps them or is terminated (select the row: the details panel has the button)", parts.join("; "))
+        } else {
+            format!("{}. Zumbi não ocupa memória; some quando o pai recolher ou for finalizado (selecione a linha: o painel tem o botão)", parts.join("; "))
+        }
     }
 
     fn after_kill(&mut self) {
@@ -1954,22 +2433,42 @@ impl App {
             use windows::core::{w, PCWSTR};
             use windows::Win32::UI::Shell::ShellExecuteW;
             use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-            let exe = std::env::current_exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+            let exe = std::env::current_exe()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
             let wide: Vec<u16> = exe.encode_utf16().chain(std::iter::once(0)).collect();
-            let r = unsafe { ShellExecuteW(None, w!("runas"), PCWSTR(wide.as_ptr()), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
+            let r = unsafe {
+                ShellExecuteW(
+                    None,
+                    w!("runas"),
+                    PCWSTR(wide.as_ptr()),
+                    PCWSTR::null(),
+                    PCWSTR::null(),
+                    SW_SHOWNORMAL,
+                )
+            };
             if r.0 as usize > 32 {
                 std::process::exit(0);
             } else {
-                self.toast("Elevação cancelada ou falhou".into(), true);
+                self.toast(
+                    self.cfg
+                        .locale
+                        .text(
+                            "Elevação cancelada ou falhou",
+                            "Elevation was cancelled or failed",
+                        )
+                        .into(),
+                    true,
+                );
             }
         }
         #[cfg(target_os = "macos")]
         {
-            self.toast("No macOS, rode o RamDog com sudo se precisar matar processos de outros usuários.".into(), true);
+            self.toast(self.cfg.locale.text("No macOS, rode o RamDog com sudo se precisar matar processos de outros usuários.", "On macOS, run RamDog with sudo to terminate other users' processes.").into(), true);
         }
         #[cfg(target_os = "linux")]
         {
-            self.toast("No Linux, rode o RamDog com sudo se precisar matar processos de outros usuários.".into(), true);
+            self.toast(self.cfg.locale.text("No Linux, rode o RamDog com sudo se precisar matar processos de outros usuários.", "On Linux, run RamDog with sudo to terminate other users' processes.").into(), true);
         }
     }
 
@@ -2009,17 +2508,33 @@ impl App {
         if cfg!(target_os = "linux") {
             let used = self.mem.used_phys();
             let total = self.mem.total_phys.max(1);
-            let mut tip = format!("{} em uso de {} (MemTotal − MemAvailable).\n{}", fmt_gb(used), fmt_gb(total), self.linux_memory_summary());
+            let mut tip = format!(
+                "{} {} {} (MemTotal − MemAvailable).\n{}",
+                fmt_gb(used),
+                self.cfg.locale.text("em uso de", "used of"),
+                fmt_gb(total),
+                self.linux_memory_summary()
+            );
             if let Some((committed, limit)) = self.mem.linux_commit {
-                tip.push_str(&format!("\nCommit global: {} / {} (Committed_AS / CommitLimit). Pode exceder o limite conforme a política de overcommit.", fmt_gb(committed), fmt_gb(limit)));
-            } else { tip.push_str("\nCommit global: indisponível."); }
+                if self.cfg.locale == Locale::Portuguese {
+                    tip.push_str(&format!("\nCommit global: {} / {} (Committed_AS / CommitLimit). Pode exceder o limite conforme a política de overcommit.", fmt_gb(committed), fmt_gb(limit)));
+                } else {
+                    tip.push_str(&format!("\nGlobal commit: {} / {} (Committed_AS / CommitLimit). It may exceed the limit depending on the overcommit policy.", fmt_gb(committed), fmt_gb(limit)));
+                }
+            } else {
+                tip.push_str(self.cfg.locale.text(
+                    "\nCommit global: indisponível.",
+                    "\nGlobal commit: unavailable.",
+                ));
+            }
             Self::meter_bar(ui, width, Some(used as f32 / total as f32 * 100.0), tip);
             return;
         }
         let b = self.breakdown();
         let total = self.mem.total_phys.max(1);
         let cats = &self.derived.private_cat_totals;
-        let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, TOP_BAR_H), egui::Sense::hover());
+        let (rect, resp) =
+            ui.allocate_exact_size(Vec2::new(width, TOP_BAR_H), egui::Sense::hover());
         let p = ui.painter();
         p.rect_filled(rect, 3.0, Color32::from_rgb(30, 34, 41));
         let scale = rect.width() / total as f32;
@@ -2036,7 +2551,10 @@ impl App {
                 return;
             }
             let right = (*x + w).min(rect.right());
-            let seg = Rect::from_min_max(egui::pos2(*x, rect.top() + 1.0), egui::pos2(right, rect.bottom() - 1.0));
+            let seg = Rect::from_min_max(
+                egui::pos2(*x, rect.top() + 1.0),
+                egui::pos2(right, rect.bottom() - 1.0),
+            );
             p.rect_filled(seg, 0.0, color);
             *x = right;
         };
@@ -2049,24 +2567,60 @@ impl App {
         p.rect_stroke(rect, 3.0, Stroke::new(1.0_f32, LINE), StrokeKind::Inside);
         // O compromisso saía numa linha extra embaixo da barra — era a única linha que só a
         // RAM tinha, e era ela que desalinhava a fileira inteira dos medidores. Vive aqui.
-        let mut tip = format!(
-            "{} em uso de {}\ncompromisso {} / {} (RAM + arquivo de paginação)\n",
-            fmt_gb(b.used),
-            fmt_gb(total),
-            fmt_gb(self.mem.used_commit()),
-            fmt_gb(self.mem.total_commit)
-        );
+        let mut tip = if self.cfg.locale == Locale::Portuguese {
+            format!(
+                "{} em uso de {}\ncompromisso {} / {} (RAM + arquivo de paginação)\n",
+                fmt_gb(b.used),
+                fmt_gb(total),
+                fmt_gb(self.mem.used_commit()),
+                fmt_gb(self.mem.total_commit)
+            )
+        } else {
+            format!(
+                "{} used of {}\ncommit {} / {} (RAM + paging file)\n",
+                fmt_gb(b.used),
+                fmt_gb(total),
+                fmt_gb(self.mem.used_commit()),
+                fmt_gb(self.mem.total_commit)
+            )
+        };
         for (c, t) in &segs {
-            tip.push_str(&format!("\n{}  {}", c.label(), fmt_bytes_short(*t)));
+            tip.push_str(&format!(
+                "\n{}  {}",
+                c.label_for(self.cfg.locale),
+                fmt_bytes_short(*t)
+            ));
         }
-        tip.push_str(&format!("\n\nProcessos (privado)  {}", fmt_bytes_short(b.private)));
+        tip.push_str(&format!(
+            "\n\n{}  {}",
+            self.cfg
+                .locale
+                .text("Processos (privado)", "Processes (private)"),
+            fmt_bytes_short(b.private)
+        ));
         if b.kernel_ok {
-            tip.push_str(&format!("\n{}  {}", SysRow::PagedPool.label(), fmt_bytes_short(b.paged_pool)));
-            tip.push_str(&format!("\n{}  {}", SysRow::NonPagedPool.label(), fmt_bytes_short(b.nonpaged_pool)));
+            tip.push_str(&format!(
+                "\n{}  {}",
+                SysRow::PagedPool.label_for(self.cfg.locale),
+                fmt_bytes_short(b.paged_pool)
+            ));
+            tip.push_str(&format!(
+                "\n{}  {}",
+                SysRow::NonPagedPool.label_for(self.cfg.locale),
+                fmt_bytes_short(b.nonpaged_pool)
+            ));
         }
-        tip.push_str(&format!("\n{}  {}", SysRow::SharedAndCache.label(), fmt_bytes_short(b.shared_and_cache)));
+        tip.push_str(&format!(
+            "\n{}  {}",
+            SysRow::SharedAndCache.label_for(self.cfg.locale),
+            fmt_bytes_short(b.shared_and_cache)
+        ));
         if !self.hwtemp.dimm_temps.is_empty() {
-            tip.push_str("\n\nTemperatura por pente:");
+            tip.push_str(
+                self.cfg
+                    .locale
+                    .text("\n\nTemperatura por pente:", "\n\nTemperature by module:"),
+            );
             for (i, t) in self.hwtemp.dimm_temps.iter().enumerate() {
                 tip.push_str(&format!("\nDIMM #{i}  {t:.1}°C"));
             }
@@ -2108,14 +2662,21 @@ impl App {
         }
     }
 
-    fn meter_bar(ui: &mut egui::Ui, width: f32, pct: Option<f32>, tip: impl Into<egui::WidgetText>) -> egui::Response {
-        let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, TOP_BAR_H), egui::Sense::hover());
+    fn meter_bar(
+        ui: &mut egui::Ui,
+        width: f32,
+        pct: Option<f32>,
+        tip: impl Into<egui::WidgetText>,
+    ) -> egui::Response {
+        let (rect, resp) =
+            ui.allocate_exact_size(Vec2::new(width, TOP_BAR_H), egui::Sense::hover());
         let p = ui.painter();
         p.rect_filled(rect, 2.0, Color32::from_rgb(30, 34, 41));
         if let Some(pct) = pct {
             let frac = (pct / 100.0).clamp(0.0, 1.0);
             if frac > 0.01 {
-                let bar = Rect::from_min_size(rect.min, Vec2::new(rect.width() * frac, rect.height()));
+                let bar =
+                    Rect::from_min_size(rect.min, Vec2::new(rect.width() * frac, rect.height()));
                 p.rect_filled(bar, 2.0, Self::load_color(frac));
             }
         }
@@ -2171,6 +2732,7 @@ impl App {
     /// HUD compacto: CPU, RAM, GPU e disco em 2x2, com temperatura ao lado de cada um.
     /// Sem lista, sem detalhes — é a resposta de relance a "o que está pesando agora".
     fn ui_mini(&mut self, ctx: &egui::Context) {
+        let locale = self.cfg.locale;
         let frame = egui::Frame::new()
             .fill(BG)
             .stroke(Stroke::new(1.0_f32, LINE))
@@ -2178,7 +2740,11 @@ impl App {
         egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
             // Sem decoração não há barra de título: arrastar qualquer parte vazia move a
             // janela. A interação vem antes dos widgets para os botões ganharem o clique.
-            let bg = ui.interact(ui.max_rect(), ui.id().with("mini_drag"), egui::Sense::click_and_drag());
+            let bg = ui.interact(
+                ui.max_rect(),
+                ui.id().with("mini_drag"),
+                egui::Sense::click_and_drag(),
+            );
             if bg.drag_started() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
@@ -2193,11 +2759,11 @@ impl App {
             let cpu_sub = self
                 .sys
                 .load1
-                .map(|l| format!("load {}", pt_num(l as f64, 1)))
+                .map(|l| format!("{} {}", locale.text("carga", "load"), pt_num(l as f64, 1)))
                 .unwrap_or_default();
             ui.horizontal(|ui| {
                 Self::meter_tile(ui, w, "CPU", cpu_pct, self.cpu_temp(), &cpu_sub, |ui, w| {
-                    Self::meter_bar(ui, w, cpu_pct, "Uso de CPU");
+                    Self::meter_bar(ui, w, cpu_pct, locale.text("Uso de CPU", "CPU usage"));
                 });
                 let used = self.mem.used_phys();
                 let total = self.mem.total_phys.max(1);
@@ -2206,9 +2772,15 @@ impl App {
                 } else {
                     format!("{} / {}", fmt_gb(used), fmt_gb(total))
                 };
-                Self::meter_tile(ui, w, "RAM", Some(used as f32 / total as f32 * 100.0), self.ram_temp(), &sub, |ui, w| {
-                    self.ram_gauge(ui, w)
-                });
+                Self::meter_tile(
+                    ui,
+                    w,
+                    "RAM",
+                    Some(used as f32 / total as f32 * 100.0),
+                    self.ram_temp(),
+                    &sub,
+                    |ui, w| self.ram_gauge(ui, w),
+                );
             });
             ui.horizontal(|ui| {
                 let gpu = self.sys.gpu.clone();
@@ -2217,16 +2789,39 @@ impl App {
                         g.util_pct,
                         match g.temp_c {
                             Some(t) => Temp::C(t),
-                            None => Temp::Missing("O driver não reportou temperatura desta GPU.".into()),
+                            None => Temp::Missing(
+                                locale
+                                    .text(
+                                        "O driver não reportou temperatura desta GPU.",
+                                        "The driver did not report a temperature for this GPU.",
+                                    )
+                                    .into(),
+                            ),
                         },
-                        if g.mem_total > 0 { format!("{} / {}", fmt_gb(g.mem_used), fmt_gb(g.mem_total)) } else { String::new() },
+                        if g.mem_total > 0 {
+                            format!("{} / {}", fmt_gb(g.mem_used), fmt_gb(g.mem_total))
+                        } else {
+                            String::new()
+                        },
                         g.name.clone(),
                     ),
                     None => (
                         None,
-                        Temp::Missing("Sem leitura de GPU: leitura de GPU indisponível.".into()),
+                        Temp::Missing(
+                            locale
+                                .text(
+                                    "Sem leitura de GPU: leitura de GPU indisponível.",
+                                    "No GPU reading: GPU telemetry is unavailable.",
+                                )
+                                .into(),
+                        ),
                         String::new(),
-                        "Sem leitura de GPU neste host".to_string(),
+                        locale
+                            .text(
+                                "Sem leitura de GPU neste host",
+                                "No GPU reading on this host",
+                            )
+                            .to_string(),
                     ),
                 };
                 Self::meter_tile(ui, w, "GPU", gpu_pct, gpu_temp, &gpu_sub, |ui, w| {
@@ -2239,9 +2834,17 @@ impl App {
                     .filter(|bps| *bps >= 1024.0)
                     .map(fmt_bps)
                     .unwrap_or_default();
-                Self::meter_tile(ui, w, "DISCO", disk_pct, Temp::None, &disk_sub, |ui, w| {
-                    Self::meter_bar(ui, w, disk_pct, disk_usage_tip());
-                });
+                Self::meter_tile(
+                    ui,
+                    w,
+                    locale.text("DISCO", "DISK"),
+                    disk_pct,
+                    Temp::None,
+                    &disk_sub,
+                    |ui, w| {
+                        Self::meter_bar(ui, w, disk_pct, disk_usage_tip(locale));
+                    },
+                );
             });
             self.mini_fans(ui);
         });
@@ -2279,16 +2882,16 @@ impl App {
         match self.hwtemp.cpu_temp {
             Some(t) => Temp::C(t.round() as u32),
             None if cfg!(target_os = "macos") => {
-                Temp::Missing("Temperatura de CPU no macOS ainda não está ligada.".into())
+                Temp::Missing(self.cfg.locale.text("Temperatura de CPU no macOS ainda não está ligada.", "CPU temperature on macOS is not wired up yet.").into())
             }
             None if cfg!(target_os = "linux") => {
-                Temp::Missing("Sem sensor de CPU em /sys/class/hwmon (coretemp, k10temp ou zenpower).".into())
+                Temp::Missing(self.cfg.locale.text("Sem sensor de CPU em /sys/class/hwmon (coretemp, k10temp ou zenpower).", "No CPU sensor in /sys/class/hwmon (coretemp, k10temp, or zenpower).").into())
             }
             None if !self.is_admin => {
-                Temp::Missing("Temperatura de CPU precisa de admin: o sensor Tctl só responde por driver de hardware. Volte ao modo completo e use ⬆ Admin.".into())
+                Temp::Missing(self.cfg.locale.text("Temperatura de CPU precisa de admin: o sensor Tctl só responde por driver de hardware. Volte ao modo completo e use ⬆ Admin.", "CPU temperature requires admin rights: the Tctl sensor is exposed by a hardware driver. Return to full view and use ⬆ Admin.").into())
             }
             None => Temp::Missing(
-                "Temperatura indisponível: hwtemp.exe não está ao lado do ramdog.exe, ou a placa-mãe não tem sensor suportado.".into(),
+                self.cfg.locale.text("Temperatura indisponível: hwtemp.exe não está ao lado do ramdog.exe, ou a placa-mãe não tem sensor suportado.", "Temperature unavailable: hwtemp.exe is not beside ramdog.exe, or the motherboard has no supported sensor.").into(),
             ),
         }
     }
@@ -2297,13 +2900,13 @@ impl App {
         match self.hwtemp.ram_max() {
             Some(t) => Temp::C(t.round() as u32),
             None if cfg!(target_os = "linux") => {
-                Temp::Missing("Nenhum pente expõe sensor no hwmon (spd5118/jc42). Sem isso o RamDog não inventa °C.".into())
+                Temp::Missing(self.cfg.locale.text("Nenhum pente expõe sensor no hwmon (spd5118/jc42). Sem isso o RamDog não inventa °C.", "No memory module exposes a sensor in hwmon (spd5118/jc42). RamDog will not invent a temperature.").into())
             }
             None if cfg!(target_os = "macos") => {
-                Temp::Missing("Temperatura de RAM no macOS ainda não está ligada.".into())
+                Temp::Missing(self.cfg.locale.text("Temperatura de RAM no macOS ainda não está ligada.", "RAM temperature on macOS is not wired up yet.").into())
             }
-            None if !self.is_admin => Temp::Missing("Temperatura dos pentes precisa de admin (leitura SMBus).".into()),
-            None => Temp::Missing("Nenhum pente desta máquina expõe sensor de temperatura.".into()),
+            None if !self.is_admin => Temp::Missing(self.cfg.locale.text("Temperatura dos pentes precisa de admin (leitura SMBus).", "Memory temperature requires admin rights (SMBus reading).").into()),
+            None => Temp::Missing(self.cfg.locale.text("Nenhum pente desta máquina expõe sensor de temperatura.", "No memory module on this machine exposes a temperature sensor.").into()),
         }
     }
 
@@ -2315,22 +2918,36 @@ impl App {
         let stab_on = self.stab_on();
         let has_fans = !self.hwtemp.fans.is_empty();
         let (label, bg, fg) = if !has_fans {
-            ("ESTABILIZAR".to_owned(), SURFACE, MUTED)
+            (
+                self.cfg.locale.text("ESTABILIZAR", "STABILIZE").to_owned(),
+                SURFACE,
+                MUTED,
+            )
         } else if !stab_on {
-            ("ESTABILIZAR".to_owned(), ACCENT_BG, ACCENT)
+            (
+                self.cfg.locale.text("ESTABILIZAR", "STABILIZE").to_owned(),
+                ACCENT_BG,
+                ACCENT,
+            )
         } else if held > 50.5 {
             (format!("FANS {held:.0}%"), THERM_WARN_BG, THERM_WARN_FG)
         } else {
             ("FANS 50%".to_owned(), THERM_STAB_BG, THERM_STAB_FG)
         };
         let tip = if !has_fans && cfg!(target_os = "linux") {
-            "Abra Térmico e ative o controle de ventoinhas com autenticação."
+            self.cfg.locale.text(
+                "Abra Térmico e ative o controle de ventoinhas com autenticação.",
+                "Open Thermal and enable authenticated fan control.",
+            )
         } else if !has_fans {
-            "Controle de fans indisponível: precisa de admin e do hwtemp.exe ao lado do ramdog.exe."
+            self.cfg.locale.text("Controle de fans indisponível: precisa de admin e do hwtemp.exe ao lado do ramdog.exe.", "Fan control is unavailable: it needs admin rights and hwtemp.exe beside ramdog.exe.")
         } else if stab_on {
-            "Curva do TempHUD ligada. Clique para devolver os fans à BIOS."
+            self.cfg.locale.text(
+                "Curva do TempHUD ligada. Clique para devolver os fans à BIOS.",
+                "TempHUD curve is enabled. Click to return fans to BIOS.",
+            )
         } else {
-            "Trava os fans SuperIO em 50% e sobe em rampa a partir de 80°C (100% aos 92°C). Clicar de novo devolve à BIOS."
+            self.cfg.locale.text("Trava os fans SuperIO em 50% e sobe em rampa a partir de 80°C (100% aos 92°C). Clicar de novo devolve à BIOS.", "Locks SuperIO fans at 50% and ramps from 80°C (100% at 92°C). Click again to return to BIOS.")
         };
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 7.0;
@@ -2344,29 +2961,54 @@ impl App {
             }
             // RPM discreto: só os que giram, no máximo quatro. O detalhe completo (nome e %
             // de cada fan) fica no hover — a faixa é para olhar de canto de olho.
-            let spinning: Vec<&crate::hwtemp::FanRow> =
-                self.hwtemp.fans.iter().filter(|f| f.rpm.unwrap_or(0.0) > 0.0).collect();
+            let spinning: Vec<&crate::hwtemp::FanRow> = self
+                .hwtemp
+                .fans
+                .iter()
+                .filter(|f| f.rpm.unwrap_or(0.0) > 0.0)
+                .collect();
             if spinning.is_empty() {
                 if has_fans {
-                    ui.label(RichText::new("fans parados").color(MUTED).size(10.5));
+                    ui.label(
+                        RichText::new(self.cfg.locale.text("fans parados", "fans idle"))
+                            .color(MUTED)
+                            .size(10.5),
+                    );
                 }
                 return;
             }
-            let shown: Vec<String> = spinning.iter().take(4).map(|f| format!("{:.0}", f.rpm.unwrap_or(0.0))).collect();
+            let shown: Vec<String> = spinning
+                .iter()
+                .take(4)
+                .map(|f| format!("{:.0}", f.rpm.unwrap_or(0.0)))
+                .collect();
             let mut detail = String::new();
             for f in &spinning {
-                let pct = f.pct.map(|p| format!("{p:.0}%")).unwrap_or_else(|| "–".into());
+                let pct = f
+                    .pct
+                    .map(|p| format!("{p:.0}%"))
+                    .unwrap_or_else(|| "–".into());
                 let mode = if f.guard {
-                    " (proteção)"
+                    self.cfg.locale.text(" (proteção)", " (protected)")
                 } else if f.auto {
                     " (BIOS)"
                 } else {
                     ""
                 };
-                detail.push_str(&format!("{}  {}  {:.0} rpm{}\n", f.name, pct, f.rpm.unwrap_or(0.0), mode));
+                detail.push_str(&format!(
+                    "{}  {}  {:.0} rpm{}\n",
+                    f.name,
+                    pct,
+                    f.rpm.unwrap_or(0.0),
+                    mode
+                ));
             }
-            ui.label(RichText::new(format!("{} rpm", shown.join(" · "))).color(MUTED).size(10.5))
-                .on_hover_text(detail.trim_end().to_string());
+            ui.label(
+                RichText::new(format!("{} rpm", shown.join(" · ")))
+                    .color(MUTED)
+                    .size(10.5),
+            )
+            .on_hover_text(detail.trim_end().to_string());
         });
     }
 
@@ -2377,36 +3019,71 @@ impl App {
             ui.spacing_mut().item_spacing.x = 4.0;
             ui.spacing_mut().button_padding = Vec2::new(5.0, 1.0);
             ui.label(RichText::new("RamDog").strong().size(11.5).color(MUTED))
-                .on_hover_text("Arraste para mover");
+                .on_hover_text(self.cfg.locale.text("Arraste para mover", "Drag to move"));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.small_button("✕").on_hover_text("Fechar").clicked() {
+                if ui
+                    .small_button("✕")
+                    .on_hover_text(self.cfg.locale.text("Fechar", "Close"))
+                    .clicked()
+                {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
-                if ui.small_button("⤢").on_hover_text("Voltar ao completo (ou duplo clique)").clicked() {
+                if ui
+                    .small_button("⤢")
+                    .on_hover_text(self.cfg.locale.text(
+                        "Voltar ao completo (ou duplo clique)",
+                        "Return to full view (or double-click)",
+                    ))
+                    .clicked()
+                {
                     self.set_mini(false);
                 }
                 // Sem decoração não há botão de minimizar do Windows — o HUD precisa do
                 // seu. Volta pela barra de tarefas, como qualquer janela.
-                if ui.small_button("–").on_hover_text("Minimizar").clicked() {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                if ui
+                    .small_button("–")
+                    .on_hover_text(self.cfg.locale.text("Minimizar", "Minimize"))
+                    .clicked()
+                {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                 }
                 let mut on_top = self.cfg.mini_on_top;
-                if ui.selectable_label(on_top, RichText::new("topo").size(11.0)).on_hover_text("Manter por cima").clicked() {
+                if ui
+                    .selectable_label(
+                        on_top,
+                        RichText::new(self.cfg.locale.text("topo", "top")).size(11.0),
+                    )
+                    .on_hover_text(self.cfg.locale.text("Manter por cima", "Keep on top"))
+                    .clicked()
+                {
                     on_top = !on_top;
                     self.cfg.mini_on_top = on_top;
                     self.cfg_dirty = true;
                     self.apply_on_top(ui.ctx());
                 }
                 let mut paused = self.sampler.paused.load(Ordering::Relaxed);
-                let (icon, tip) = if paused { ("▶", "Retomar") } else { ("⏸", "Pausar") };
-                if ui.selectable_label(paused, RichText::new(icon).size(11.0)).on_hover_text(tip).clicked() {
+                let (icon, tip) = if paused {
+                    ("▶", self.cfg.locale.text("Retomar", "Resume"))
+                } else {
+                    ("⏸", self.cfg.locale.text("Pausar", "Pause"))
+                };
+                if ui
+                    .selectable_label(paused, RichText::new(icon).size(11.0))
+                    .on_hover_text(tip)
+                    .clicked()
+                {
                     paused = !paused;
                     self.sampler.paused.store(paused, Ordering::Relaxed);
                 }
                 let iv = self.cfg.refresh_ms;
                 if ui
                     .small_button(format!("{:.1}s", iv as f32 / 1000.0))
-                    .on_hover_text("Ritmo — clique para alternar")
+                    .on_hover_text(
+                        self.cfg
+                            .locale
+                            .text("Ritmo — clique para alternar", "Interval — click to cycle"),
+                    )
                     .clicked()
                 {
                     const STEPS: [u64; 4] = [500, 1000, 2000, 5000];
@@ -2442,11 +3119,22 @@ impl App {
                 ui.label(RichText::new(label).color(MUTED).size(10.5));
                 match temp {
                     Temp::C(t) => {
-                        ui.label(RichText::new(format!("{t}°C")).monospace().size(11.0).strong().color(Self::temp_color(t)));
+                        ui.label(
+                            RichText::new(format!("{t}°C"))
+                                .monospace()
+                                .size(11.0)
+                                .strong()
+                                .color(Self::temp_color(t)),
+                        );
                     }
                     Temp::Missing(why) => {
-                        ui.label(RichText::new("–°C").monospace().size(11.0).color(Color32::from_gray(90)))
-                            .on_hover_text(why);
+                        ui.label(
+                            RichText::new("–°C")
+                                .monospace()
+                                .size(11.0)
+                                .color(Color32::from_gray(90)),
+                        )
+                        .on_hover_text(why);
                     }
                     Temp::None => {}
                 }
@@ -2463,7 +3151,12 @@ impl App {
                         );
                     }
                     None => {
-                        ui.label(RichText::new("–").monospace().size(19.0).color(Color32::from_gray(90)));
+                        ui.label(
+                            RichText::new("–")
+                                .monospace()
+                                .size(19.0)
+                                .color(Color32::from_gray(90)),
+                        );
                     }
                 }
                 if !sub.is_empty() {
@@ -2484,8 +3177,19 @@ impl App {
         ui.spacing_mut().button_padding = Vec2::new(6.0, 0.0);
         let mut paused = self.sampler.paused.load(Ordering::Relaxed);
         if ui
-            .selectable_label(paused, RichText::new(if paused { "▶ retomar" } else { "⏸ pausar" }).small())
-            .on_hover_text("Congela a amostragem — os números param no último valor lido")
+            .selectable_label(
+                paused,
+                RichText::new(if paused {
+                    self.cfg.locale.text("▶ retomar", "▶ resume")
+                } else {
+                    self.cfg.locale.text("⏸ pausar", "⏸ pause")
+                })
+                .small(),
+            )
+            .on_hover_text(self.cfg.locale.text(
+                "Congela a amostragem — os números param no último valor lido",
+                "Freezes sampling — values stay at the last reading",
+            ))
             .clicked()
         {
             paused = !paused;
@@ -2493,11 +3197,26 @@ impl App {
         }
         let mut iv = self.cfg.refresh_ms;
         egui::ComboBox::from_id_salt("refresh")
-            .selected_text(RichText::new(format!("a cada {:.1}s", iv as f32 / 1000.0)).small())
+            .selected_text(
+                RichText::new(format!(
+                    "{} {:.1}s",
+                    self.cfg.locale.text("a cada", "every"),
+                    iv as f32 / 1000.0
+                ))
+                .small(),
+            )
             .width(74.0)
             .show_ui(ui, |ui| {
                 for v in [500u64, 1000, 2000, 5000] {
-                    ui.selectable_value(&mut iv, v, format!("a cada {:.1}s", v as f32 / 1000.0));
+                    ui.selectable_value(
+                        &mut iv,
+                        v,
+                        format!(
+                            "{} {:.1}s",
+                            self.cfg.locale.text("a cada", "every"),
+                            v as f32 / 1000.0
+                        ),
+                    );
                 }
             });
         if iv != self.cfg.refresh_ms {
@@ -2513,7 +3232,7 @@ impl App {
             ViewMode::Drains => {
                 let is_admin = self.is_admin;
                 let procs = std::mem::take(&mut self.procs);
-                let evs = self.drains.ui(ui, &procs, is_admin);
+                let evs = self.drains.ui(ui, &procs, is_admin, self.cfg.locale);
                 self.procs = procs;
                 for ev in evs {
                     match ev {
@@ -2526,21 +3245,28 @@ impl App {
                 // A fileira de filtros some enquanto um addon está na tela, então o Partida
                 // traz a própria busca — sem ela não há como achar uma entrada numa lista
                 // que tem tudo que sobe com o PC. No Linux o próprio addon desenha a dele.
-                if cfg!(windows) { ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.search)
-                            .hint_text("Buscar nome, comando ou origem…")
-                            .desired_width(260.0),
-                    );
-                    if !self.search.is_empty() && ui.button("✖").clicked() {
-                        self.search.clear();
-                    }
-                });
-                ui.add_space(4.0); }
+                if cfg!(windows) {
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.search)
+                                .hint_text(self.cfg.locale.text(
+                                    "Buscar nome, comando ou origem…",
+                                    "Search name, command, or source…",
+                                ))
+                                .desired_width(260.0),
+                        );
+                        if !self.search.is_empty() && ui.button("✖").clicked() {
+                            self.search.clear();
+                        }
+                    });
+                    ui.add_space(4.0);
+                }
                 let is_admin = self.is_admin;
                 let search = self.search.clone();
                 let procs = std::mem::take(&mut self.procs);
-                let evs = self.boot.ui(ui, &procs, &search, is_admin, &mut self.cfg, &self.usage);
+                let evs = self
+                    .boot
+                    .ui(ui, &procs, &search, is_admin, &mut self.cfg, &self.usage);
                 self.procs = procs;
                 for ev in evs {
                     match ev {
@@ -2561,7 +3287,7 @@ impl App {
                     }
                 }
             }
-            ViewMode::Thermal => self.ui_thermal(ui),
+            ViewMode::Thermal => self.ui_thermal(ui, self.cfg.locale),
             ViewMode::Clean => {
                 // A Limpeza precisa da métrica de RAM escolhida e do lock do usuário, sem
                 // conhecer o App: recebe os dois como closures.
@@ -2570,10 +3296,12 @@ impl App {
                 let me = std::process::id();
                 let mem = move |p: &ProcInfo| Self::metric_of(metric, p);
                 let is_locked = move |p: &ProcInfo| {
-                    is_critical(&p.name_lower, p.pid) || locked.contains(&p.name_lower) || p.pid == me
+                    is_critical(&p.name_lower, p.pid)
+                        || locked.contains(&p.name_lower)
+                        || p.pid == me
                 };
                 let procs = std::mem::take(&mut self.procs);
-                let evs = self.clean.ui(ui, &procs, &mem, &is_locked);
+                let evs = self.clean.ui(ui, &procs, &mem, &is_locked, self.cfg.locale);
                 self.procs = procs;
                 for ev in evs {
                     match ev {
@@ -2598,10 +3326,22 @@ impl App {
     fn request_kill_many(&mut self, pids: &[u32]) {
         let list: Vec<(u32, i64, String, u64)> = pids
             .iter()
-            .filter_map(|pid| self.proc(*pid).map(|p| (p.pid, p.create_time, identity::of(p).label, self.mem_of(p))))
+            .filter_map(|pid| {
+                self.proc(*pid)
+                    .map(|p| (p.pid, p.create_time, identity::of(p).label, self.mem_of(p)))
+            })
             .collect();
         if list.is_empty() {
-            self.toast("esses processos já tinham saído".into(), false);
+            self.toast(
+                self.cfg
+                    .locale
+                    .text(
+                        "esses processos já tinham saído",
+                        "those processes had already exited",
+                    )
+                    .into(),
+                false,
+            );
             self.after_kill();
             return;
         }
@@ -2618,14 +3358,27 @@ impl App {
 
     fn header_btn(&mut self, ui: &mut egui::Ui, key: SortKey, label: &str) -> egui::Response {
         let active = self.sort == key;
-        let arrow = if active { if self.sort_desc { " ▾" } else { " ▴" } } else { "" };
+        let arrow = if active {
+            if self.sort_desc {
+                " ▾"
+            } else {
+                " ▴"
+            }
+        } else {
+            ""
+        };
         // Todos os títulos com o mesmo peso; só a cor marca a coluna ordenada — antes a
         // ativa virava uma caixa cinza que parecia um botão perdido no cabeçalho.
         let text = RichText::new(format!("{label}{arrow}"))
             .size(11.5)
             .strong()
             .color(if active { ACCENT } else { MUTED });
-        let r = ui.add(egui::Button::new(text).frame(false));
+        let r = ui
+            .add(egui::Button::new(text).frame(false))
+            .on_hover_text(self.cfg.locale.text(
+                "Clique para ordenar por esta coluna",
+                "Click to sort by this column",
+            ));
         if r.clicked() {
             if active {
                 self.sort_desc = !self.sort_desc;
@@ -2666,7 +3419,10 @@ impl App {
             .filter_map(|r| match r {
                 Row::Proc { pid, .. } => {
                     if tree {
-                        self.subtree.get(pid).copied().or_else(|| self.proc(*pid).map(|p| self.mem_of(p)))
+                        self.subtree
+                            .get(pid)
+                            .copied()
+                            .or_else(|| self.proc(*pid).map(|p| self.mem_of(p)))
                     } else {
                         self.proc(*pid).map(|p| self.mem_of(p))
                     }
@@ -2708,7 +3464,11 @@ impl App {
             .column(Column::initial(300.0).at_least(180.0).clip(true))
             .column(Column::initial(96.0).at_least(72.0))
             // Com a Disputa ligada a célula mostra "87% 14×", que não cabe em 60 px.
-            .column(if disputa_on { Column::initial(96.0).at_least(84.0) } else { Column::initial(60.0).at_least(48.0) })
+            .column(if disputa_on {
+                Column::initial(96.0).at_least(84.0)
+            } else {
+                Column::initial(60.0).at_least(48.0)
+            })
             .column(Column::initial(56.0).at_least(44.0))
             .column(Column::initial(68.0).at_least(52.0))
             .column(Column::initial(72.0).at_least(56.0))
@@ -2716,12 +3476,20 @@ impl App {
             // Não redimensionável de propósito: com `resizable`, o egui_extras congela a
             // largura do "resto" na primeira passada e a coluna não acompanha a janela ao
             // maximizar. A borda da coluna Tempo continua arrastável, e é ela que reparte.
-            .column(Column::remainder().at_least(80.0).clip(true).resizable(false))
+            .column(
+                Column::remainder()
+                    .at_least(80.0)
+                    .clip(true)
+                    .resizable(false),
+            )
             .column(Column::exact(60.0))
             .min_scrolled_height(0.0);
         if self.scroll_to_selected {
             if let Some(sel) = self.selected {
-                if let Some(i) = rows.iter().position(|r| matches!(r, Row::Proc { pid, .. } if *pid == sel)) {
+                if let Some(i) = rows
+                    .iter()
+                    .position(|r| matches!(r, Row::Proc { pid, .. } if *pid == sel))
+                {
                     table = table.scroll_to_row(i, Some(Align::Center));
                 }
             }
@@ -2732,13 +3500,13 @@ impl App {
             .header(30.0, |mut header| {
                 header.col(|ui| {
                     ui.add_space(4.0);
-                    self.header_btn(ui, SortKey::Name, "Nome");
+                    self.header_btn(ui, SortKey::Name, self.cfg.locale.text("Nome", "Name"));
                 });
                 let ram_label = match (tree, self.cfg.mem_metric) {
-                    (true, MemMetric::Private) => "Priv. (árvore)".to_string(),
-                    (true, MemMetric::Commit) => format!("{} (árvore)", MemMetric::Commit.short()),
-                    (true, _) => "RAM (árvore)".to_string(),
-                    (false, m) => m.short().to_string(),
+                    (true, MemMetric::Private) => self.cfg.locale.text("Priv. (árvore)", "Private (tree)").to_string(),
+                    (true, MemMetric::Commit) => format!("{} ({})", MemMetric::Commit.short_for(self.cfg.locale), self.cfg.locale.text("árvore", "tree")),
+                    (true, _) => format!("RAM ({})", self.cfg.locale.text("árvore", "tree")),
+                    (false, m) => m.short_for(self.cfg.locale).to_string(),
                 };
                 header.col(|ui| {
                     self.header_btn_right(ui, SortKey::Ram, &ram_label);
@@ -2752,28 +3520,32 @@ impl App {
                     .col(|ui| { self.header_btn_right(ui, SortKey::Gpu, "GPU"); })
                     .1
                     .on_hover_text(if self.gpu_per_proc {
-                        "% de carga da GPU (engine mais ocupada, pico dos últimos segundos). – = processo sem contexto na GPU ou driver sem leitura.".to_string()
+                        self.cfg.locale.text("% de carga da GPU (engine mais ocupada, pico dos últimos segundos). – = processo sem contexto na GPU ou driver sem leitura.", "% GPU load (busiest engine, peak over the last few seconds). – means no GPU context or unavailable driver telemetry.").to_string()
                     } else {
-                        "Contador de GPU por processo indisponível neste host".to_string()
+                        self.cfg.locale.text("Contador de GPU por processo indisponível neste host", "Per-process GPU counter is unavailable on this host").to_string()
                     });
                 header
                     .col(|ui| self.header_btn_right(ui, SortKey::Vram, "VRAM"))
                     .1
-                    .on_hover_text("Memória da GPU deste processo, quando o driver expõe. Não é RAM.");
-                header.col(|ui| self.header_btn_right(ui, SortKey::Disk, "Disco"));
-                header.col(|ui| self.header_btn_right(ui, SortKey::Age, "Tempo"));
+                    .on_hover_text(self.cfg.locale.text("Memória da GPU deste processo, quando o driver expõe. Não é RAM.", "This process's GPU memory when exposed by the driver. It is not system RAM."));
+                header.col(|ui| self.header_btn_right(ui, SortKey::Disk, self.cfg.locale.text("Disco", "Disk")));
+                header.col(|ui| self.header_btn_right(ui, SortKey::Age, self.cfg.locale.text("Tempo", "Age")));
                 header.col(|ui| {
                     let r = if self.cfg.cmd_column {
-                        ui.add(egui::Button::new(RichText::new("Comando").size(11.5).strong().color(MUTED)).frame(false))
-                            .on_hover_text("Argumentos da linha de comando (o caminho do exe já está no nome). Botão direito aqui troca para \"Quem abriu\".")
+                        ui.add(egui::Button::new(RichText::new(self.cfg.locale.text("Comando", "Command")).size(11.5).strong().color(MUTED)).frame(false))
+                            .on_hover_text(self.cfg.locale.text("Argumentos da linha de comando (o caminho do exe já está no nome). Botão direito aqui troca para \"Quem abriu\".", "Command-line arguments (the executable path is already in the name). Right-click here to switch to \"Launched by\"."))
                     } else {
-                        self.header_btn(ui, SortKey::Parent, "Quem abriu")
-                            .on_hover_text("Quem chamou quem, da raiz até o pai: terminal › shell › agente. Clique ordena pelo pai. A linha de comando fica no tooltip da célula e no painel de detalhes. Botão direito aqui troca para \"Comando\".")
+                        self.header_btn(ui, SortKey::Parent, self.cfg.locale.text("Quem abriu", "Launched by"))
+                            .on_hover_text(self.cfg.locale.text("Quem chamou quem, da raiz até o pai: terminal › shell › agente. Clique ordena pelo pai. A linha de comando fica no tooltip da célula e no painel de detalhes. Botão direito aqui troca para \"Comando\".", "Who launched whom, from the root to the parent: terminal › shell › agent. Click to sort by parent. The command line remains in the cell tooltip and details panel. Right-click here to switch to \"Command\"."))
                     };
                     r.context_menu(|ui| {
-                        let (on, off) = if self.cfg.cmd_column { ("Comando", "Quem abriu") } else { ("Quem abriu", "Comando") };
-                        ui.label(RichText::new(format!("Coluna: {on}")).weak());
-                        if ui.button(format!("Mostrar {off}")).clicked() {
+                        let (on, off) = if self.cfg.cmd_column {
+                            (self.cfg.locale.text("Comando", "Command"), self.cfg.locale.text("Quem abriu", "Launched by"))
+                        } else {
+                            (self.cfg.locale.text("Quem abriu", "Launched by"), self.cfg.locale.text("Comando", "Command"))
+                        };
+                        ui.label(RichText::new(format!("{}: {on}", self.cfg.locale.text("Coluna", "Column"))).weak());
+                        if ui.button(format!("{} {off}", self.cfg.locale.text("Mostrar", "Show"))).clicked() {
                             self.cfg.cmd_column = !self.cfg.cmd_column;
                             self.cfg_dirty = true;
                             ui.close_menu();
@@ -2797,8 +3569,8 @@ impl App {
                                 ui.add_space(2.0);
                                 ui.vertical(|ui| {
                                     ui.spacing_mut().item_spacing.y = 1.0;
-                                    ui.label(RichText::new(kind.label()).color(kind.color()).size(13.0));
-                                    ui.label(RichText::new("sistema · não é processo").color(MUTED).size(11.5));
+                                    ui.label(RichText::new(kind.label_for(self.cfg.locale)).color(kind.color()).size(13.0));
+                                    ui.label(RichText::new(self.cfg.locale.text("sistema · não é processo", "system · not a process")).color(MUTED).size(11.5));
                                 });
                             });
                             row.col(|ui| {
@@ -2812,10 +3584,10 @@ impl App {
                                 row.col(|_ui| {});
                             }
                             row.col(|ui| {
-                                ui.label(RichText::new("não pode ser encerrado").weak().small());
+                                ui.label(RichText::new(self.cfg.locale.text("não pode ser encerrado", "cannot be terminated")).weak().small());
                             });
                             row.col(|_ui| {});
-                            row.response().on_hover_text(kind.tip());
+                            row.response().on_hover_text(kind.tip_for(self.cfg.locale));
                         }
                         Row::CatHeader { cat, count, total, collapsed } => {
                             let (cat, count, total, collapsed) = (*cat, *count, *total, *collapsed);
@@ -2824,7 +3596,7 @@ impl App {
                                 ui.add_space(4.0);
                                 let arrow = if collapsed { "▶" } else { "▼" };
                                 if ui
-                                    .add(egui::Label::new(RichText::new(format!("{arrow} {}", cat.label())).color(cat.color()).strong().size(13.5)).sense(egui::Sense::click()))
+                                    .add(egui::Label::new(RichText::new(format!("{arrow} {}", cat.label_for(self.cfg.locale))).color(cat.color()).strong().size(13.5)).sense(egui::Sense::click()))
                                     .clicked()
                                 {
                                     toggle_cat = Some(cat);
@@ -2840,7 +3612,7 @@ impl App {
                                 row.col(|_ui| {});
                             }
                             row.col(|ui| {
-                                ui.label(RichText::new(format!("{count} processos")).weak().size(11.5));
+                                ui.label(RichText::new(format!("{count} {}", self.cfg.locale.text("processos", "processes"))).weak().size(11.5));
                             });
                             row.col(|_ui| {});
                             if row.response().clicked() {
@@ -2882,15 +3654,15 @@ impl App {
                                     .filter_map(|pid| self.proc(*pid).and_then(|p| self.steal_of(p)))
                                     .max_by_key(|k| k.rank());
                                 let chip_info = if leftover.is_some() {
-                                    Some(("sobra", Color32::from_rgb(230, 170, 90)))
+                                    Some((self.cfg.locale.text("sobra", "leftover"), Color32::from_rgb(230, 170, 90)))
                                 } else if let Some(kind) = steal {
-                                    Some((kind.chip(), Color32::from_rgb(255, 150, 90)))
+                                    Some((kind.chip_for(self.cfg.locale), Color32::from_rgb(255, 150, 90)))
                                 } else if focused {
-                                    Some(("em foco", ACCENT_FG))
+                                    Some((self.cfg.locale.text("em foco", "focused"), ACCENT_FG))
                                 } else {
                                     None
                                 };
-                                let mut sub = format!("{count} processos · {}", cat.label());
+                                let mut sub = format!("{count} {} · {}", self.cfg.locale.text("processos", "processes"), cat.label_for(self.cfg.locale));
                                 if !origin.is_empty() {
                                     sub.push_str(" · ");
                                     sub.push_str(&origin);
@@ -2919,19 +3691,19 @@ impl App {
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                     ui.add_space(2.0);
                                     ui.label(num(ram_label).color(ram_color(ram, ui_text_color(ui_dark()))).strong())
-                                        .on_hover_text(
+                                        .on_hover_text(self.cfg.locale.text(
                                             "Soma dos processos do app na métrica escolhida. RSS pode repetir páginas compartilhadas; PSS reparte essas páginas. ≥ indica soma parcial por leituras indisponíveis.",
-                                        );
+                                            "Sum of this app's processes in the selected metric. RSS may repeat shared pages; PSS distributes them. ≥ means the sum is partial because some readings are unavailable.",
+                                        ));
                                 });
                             });
                             row.col(|ui| {
                                 let (txt, c) = Self::cpu_cell(cpu, self.ncpu);
-                                let tip = format!(
-                                    "{cpu:.1}% da máquina ({} núcleos) = {:.1} núcleos equivalentes.\n\n100% = a máquina inteira. Processo que come 1 núcleo aparece como {:.1}% — por isso some na lista por RAM.",
-                                    self.ncpu,
-                                    pressure::cores(cpu, self.ncpu as u32),
-                                    100.0 / self.ncpu.max(1) as f32
-                                );
+                                let tip = if self.cfg.locale == Locale::Portuguese {
+                                    format!("{cpu:.1}% da máquina ({} núcleos) = {:.1} núcleos equivalentes.\n\n100% = a máquina inteira. Processo que come 1 núcleo aparece como {:.1}% — por isso some na lista por RAM.", self.ncpu, pressure::cores(cpu, self.ncpu as u32), 100.0 / self.ncpu.max(1) as f32)
+                                } else {
+                                    format!("{cpu:.1}% of the machine ({} threads) = {:.1} equivalent cores.\n\n100% = the whole machine. A process using one core appears as {:.1}% — which is why it can disappear in a memory-sorted list.", self.ncpu, pressure::cores(cpu, self.ncpu as u32), 100.0 / self.ncpu.max(1) as f32)
+                                };
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                     if disputa_on {
                                         ui.scope(|ui| Self::cpu_cell_disputa(ui, cpu, self.ncpu, MUTED)).response.on_hover_text(tip);
@@ -2945,12 +3717,12 @@ impl App {
                                     ui.add_space(2.0);
                                     if !self.gpu_per_proc || !gpu_known {
                                         ui.label(num("–").color(MUTED))
-                                            .on_hover_text("Sem leitura de carga GPU neste grupo — não é zero.");
+                                            .on_hover_text(self.cfg.locale.text("Sem leitura de carga GPU neste grupo — não é zero.", "No GPU load reading for this group — this is not zero."));
                                     } else if gpu < 0.05 {
-                                        ui.label(num("–").color(MUTED)).on_hover_text("Carga GPU ~0% (máximo entre os PIDs).");
+                                        ui.label(num("–").color(MUTED)).on_hover_text(self.cfg.locale.text("Carga GPU ~0% (máximo entre os PIDs).", "GPU load ~0% (maximum across PIDs)."));
                                     } else {
                                         ui.label(num(format!("{gpu:.0}%")).color(ui_text_color(ui_dark())).strong())
-                                            .on_hover_text("Máximo entre os processos do app, não a soma.");
+                                            .on_hover_text(self.cfg.locale.text("Máximo entre os processos do app, não a soma.", "Maximum across this app's processes, not a sum."));
                                     }
                                 });
                             });
@@ -2979,12 +3751,12 @@ impl App {
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                     ui.add_space(2.0);
                                     ui.label(RichText::new(fmt_age(secs)).color(MUTED))
-                                        .on_hover_text("Idade do processo mais antigo do app");
+                                        .on_hover_text(self.cfg.locale.text("Idade do processo mais antigo do app", "Age of the app's oldest process"));
                                 });
                             });
                             row.col(|ui| {
                                 let _ = has_window;
-                                ui.label(RichText::new(format!("{count} processos")).weak().size(11.5));
+                                ui.label(RichText::new(format!("{count} {}", self.cfg.locale.text("processos", "processes"))).weak().size(11.5));
                             });
                             row.col(|ui| {
                                 let cell = ui.max_rect();
@@ -2996,7 +3768,12 @@ impl App {
                                     .stroke(Stroke::NONE)
                                     .corner_radius(8.0)
                                     .min_size(Vec2::new(24.0, 24.0));
-                                if ui.add(b).on_hover_text(format!("Finalizar os {count} processos de {name}")).clicked() {
+                                let tip = if self.cfg.locale == Locale::Portuguese {
+                                    format!("Finalizar os {count} processos de {name}")
+                                } else {
+                                    format!("Terminate {count} processes from {name}")
+                                };
+                                if ui.add(b).on_hover_text(tip).clicked() {
                                     kill_group = Some(gi);
                                 }
                             });
@@ -3034,7 +3811,7 @@ impl App {
                                         let b = egui::Button::new(RichText::new(arrow).weak().small())
                                             .frame(false)
                                             .min_size(Vec2::new(18.0, ROW_H - 4.0));
-                                        if ui.add(b).on_hover_text("Expandir / recolher (duplo clique na linha também)").clicked() {
+                                        if ui.add(b).on_hover_text(self.cfg.locale.text("Expandir / recolher (duplo clique na linha também)", "Expand / collapse (double-click the row also works)")).clicked() {
                                             toggle_expand = Some(pid);
                                         }
                                     } else {
@@ -3045,34 +3822,34 @@ impl App {
                                 let tex = self.icons.get(&key).and_then(|t| t.as_ref());
                                 avatar(ui, tex, cat, &task.label);
                                 ui.add_space(2.0);
-                                let leftover = identity::leftover_reason(&p.cmdline, p.kernel_state, p.has_window);
+                                let leftover = identity::leftover_reason_for(&p.cmdline, p.kernel_state, p.has_window, self.cfg.locale);
                                 let steal = self.steal_of(&p);
                                 let chip_info = if p.kernel_state == Some('Z') {
-                                    Some(("zombie", Color32::from_rgb(230, 120, 120)))
+                                    Some((self.cfg.locale.text("zombie", "zombie"), Color32::from_rgb(230, 120, 120)))
                                 } else if leftover.is_some() {
-                                    Some(("sobra", Color32::from_rgb(230, 170, 90)))
+                                    Some((self.cfg.locale.text("sobra", "leftover"), Color32::from_rgb(230, 170, 90)))
                                 } else if let Some(kind) = steal.filter(|k| *k != StealKind::Leftover) {
-                                    Some((kind.chip(), Color32::from_rgb(255, 150, 90)))
+                                    Some((kind.chip_for(self.cfg.locale), Color32::from_rgb(255, 150, 90)))
                                 } else if p.focused {
-                                    Some(("em foco", ACCENT_FG))
+                                    Some((self.cfg.locale.text("em foco", "focused"), ACCENT_FG))
                                 } else if critical {
-                                    Some(("protegido", MUTED))
+                                    Some((self.cfg.locale.text("protegido", "protected"), MUTED))
                                 } else if locked {
                                     Some(("lock", Color32::from_rgb(120, 200, 255)))
                                 } else {
                                     None
                                 };
-                                let (origin, target, otip, _via_env) = self.origin_label(&p);
+                                let (origin, target, otip, _via_env) = self.origin_label(&p, self.cfg.locale);
                                 let overridden = self.cfg.overrides.contains_key(&p.name_lower);
                                 let mut sub = format!("PID {}", p.pid);
                                 if tree && has_children && !expanded {
                                     let c = self.subtree_count.get(&pid).copied().unwrap_or(1) - 1;
-                                    sub.push_str(&format!(" · +{c} filhos"));
+                                    sub.push_str(&format!(" · +{c} {}", self.cfg.locale.text("filhos", "children")));
                                 }
                                 sub.push_str(" · ");
-                                sub.push_str(cat.label());
+                                sub.push_str(cat.label_for(self.cfg.locale));
                                 if overridden {
-                                    sub.push_str(" (manual)");
+                                    sub.push_str(self.cfg.locale.text(" (manual)", " (manual)"));
                                 }
                                 if !origin.is_empty() {
                                     sub.push_str(" · ");
@@ -3093,7 +3870,7 @@ impl App {
                                             })
                                             .inner;
                                         if locked {
-                                            lbl.on_hover_text(if critical { "Processo crítico do sistema" } else { "Protegido (lock)" });
+                                            lbl.on_hover_text(if critical { self.cfg.locale.text("Processo crítico do sistema", "Critical system process") } else { self.cfg.locale.text("Protegido (lock)", "Protected (lock)") });
                                         }
                                         if let Some((t, c)) = chip_info {
                                             let r = chip(ui, t, c);
@@ -3145,12 +3922,12 @@ impl App {
                                     let r = ui.label(t);
                                     if tree && has_children && shown != own {
                                         let n = self.subtree_count.get(&pid).copied().unwrap_or(1) - 1;
-                                        r.on_hover_text(format!(
-                                            "Deste processo: {}\nCom os {} filhos: {}\n\nA coluna soma a subárvore inteira — o número grande costuma ser dos filhos, não deste processo.",
-                                            fmt_bytes(own),
-                                            n,
-                                            fmt_bytes(shown)
-                                        ));
+                                        let tip = if self.cfg.locale == Locale::Portuguese {
+                                            format!("Deste processo: {}\nCom os {} filhos: {}\n\nA coluna soma a subárvore inteira — o número grande costuma ser dos filhos, não deste processo.", fmt_bytes(own), n, fmt_bytes(shown))
+                                        } else {
+                                            format!("This process: {}\nWith its {} children: {}\n\nThe column sums the entire subtree — the large number usually belongs to children, not this process.", fmt_bytes(own), n, fmt_bytes(shown))
+                                        };
+                                        r.on_hover_text(tip);
                                     }
                                 });
                             });
@@ -3180,38 +3957,36 @@ impl App {
                                                 .size(10.5)
                                                 .color(Color32::from_rgb(255, 171, 145)),
                                         )
-                                        .on_hover_text(format!(
-                                            "+{:.1}% em filhos que nasceram e morreram entre duas amostras (creditado a este processo pelo kernel).",
-                                            p.cpu_children_pct
-                                        ));
+                                        .on_hover_text(if self.cfg.locale == Locale::Portuguese {
+                                            format!("+{:.1}% em filhos que nasceram e morreram entre duas amostras (creditado a este processo pelo kernel).", p.cpu_children_pct)
+                                        } else {
+                                            format!("+{:.1}% in children that started and exited between two samples (credited to this process by the kernel).", p.cpu_children_pct)
+                                        });
                                     }
                                     if cpu_shown >= 0.05 || p.cpu_raw_pct >= 0.05 || p.cpu_children_pct >= 0.05 {
-                                        let mut tip = if tree && has_children {
-                                            format!(
-                                                "deste processo: {:.1}%\ncom os filhos: {:.1}% = {:.1} núcleos\n",
-                                                p.cpu_pct,
-                                                cpu_shown,
-                                                pressure::cores(cpu_shown, self.ncpu as u32)
-                                            )
+                                        let mut tip = if self.cfg.locale == Locale::Portuguese {
+                                            if tree && has_children {
+                                                format!("deste processo: {:.1}%\ncom os filhos: {:.1}% = {:.1} núcleos\n", p.cpu_pct, cpu_shown, pressure::cores(cpu_shown, self.ncpu as u32))
+                                            } else {
+                                                format!("média: {:.1}% da máquina = {:.1} núcleos\núltimo intervalo: {:.1}%\n", p.cpu_pct, pressure::cores(p.cpu_pct, self.ncpu as u32), p.cpu_raw_pct)
+                                            }
+                                        } else if tree && has_children {
+                                            format!("this process: {:.1}%\nwith children: {:.1}% = {:.1} cores\n", p.cpu_pct, cpu_shown, pressure::cores(cpu_shown, self.ncpu as u32))
                                         } else {
-                                            format!(
-                                                "média: {:.1}% da máquina = {:.1} núcleos\núltimo intervalo: {:.1}%\n",
-                                                p.cpu_pct,
-                                                pressure::cores(p.cpu_pct, self.ncpu as u32),
-                                                p.cpu_raw_pct
-                                            )
+                                            format!("average: {:.1}% of the machine = {:.1} cores\nlast interval: {:.1}%\n", p.cpu_pct, pressure::cores(p.cpu_pct, self.ncpu as u32), p.cpu_raw_pct)
                                         };
                                         if p.cpu_children_pct >= 0.05 {
-                                            tip.push_str(&format!(
-                                                "filhos já encerrados neste intervalo: +{:.1}%\n",
-                                                p.cpu_children_pct
-                                            ));
+                                            tip.push_str(&if self.cfg.locale == Locale::Portuguese {
+                                                format!("filhos já encerrados neste intervalo: +{:.1}%\n", p.cpu_children_pct)
+                                            } else {
+                                                format!("children already exited in this interval: +{:.1}%\n", p.cpu_children_pct)
+                                            });
                                         }
-                                        tip.push_str(&format!(
-                                            "\n100% = a máquina inteira ({} núcleos). 1 núcleo cheio vira {:.1}%.",
-                                            self.ncpu,
-                                            100.0 / self.ncpu.max(1) as f32
-                                        ));
+                                        if self.cfg.locale == Locale::Portuguese {
+                                            tip.push_str(&format!("\n100% = a máquina inteira ({} núcleos). 1 núcleo cheio vira {:.1}%.", self.ncpu, 100.0 / self.ncpu.max(1) as f32));
+                                        } else {
+                                            tip.push_str(&format!("\n100% = the whole machine ({} threads). One full core is {:.1}%.", self.ncpu, 100.0 / self.ncpu.max(1) as f32));
+                                        }
                                         r.on_hover_text(tip);
                                     }
                                 });
@@ -3227,10 +4002,10 @@ impl App {
                                     match p.gpu_load {
                                         None => {
                                             ui.label(RichText::new("–").color(Color32::from_gray(90)))
-                                                .on_hover_text("Sem leitura de carga GPU para este PID — não é 0%.");
+                                                .on_hover_text(self.cfg.locale.text("Sem leitura de carga GPU para este PID — não é 0%.", "No GPU load reading for this PID — this is not 0%."));
                                         }
                                         Some(load) if load < 0.05 => {
-                                            ui.label(num("–").color(MUTED)).on_hover_text("Carga GPU ~0%.");
+                                            ui.label(num("–").color(MUTED)).on_hover_text(self.cfg.locale.text("Carga GPU ~0%.", "GPU load ~0%."));
                                         }
                                         Some(load) => {
                                             let c = if load >= 50.0 {
@@ -3288,10 +4063,10 @@ impl App {
                                     let names: Vec<&str> = svcs.iter().map(|(_, d)| d.as_str()).collect();
                                     let list: Vec<String> = svcs.iter().map(|(n, d)| format!("{d}  ({n})")).collect();
                                     ui.add(egui::Label::new(RichText::new(names.join(" · ")).color(Color32::from_rgb(130, 175, 215)).size(11.5)).truncate())
-                                        .on_hover_text(format!("Serviços hospedados neste processo:\n{}", list.join("\n")));
+                                        .on_hover_text(format!("{}:\n{}", self.cfg.locale.text("Serviços hospedados neste processo", "Services hosted by this process"), list.join("\n")));
                                 } else if self.cfg.cmd_column {
                                     let full = if p.cmdline.is_empty() { p.exe_path.clone() } else { p.cmdline.clone() };
-                                    let r = ui.add(egui::Label::new(RichText::new(cmd_args(&p)).color(MUTED).size(11.5)).truncate());
+                                    let r = ui.add(egui::Label::new(RichText::new(cmd_args(&p, self.cfg.locale)).color(MUTED).size(11.5)).truncate());
                                     if !full.is_empty() {
                                         r.on_hover_text(full);
                                     }
@@ -3322,9 +4097,9 @@ impl App {
                                 let btn_size = Vec2::new(24.0, 24.0);
                                 if critical {
                                     ui.add_sized(btn_size, egui::Label::new(RichText::new("🔒").color(Color32::from_gray(if hot { 130 } else { 90 }))))
-                                        .on_hover_text("Crítico do sistema — não pode ser encerrado");
+                                        .on_hover_text(self.cfg.locale.text("Crítico do sistema — não pode ser encerrado", "Critical system process — cannot be terminated"));
                                 } else {
-                                    let (icon, tip) = if locked { ("🔒", "Protegido — clique para desproteger") } else { ("🔓", "Clique para proteger (lock)") };
+                                    let (icon, tip) = if locked { ("🔒", self.cfg.locale.text("Protegido — clique para desproteger", "Protected — click to unlock")) } else { ("🔓", self.cfg.locale.text("Clique para proteger (lock)", "Click to protect (lock)")) };
                                     let col = if locked {
                                         Color32::from_rgb(120, 200, 255)
                                     } else if hot {
@@ -3344,9 +4119,9 @@ impl App {
                                             .corner_radius(8.0)
                                             .min_size(btn_size);
                                         let r = ui.add(kb).on_hover_text(if p.kernel_state == Some('Z') {
-                                            "Zumbi: já morreu, sinal nele não faz nada. Clique pede ao pai para recolher; Shift+clique finaliza o pai"
+                                            self.cfg.locale.text("Zumbi: já morreu, sinal nele não faz nada. Clique pede ao pai para recolher; Shift+clique finaliza o pai", "Zombie: it is already dead, so signals do nothing. Click asks the parent to reap it; Shift-click terminates the parent")
                                         } else {
-                                            "Finalizar processo (Shift: árvore inteira)"
+                                            self.cfg.locale.text("Finalizar processo (Shift: árvore inteira)", "Terminate process (Shift: entire tree)")
                                         });
                                         if r.clicked() {
                                             let shift = ui.input(|i| i.modifiers.shift);
@@ -3367,51 +4142,60 @@ impl App {
                                 ui.label(RichText::new(format!("{} — PID {}", p.name, p.pid)).strong());
                                 ui.separator();
                                 if !locked {
-                                    if ui.button("✖ Finalizar processo").clicked() {
+                                    if ui.button(self.cfg.locale.text("✖ Finalizar processo", "✖ Terminate process")).clicked() {
                                         kill = Some((pid, false));
                                         ui.close_menu();
                                     }
                                     let n = self.subtree_count.get(&pid).copied().unwrap_or(1);
                                     if p.kernel_state == Some('Z') {
                                         if let Some((pname, ppid)) = self.zombie_holder(pid, if p.ppid != 0 { p.ppid } else { p.raw_ppid }) {
-                                            if ui.button(format!("✖ Finalizar pai: {pname} ({ppid})")).on_hover_text("Zumbi não morre com sinal: já morreu. Some quando o pai recolhe ou cai").clicked() {
+                                            if ui.button(if self.cfg.locale == Locale::Portuguese { format!("✖ Finalizar pai: {pname} ({ppid})") } else { format!("✖ Terminate parent: {pname} ({ppid})") }).on_hover_text(self.cfg.locale.text("Zumbi não morre com sinal: já morreu. Some quando o pai recolhe ou cai", "Signals cannot kill a zombie because it is already dead. It disappears when the parent reaps it or exits")).clicked() {
                                                 kill = Some((pid, true));
                                                 ui.close_menu();
                                             }
                                         }
-                                    } else if n > 1 && ui.button(format!("✖ Finalizar árvore ({n} processos)")).clicked() {
+                                    } else if n > 1 {
+                                        let label = if self.cfg.locale == Locale::Portuguese { format!("✖ Finalizar árvore ({n} processos)") } else { format!("✖ Terminate tree ({n} processes)") };
+                                        if ui.button(label).clicked() {
                                         kill = Some((pid, true));
                                         ui.close_menu();
+                                        }
                                     }
                                 }
                                 if !critical {
-                                    let lt = if locked { "🔓 Desproteger" } else { "🔒 Proteger (lock)" };
+                                    let lt = if locked { self.cfg.locale.text("🔓 Desproteger", "🔓 Unlock") } else { self.cfg.locale.text("🔒 Proteger (lock)", "🔒 Protect (lock)") };
                                     if ui.button(lt).clicked() {
                                         lock = Some(p.name_lower.clone());
                                         ui.close_menu();
                                     }
                                 }
                                 ui.separator();
-                                ui.menu_button("Categoria", |ui| {
+                                ui.menu_button(self.cfg.locale.text("Categoria", "Category"), |ui| {
                                     for c in Category::ALL {
                                         let cur = cat == c;
-                                        if ui.selectable_label(cur, RichText::new(c.label()).color(c.color())).clicked() {
+                                        if ui.selectable_label(cur, RichText::new(c.label_for(self.cfg.locale)).color(c.color())).clicked() {
                                             set_cat = Some((p.name_lower.clone(), Some(c)));
                                             ui.close_menu();
                                         }
                                     }
                                     ui.separator();
-                                    if ui.button("Regra automática").clicked() {
+                                    if ui.button(self.cfg.locale.text("Regra automática", "Automatic rule")).clicked() {
                                         set_cat = Some((p.name_lower.clone(), None));
                                         ui.close_menu();
                                     }
                                 });
-                                if p.ppid != 0 && self.proc(p.ppid).is_some() && ui.button("↑ Ir para o pai").clicked() {
+                                if p.ppid != 0 && self.proc(p.ppid).is_some() && ui.button(self.cfg.locale.text("↑ Ir para o pai", "↑ Go to parent")).clicked() {
                                     click_select = Some(p.ppid);
                                     ui.close_menu();
                                 }
-                                ui.menu_button("Ordenar por", |ui| {
-                                    for (k, l) in [(SortKey::Steal, "Disputa"), (SortKey::Pid, "PID"), (SortKey::State, "Estado"), (SortKey::Parent, "Origem"), (SortKey::Cat, "Categoria")] {
+                                ui.menu_button(self.cfg.locale.text("Ordenar por", "Sort by"), |ui| {
+                                    for (k, l) in [
+                                        (SortKey::Steal, self.cfg.locale.text("Disputa", "Contention")),
+                                        (SortKey::Pid, "PID"),
+                                        (SortKey::State, self.cfg.locale.text("Estado", "State")),
+                                        (SortKey::Parent, self.cfg.locale.text("Origem", "Parent")),
+                                        (SortKey::Cat, self.cfg.locale.text("Categoria", "Category")),
+                                    ] {
                                         if ui.selectable_label(self.sort == k, l).clicked() {
                                             sort_by = Some(k);
                                             ui.close_menu();
@@ -3419,16 +4203,16 @@ impl App {
                                     }
                                 });
                                 ui.separator();
-                                if !p.cmdline.is_empty() && ui.button("Copiar linha de comando").clicked() {
+                                if !p.cmdline.is_empty() && ui.button(self.cfg.locale.text("Copiar linha de comando", "Copy command line")).clicked() {
                                     copy = Some(p.cmdline.clone());
                                     ui.close_menu();
                                 }
                                 if !p.exe_path.is_empty() {
-                                    if ui.button("Copiar caminho").clicked() {
+                                    if ui.button(self.cfg.locale.text("Copiar caminho", "Copy path")).clicked() {
                                         copy = Some(p.exe_path.clone());
                                         ui.close_menu();
                                     }
-                                    if ui.button("Abrir pasta do executável").clicked() {
+                                    if ui.button(self.cfg.locale.text("Abrir pasta do executável", "Open executable folder")).clicked() {
                                         open_folder = Some(p.exe_path.clone());
                                         ui.close_menu();
                                     }
@@ -3493,14 +4277,22 @@ impl App {
         }
         let cell = ui.max_rect();
         let w = (cell.width() - 10.0).max(0.0) * frac.clamp(0.0, 1.0);
-        let bar = Rect::from_min_size(egui::pos2(cell.right() - 6.0 - w, cell.bottom() - 6.0), Vec2::new(w, 3.0));
-        ui.painter().rect_filled(bar, 1.5, color.gamma_multiply(0.75));
+        let bar = Rect::from_min_size(
+            egui::pos2(cell.right() - 6.0 - w, cell.bottom() - 6.0),
+            Vec2::new(w, 3.0),
+        );
+        ui.painter()
+            .rect_filled(bar, 1.5, color.gamma_multiply(0.75));
     }
 
     /// Linha separadora no pé de cada linha da tabela (a zebra saiu).
     fn row_line(ui: &egui::Ui, row_x: Option<egui::Rangef>) {
         let cell = ui.max_rect();
-        ui.painter().hline(row_x.unwrap_or(cell.x_range()), cell.bottom() + 1.0, Stroke::new(1.0_f32, LINE));
+        ui.painter().hline(
+            row_x.unwrap_or(cell.x_range()),
+            cell.bottom() + 1.0,
+            Stroke::new(1.0_f32, LINE),
+        );
     }
 
     // ---------- visão Térmico ----------
@@ -3508,7 +4300,7 @@ impl App {
     /// Sensores + controle de fans + ESTABILIZAR — o TempHUD embutido no RamDog. Toda leitura
     /// e toda escrita de hardware acontecem no helper `hwtemp.exe` (a curva mora lá, por
     /// segurança); aqui é só UI: comandos saem pelo stdin dele, o estado volta no snapshot.
-    fn ui_thermal(&mut self, ui: &mut egui::Ui) {
+    fn ui_thermal(&mut self, ui: &mut egui::Ui, locale: Locale) {
         let hw = self.hwtemp.clone();
         let cmd = self.sampler.hw_cmd.clone();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -3516,17 +4308,17 @@ impl App {
             if hw.sensors.is_empty() {
                 ui.vertical_centered(|ui| {
                     ui.add_space(40.0);
-                    ui.label(RichText::new("Sem leitura de sensores").strong().size(15.0));
+                    ui.label(RichText::new(locale.text("Sem leitura de sensores", "No sensor readings")).strong().size(15.0));
                     let why = if cfg!(target_os = "macos") {
-                        "A visão Térmico no macOS ainda não está ligada."
+                        locale.text("A visão Térmico no macOS ainda não está ligada.", "Thermal view is not connected on macOS yet.")
                     } else if cfg!(target_os = "linux") {
-                        "Nenhum sensor em /sys/class/hwmon. Sem coretemp/k10temp/zenpower o kernel não expôs temperatura."
+                        locale.text("Nenhum sensor em /sys/class/hwmon. Sem coretemp/k10temp/zenpower o kernel não expôs temperatura.", "No sensor under /sys/class/hwmon. Without coretemp/k10temp/zenpower, the kernel exposed no temperature.")
                     } else if !cfg!(windows) {
-                        "A visão Térmico ainda é só Windows: depende do helper hwtemp.exe (LibreHardwareMonitorLib)."
+                        locale.text("A visão Térmico ainda é só Windows: depende do helper hwtemp.exe (LibreHardwareMonitorLib).", "Thermal view is still Windows-only here: it needs hwtemp.exe (LibreHardwareMonitorLib).")
                     } else if cmd.is_none() {
-                        "hwtemp.exe não foi achado ao lado do ramdog.exe — reinstale com o helper junto."
+                        locale.text("hwtemp.exe não foi achado ao lado do ramdog.exe — reinstale com o helper junto.", "hwtemp.exe was not found beside ramdog.exe — reinstall with the helper included.")
                     } else {
-                        "O helper subiu mas ainda não reportou. Se persistir: .NET 8 Desktop Runtime ausente, ou placa-mãe sem Super I/O suportado pela LibreHardwareMonitor."
+                        locale.text("O helper subiu mas ainda não reportou. Se persistir: .NET 8 Desktop Runtime ausente, ou placa-mãe sem Super I/O suportado pela LibreHardwareMonitor.", "The helper started but has not reported yet. If it persists: missing .NET 8 Desktop Runtime, or a motherboard without LibreHardwareMonitor-supported Super I/O.")
                     };
                     ui.label(RichText::new(why).color(MUTED));
                 });
@@ -3535,14 +4327,36 @@ impl App {
 
             #[cfg(target_os = "linux")]
             {
-                if let Some(error)=&hw.control_error{ui.colored_label(egui::Color32::LIGHT_RED,error);}
+                if let Some(error) = &hw.control_error {
+                    let display_error = match error.as_str() {
+                        "O helper precisa de autenticação administrativa" => locale.text(
+                            "O helper precisa de autenticação administrativa",
+                            "The fan helper requires administrator authentication",
+                        ),
+                        "Processo pai indisponível" => {
+                            locale.text("Processo pai indisponível", "Parent process unavailable")
+                        }
+                        "Driver sem controles PWM graváveis" => locale.text(
+                            "Driver sem controles PWM graváveis",
+                            "The driver exposes no writable PWM controls",
+                        ),
+                        "Fan desconhecido" => locale.text("Fan desconhecido", "Unknown fan"),
+                        "Comando incompleto" => locale.text("Comando incompleto", "Incomplete command"),
+                        "A faixa manual é 30–100%" => {
+                            locale.text("A faixa manual é 30–100%", "Manual range is 30–100%")
+                        }
+                        "Comando desconhecido" => locale.text("Comando desconhecido", "Unknown command"),
+                        _ => error.as_str(),
+                    };
+                    ui.colored_label(egui::Color32::LIGHT_RED, display_error);
+                }
                 if !hw.control_ready {
                     if crate::fans_linux::supported(){
                         crate::kit::toolbar(ui, |ui| {
-                            if ui.add(crate::kit::primary("Ativar controle de ventoinhas")).on_hover_text("Pede senha (pkexec)").clicked(){crate::fans_linux::enable();}
-                            ui.label(crate::kit::muted("Um helper separado restaura o controle anterior quando o RamDog fecha. Faixa manual: 30–100%."));
+                            if ui.add(crate::kit::primary(locale.text("Ativar controle de ventoinhas", "Enable fan control"))).on_hover_text(locale.text("Pede senha (pkexec)", "Requests your password (pkexec)")).clicked(){crate::fans_linux::enable();}
+                            ui.label(crate::kit::muted(locale.text("Um helper separado restaura o controle anterior quando o RamDog fecha. Faixa manual: 30–100%.", "A separate helper restores the previous control state when RamDog closes. Manual range: 30–100%.")));
                         });
-                    } else {crate::kit::intro(ui, "Rotações disponíveis abaixo. O driver atual não oferece controles PWM graváveis.");}
+                    } else {crate::kit::intro(ui, locale.text("Rotações disponíveis abaixo. O driver atual não oferece controles PWM graváveis.", "Read-only fan speeds are shown below. The current driver exposes no writable PWM controls."));}
                 }
             }
             // Cartões de sensores: um por hardware, na ordem em que o helper reporta;
@@ -3558,7 +4372,7 @@ impl App {
             for chunk in groups.chunks(ncols) {
                 ui.columns(ncols, |cols| {
                     for (col, (hw_name, rows)) in cols.iter_mut().zip(chunk.iter()) {
-                        Self::thermal_card(col, hw_name, rows);
+                        Self::thermal_card(col, hw_name, rows, locale);
                     }
                 });
                 ui.add_space(10.0);
@@ -3577,10 +4391,10 @@ impl App {
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("CONTROLE DE FANS").strong().color(ACCENT).size(11.0));
+                            ui.label(RichText::new(locale.text("CONTROLE DE FANS", "FAN CONTROL")).strong().color(ACCENT).size(11.0));
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 ui.label(
-                                    RichText::new("arraste ou digite % · Auto = BIOS · proteção no modo manual: ≥80°C força 100%, solta abaixo de 72°C")
+                                    RichText::new(locale.text("arraste ou digite % · Auto = BIOS · proteção no modo manual: ≥80°C força 100%, solta abaixo de 72°C", "drag or type % · Auto = BIOS · manual protection: ≥80°C forces 100%, releases below 72°C"))
                                         .color(MUTED)
                                         .size(11.0),
                                 );
@@ -3592,21 +4406,22 @@ impl App {
                             ui.vertical(|ui| {
                                 ui.set_width(286.0);
                                 let (label, bg, fg) = if !stab_on {
-                                    ("ESTABILIZAR  ·  travar fans em 50%".to_owned(), ACCENT_BG, ACCENT)
+                                    (locale.text("ESTABILIZAR  ·  travar fans em 50%", "STABILIZE  ·  lock fans at 50%").to_owned(), ACCENT_BG, ACCENT)
                                 } else if stab.held > 50.5 {
-                                    let tag = if cpu >= 95.0 { "teto térmico" } else { "rampa linear" };
-                                    (format!("FANS EM {:.0}%  ·  CPU {cpu:.0}°C ({tag})", stab.held), THERM_WARN_BG, THERM_WARN_FG)
+                                    let tag = if cpu >= 95.0 { locale.text("teto térmico", "thermal ceiling") } else { locale.text("rampa linear", "linear ramp") };
+                                    (format!("{} {:.0}%  ·  CPU {cpu:.0}°C ({tag})", locale.text("FANS EM", "FANS AT"), stab.held), THERM_WARN_BG, THERM_WARN_FG)
                                 } else {
-                                    (format!("FANS TRAVADOS EM 50%  ·  CPU {cpu:.0}°C"), THERM_STAB_BG, THERM_STAB_FG)
+                                    (format!("{} 50%  ·  CPU {cpu:.0}°C", locale.text("FANS TRAVADOS EM", "FANS LOCKED AT")), THERM_STAB_BG, THERM_STAB_FG)
                                 };
                                 let btn = egui::Button::new(RichText::new(label).strong().size(13.5).color(fg))
                                     .fill(bg)
                                     .stroke(Stroke::new(1.0_f32, fg.gamma_multiply(0.7)))
                                     .corner_radius(6.0)
                                     .min_size(Vec2::new(ui.available_width(), 34.0));
-                                let resp = ui.add(btn).on_hover_text(
+                                let resp = ui.add(btn).on_hover_text(locale.text(
                                     "Liga/desliga a curva do TempHUD. Só fans SuperIO da placa-mãe — GPU fica no zero-fan dela. Clicar de novo (ou fechar o app) devolve tudo à BIOS.",
-                                );
+                                    "Toggles the TempHUD curve. Only motherboard SuperIO fans are controlled — the GPU keeps its own zero-fan mode. Click again (or close the app) to return control to BIOS.",
+                                ));
                                 if resp.clicked() {
                                     self.toggle_stab();
                                 }
@@ -3614,7 +4429,10 @@ impl App {
                                 Self::thermal_curve(ui);
                                 ui.add_space(2.0);
                                 ui.label(
-                                    RichText::new("50% até 80°C, rampa linear até 100% aos 92°C, teto imediato a 95°C. Sobe/desce no máx. 3%/s. Soltar devolve tudo à BIOS.")
+                                    RichText::new(locale.text(
+                                        "50% até 80°C, rampa linear até 100% aos 92°C, teto imediato a 95°C. Sobe/desce no máx. 3%/s. Soltar devolve tudo à BIOS.",
+                                        "50% to 80°C, linear ramp to 100% at 92°C, immediate ceiling at 95°C. Changes by at most 3%/s. Releasing returns control to BIOS.",
+                                    ))
                                         .color(MUTED)
                                         .size(11.0),
                                 );
@@ -3676,7 +4494,10 @@ impl App {
                                             let rpm_text = f.rpm.map(|r| format!("{r:>5.0} RPM")).unwrap_or_else(|| "    – RPM".into());
                                             let r = ui.label(num(rpm_text).color(rpm_color));
                                             if f.guard {
-                                                r.on_hover_text("Proteção térmica: CPU ≥80°C — 100% forçado sobre o % manual até esfriar (72°C).");
+                                                r.on_hover_text(locale.text(
+                                                    "Proteção térmica: CPU ≥80°C — 100% forçado sobre o % manual até esfriar (72°C).",
+                                                    "Thermal protection: CPU ≥80°C — forces 100% over the manual percentage until it cools below 72°C.",
+                                                ));
                                             }
                                             let mut auto = f.auto;
                                             if ui.add_enabled(!stab_on, egui::Checkbox::new(&mut auto, "Auto")).changed() {
@@ -3699,23 +4520,35 @@ impl App {
             } else if cfg!(windows) {
                 ui.add_space(14.0);
                 let why = if self.is_admin {
-                    "Sem controles de fan: a placa-mãe não expôs Super I/O suportado pela LibreHardwareMonitor."
+                    locale.text(
+                        "Sem controles de fan: a placa-mãe não expôs Super I/O suportado pela LibreHardwareMonitor.",
+                        "No fan controls: the motherboard exposed no LibreHardwareMonitor-supported Super I/O.",
+                    )
                 } else {
-                    "Sem controles de fan: rode elevado (botão \"Reabrir como admin\" no topo) — o driver de sensores não sobe sem isso."
+                    locale.text(
+                        "Sem controles de fan: rode elevado (botão \"Reabrir como admin\" no topo) — o driver de sensores não sobe sem isso.",
+                        "No fan controls: run elevated (use \"Reopen as admin\" at the top) — the sensor driver needs it.",
+                    )
                 };
                 ui.label(RichText::new(why).color(MUTED));
             } else if cfg!(target_os = "linux") {
                 ui.add_space(14.0);
-                ui.label(RichText::new(
-                    "Sensores e RPM são lidos pelo hwmon. Ative o controle acima para ajustar PWM ou usar ESTABILIZAR; ao fechar, o helper restaura o estado anterior."
-                ).color(MUTED));
+                ui.label(RichText::new(locale.text(
+                    "Sensores e RPM são lidos pelo hwmon. Ative o controle acima para ajustar PWM ou usar ESTABILIZAR; ao fechar, o helper restaura o estado anterior.",
+                    "Sensors and RPM are read from hwmon. Enable the control above to adjust PWM or use STABILIZE; the helper restores the previous state when the app closes.",
+                )).color(MUTED));
             }
         });
     }
 
     /// Um cartão de hardware da visão Térmico: cabeçalho, número-herói (temperatura mais
     /// alta) e as demais leituras em linhas compactas; cargas ganham uma minibarra.
-    fn thermal_card(ui: &mut egui::Ui, hw_name: &str, rows: &[&crate::hwtemp::SensorRow]) {
+    fn thermal_card(
+        ui: &mut egui::Ui,
+        hw_name: &str,
+        rows: &[&crate::hwtemp::SensorRow],
+        locale: Locale,
+    ) {
         egui::Frame::new()
             .fill(BG)
             .corner_radius(crate::kit::ROW_R)
@@ -3723,7 +4556,12 @@ impl App {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.spacing_mut().item_spacing.y = 3.0;
-                ui.label(RichText::new(hw_name).strong().color(ACCENT).size(11.0));
+                let display_hw = match hw_name {
+                    "Placa-mãe" => locale.text("Placa-mãe", "Motherboard"),
+                    "Disco" => locale.text("Disco", "Disk"),
+                    _ => hw_name,
+                };
+                ui.label(RichText::new(display_hw).strong().color(ACCENT).size(11.0));
                 let hero = rows
                     .iter()
                     .filter(|s| s.kind == "temp")
@@ -3731,8 +4569,21 @@ impl App {
                     .copied();
                 if let Some(h) = hero {
                     let n_temps = rows.iter().filter(|s| s.kind == "temp").count();
-                    ui.label(num(format!("{:.1} °C", h.value)).size(24.0).strong().color(Self::temp_color(h.value.round() as u32)));
-                    let sub = if n_temps > 1 { format!("{} · sensor mais quente", h.name) } else { h.name.clone() };
+                    ui.label(
+                        num(format!("{:.1} °C", h.value))
+                            .size(24.0)
+                            .strong()
+                            .color(Self::temp_color(h.value.round() as u32)),
+                    );
+                    let sub = if n_temps > 1 {
+                        format!(
+                            "{} · {}",
+                            h.name,
+                            locale.text("sensor mais quente", "hottest sensor")
+                        )
+                    } else {
+                        h.name.clone()
+                    };
                     ui.label(RichText::new(sub).color(MUTED).size(11.0));
                     ui.add_space(3.0);
                 }
@@ -3741,9 +4592,15 @@ impl App {
                         continue;
                     }
                     let (text, color) = match s.kind.as_str() {
-                        "temp" => (format!("{:>5.1} °C", s.value), Self::temp_color(s.value.round() as u32)),
+                        "temp" => (
+                            format!("{:>5.1} °C", s.value),
+                            Self::temp_color(s.value.round() as u32),
+                        ),
                         "rpm" => (format!("{:>5.0} RPM", s.value), MUTED),
-                        _ => (format!("{:>5.1} %", s.value), Self::load_color(s.value / 100.0)),
+                        _ => (
+                            format!("{:>5.1} %", s.value),
+                            Self::load_color(s.value / 100.0),
+                        ),
                     };
                     let is_load = !matches!(s.kind.as_str(), "temp" | "rpm");
                     ui.horizontal(|ui| {
@@ -3751,7 +4608,10 @@ impl App {
                         let avail = ui.available_width();
                         ui.scope(|ui| {
                             ui.set_width((avail - 148.0).max(40.0));
-                            ui.add(egui::Label::new(RichText::new(&s.name).color(MUTED).size(12.0)).truncate());
+                            ui.add(
+                                egui::Label::new(RichText::new(&s.name).color(MUTED).size(12.0))
+                                    .truncate(),
+                            );
                         });
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.label(num(text).color(color));
@@ -3786,21 +4646,61 @@ impl App {
         let yax = rect.top() + 68.0;
         let x80 = x0 + (x1 - x0) * 0.55;
         let x92 = x0 + (x1 - x0) * 0.82;
-        p.line_segment([egui::pos2(x0, rect.top() + 6.0), egui::pos2(x0, yax)], Stroke::new(1.0_f32, LINE));
-        p.line_segment([egui::pos2(x0, yax), egui::pos2(x1, yax)], Stroke::new(1.0_f32, LINE));
-        p.line_segment([egui::pos2(x0, y50), egui::pos2(x80, y50)], Stroke::new(2.0_f32, ACCENT));
-        p.line_segment([egui::pos2(x80, y50), egui::pos2(x92, y100)], Stroke::new(2.0_f32, ACCENT));
-        p.line_segment([egui::pos2(x92, y100), egui::pos2(x1, y100)], Stroke::new(2.0_f32, ACCENT));
+        p.line_segment(
+            [egui::pos2(x0, rect.top() + 6.0), egui::pos2(x0, yax)],
+            Stroke::new(1.0_f32, LINE),
+        );
+        p.line_segment(
+            [egui::pos2(x0, yax), egui::pos2(x1, yax)],
+            Stroke::new(1.0_f32, LINE),
+        );
+        p.line_segment(
+            [egui::pos2(x0, y50), egui::pos2(x80, y50)],
+            Stroke::new(2.0_f32, ACCENT),
+        );
+        p.line_segment(
+            [egui::pos2(x80, y50), egui::pos2(x92, y100)],
+            Stroke::new(2.0_f32, ACCENT),
+        );
+        p.line_segment(
+            [egui::pos2(x92, y100), egui::pos2(x1, y100)],
+            Stroke::new(2.0_f32, ACCENT),
+        );
         p.circle_filled(egui::pos2(x80, y50), 3.0, ACCENT);
         p.circle_filled(egui::pos2(x92, y100), 3.0, Color32::from_rgb(226, 166, 72));
         let font = egui::FontId::monospace(9.5);
-        p.text(egui::pos2(x0 - 4.0, y50), egui::Align2::RIGHT_CENTER, "50%", font.clone(), MUTED);
-        p.text(egui::pos2(x0 - 4.0, y100), egui::Align2::RIGHT_CENTER, "100%", font.clone(), MUTED);
-        p.text(egui::pos2(x80, yax + 4.0), egui::Align2::CENTER_TOP, "80°C", font.clone(), MUTED);
-        p.text(egui::pos2(x92, yax + 4.0), egui::Align2::CENTER_TOP, "92°C", font, MUTED);
+        p.text(
+            egui::pos2(x0 - 4.0, y50),
+            egui::Align2::RIGHT_CENTER,
+            "50%",
+            font.clone(),
+            MUTED,
+        );
+        p.text(
+            egui::pos2(x0 - 4.0, y100),
+            egui::Align2::RIGHT_CENTER,
+            "100%",
+            font.clone(),
+            MUTED,
+        );
+        p.text(
+            egui::pos2(x80, yax + 4.0),
+            egui::Align2::CENTER_TOP,
+            "80°C",
+            font.clone(),
+            MUTED,
+        );
+        p.text(
+            egui::pos2(x92, yax + 4.0),
+            egui::Align2::CENTER_TOP,
+            "92°C",
+            font,
+            MUTED,
+        );
     }
 
     fn ui_details(&mut self, ui: &mut egui::Ui) {
+        let locale = self.cfg.locale;
         let Some(sel) = self.selected else {
             // Estado vazio útil: em vez de só instruir, já responde "quem está comendo minha RAM".
             let m = self.cfg.mem_metric;
@@ -3809,23 +4709,45 @@ impl App {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.add_space(10.0);
-                ui.label(RichText::new("Maiores agora").color(MUTED).size(11.5));
+                ui.label(
+                    RichText::new(locale.text("Maiores agora", "Largest now"))
+                        .color(MUTED)
+                        .size(11.5),
+                );
                 for p in top.iter().take(4) {
                     let cat = self.cat(p.pid);
                     ui.add_space(6.0);
                     ui.label(RichText::new("●").color(cat.color()).size(10.0));
                     ui.label(RichText::new(&p.name).size(12.0));
-                    ui.label(num(if metric_available(m, p) { fmt_bytes(Self::metric_of(m, p)) } else { "—".into() }).color(ram_color(Self::metric_of(m, p), MUTED)));
+                    ui.label(
+                        num(if metric_available(m, p) {
+                            fmt_bytes(Self::metric_of(m, p))
+                        } else {
+                            "—".into()
+                        })
+                        .color(ram_color(Self::metric_of(m, p), MUTED)),
+                    );
                 }
             });
             ui.horizontal(|ui| {
                 ui.add_space(10.0);
-                ui.label(RichText::new("clique numa linha para ver origem e ações · botão direito abre o menu").color(MUTED).size(11.0));
+                ui.label(
+                    RichText::new(locale.text(
+                        "clique numa linha para ver origem e ações · botão direito abre o menu",
+                        "click a row to see origin and actions · right-click opens the menu",
+                    ))
+                    .color(MUTED)
+                    .size(11.0),
+                );
             });
             return;
         };
         let alive = self.proc(sel).cloned();
-        let Some((p, cat)) = alive.clone().map(|p| (p, self.cat(sel))).or_else(|| self.selected_keep.clone()) else {
+        let Some((p, cat)) = alive
+            .clone()
+            .map(|p| (p, self.cat(sel)))
+            .or_else(|| self.selected_keep.clone())
+        else {
             self.selected = None;
             return;
         };
@@ -3833,7 +4755,11 @@ impl App {
         let critical = is_critical(&p.name_lower, p.pid);
         // Só enquanto existe: depois de finalizar o pai, o `selected_keep` ainda diz `Z`.
         let zombie = alive.is_some() && p.kernel_state == Some('Z');
-        let holder = if zombie { self.zombie_holder(p.pid, if p.ppid != 0 { p.ppid } else { p.raw_ppid }) } else { None };
+        let holder = if zombie {
+            self.zombie_holder(p.pid, if p.ppid != 0 { p.ppid } else { p.raw_ppid })
+        } else {
+            None
+        };
         let now_ft = procs::now_filetime();
         let secs = ((now_ft - p.create_time).max(0) / 10_000_000) as u64;
         let mut kill: Option<(u32, bool)> = None;
@@ -3852,14 +4778,34 @@ impl App {
                 ui.label(RichText::new(format!("({})", p.name)).monospace().weak());
             }
             ui.label(RichText::new(format!("PID {}", p.pid)).monospace().weak());
-            ui.label(RichText::new(format!("● {}", cat.label())).color(cat.color()));
+            ui.label(
+                RichText::new(format!("● {}", cat.label_for(self.cfg.locale))).color(cat.color()),
+            );
             if locked {
-                ui.label(RichText::new(if critical { "🔒 crítico" } else { "🔒 protegido" }).color(Color32::from_rgb(120, 200, 255)));
+                ui.label(
+                    RichText::new(if critical {
+                        locale.text("🔒 crítico", "🔒 critical")
+                    } else {
+                        locale.text("🔒 protegido", "🔒 protected")
+                    })
+                    .color(Color32::from_rgb(120, 200, 255)),
+                );
             }
             if alive.is_none() {
-                ui.label(RichText::new("(encerrado)").color(Color32::from_rgb(235, 90, 90)).strong());
+                ui.label(
+                    RichText::new(locale.text("(encerrado)", "(exited)"))
+                        .color(Color32::from_rgb(235, 90, 90))
+                        .strong(),
+                );
             } else if zombie {
-                ui.label(RichText::new("zumbi · já morreu, 0 de RAM").color(Color32::from_rgb(230, 120, 120)).strong());
+                ui.label(
+                    RichText::new(locale.text(
+                        "zumbi · já morreu, 0 de RAM",
+                        "zombie · already dead, 0 RAM",
+                    ))
+                    .color(Color32::from_rgb(230, 120, 120))
+                    .strong(),
+                );
             }
         });
         // Ações em fileira própria: à direita da identidade elas atropelavam o nome quando a
@@ -3871,55 +4817,55 @@ impl App {
                     if zombie {
                         // Sinal num zumbi não faz nada; os dois caminhos reais ganham botão
                         // com nome, em vez de um Shift que ninguém descobre.
-                        if ui.button("Pedir ao pai para recolher").on_hover_text("Manda SIGCHLD ao pai. Pai bem escrito recolhe na hora; se não recolher, só finalizando ele").clicked() {
+                        if ui.button(locale.text("Pedir ao pai para recolher", "Ask parent to reap")).on_hover_text(locale.text("Manda SIGCHLD ao pai. Pai bem escrito recolhe na hora; se não recolher, só finalizando ele", "Sends SIGCHLD to the parent. A well-behaved parent reaps immediately; otherwise it must be terminated")).clicked() {
                             kill = Some((p.pid, false));
                         }
                         if let Some((pname, ppid)) = &holder {
                             if ui
-                                .add(egui::Button::new(RichText::new(format!("✖ Finalizar pai: {pname} ({ppid})")).color(Color32::WHITE)).fill(Color32::from_rgb(170, 50, 50)))
-                                .on_hover_text("O pai é quem segura a entrada. Finalizando ele, o zumbi some junto")
+                                .add(egui::Button::new(RichText::new(if locale == Locale::Portuguese { format!("✖ Finalizar pai: {pname} ({ppid})") } else { format!("✖ Terminate parent: {pname} ({ppid})") }).color(Color32::WHITE)).fill(Color32::from_rgb(170, 50, 50)))
+                                .on_hover_text(locale.text("O pai é quem segura a entrada. Finalizando ele, o zumbi some junto", "The parent is holding the entry. Terminating it also removes the zombie"))
                                 .clicked()
                             {
                                 kill = Some((p.pid, true));
                             }
                         }
                     } else if !locked {
-                        if ui.add(egui::Button::new(RichText::new("✖ Finalizar").color(Color32::WHITE)).fill(Color32::from_rgb(170, 50, 50))).clicked() {
+                        if ui.add(egui::Button::new(RichText::new(locale.text("✖ Finalizar", "✖ Terminate")).color(Color32::WHITE)).fill(Color32::from_rgb(170, 50, 50))).clicked() {
                             kill = Some((p.pid, false));
                         }
                         let n = self.subtree_count.get(&p.pid).copied().unwrap_or(1);
                         if n > 1
                             && ui
-                                .add(egui::Button::new(RichText::new(format!("✖ Finalizar árvore ({n})")).color(Color32::WHITE)).fill(Color32::from_rgb(140, 40, 40)))
-                                .on_hover_text(format!("Encerra este processo e todos os {} descendentes — total {}", n - 1, fmt_bytes(self.subtree.get(&p.pid).copied().unwrap_or(0))))
+                                .add(egui::Button::new(RichText::new(if locale == Locale::Portuguese { format!("✖ Finalizar árvore ({n})") } else { format!("✖ Terminate tree ({n})") }).color(Color32::WHITE)).fill(Color32::from_rgb(140, 40, 40)))
+                                .on_hover_text(if locale == Locale::Portuguese { format!("Encerra este processo e todos os {} descendentes — total {}", n - 1, fmt_bytes(self.subtree.get(&p.pid).copied().unwrap_or(0))) } else { format!("Terminates this process and all {} descendants — total {}", n - 1, fmt_bytes(self.subtree.get(&p.pid).copied().unwrap_or(0))) })
                                 .clicked()
                         {
                             kill = Some((p.pid, true));
                         }
                     }
                     if !critical {
-                        let lt = if locked { "🔓 Desproteger" } else { "🔒 Proteger" };
-                        if ui.button(lt).on_hover_text("Lock por nome de executável: vale para todas as instâncias e persiste").clicked() {
+                        let lt = if locked { locale.text("🔓 Desproteger", "🔓 Unlock") } else { locale.text("🔒 Proteger", "🔒 Protect") };
+                        if ui.button(lt).on_hover_text(locale.text("Lock por nome de executável: vale para todas as instâncias e persiste", "Executable-name lock: applies to every instance and persists")).clicked() {
                             lock = Some(p.name_lower.clone());
                         }
                     }
                 }
                 ui.add_space(6.0);
-                ui.label(RichText::new("Categoria").weak());
+                ui.label(RichText::new(locale.text("Categoria", "Category")).weak());
                 let overridden = self.cfg.overrides.contains_key(&p.name_lower);
                 let mut chosen = cat;
                 egui::ComboBox::from_id_salt("cat_override")
-                    .selected_text(RichText::new(chosen.label()).color(chosen.color()))
+                    .selected_text(RichText::new(chosen.label_for(self.cfg.locale)).color(chosen.color()))
                     .width(130.0)
                     .show_ui(ui, |ui| {
                         for c in Category::ALL {
-                            ui.selectable_value(&mut chosen, c, RichText::new(c.label()).color(c.color()));
+                            ui.selectable_value(&mut chosen, c, RichText::new(c.label_for(self.cfg.locale)).color(c.color()));
                         }
                     });
                 if chosen != cat {
                     set_cat = Some((p.name_lower.clone(), Some(chosen)));
                 }
-                if overridden && ui.small_button("auto").on_hover_text("Voltar para a regra automática").clicked() {
+                if overridden && ui.small_button("auto").on_hover_text(locale.text("Voltar para a regra automática", "Return to the automatic rule")).clicked() {
                     set_cat = Some((p.name_lower.clone(), None));
                 }
             }
@@ -3932,19 +4878,19 @@ impl App {
             egui::Grid::new("details_grid").num_columns(2).spacing([10.0, 3.0]).show(ui, |ui| {
                 // "O que é isso" vem antes de tudo: é a pergunta que faz alguém abrir o painel.
                 if let Some(k) = knowledge::lookup(&p.name_lower) {
-                    ui.label(RichText::new("O que é").weak());
+                    ui.label(RichText::new(locale.text("O que é", "What is it")).weak());
                     ui.vertical(|ui| {
-                        ui.add(egui::Label::new(RichText::new(k.what).size(12.5)).wrap());
+                        ui.add(egui::Label::new(RichText::new(k.what_for(locale)).size(12.5)).wrap());
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing.x = 5.0;
                             ui.label(
-                                RichText::new(format!("{} {}", k.risk.dot(), k.risk.label()))
+                                RichText::new(format!("{} {}", k.risk.dot(), k.risk.label_for(locale)))
                                     .color(k.risk.color())
                                     .strong()
                                     .size(12.0),
                             )
-                            .on_hover_text(k.risk.tip());
-                            ui.add(egui::Label::new(RichText::new(k.why).weak().size(11.5)).wrap());
+                            .on_hover_text(k.risk.tip_for(locale));
+                            ui.add(egui::Label::new(RichText::new(k.why_for(locale)).weak().size(11.5)).wrap());
                         });
                     });
                     ui.end_row();
@@ -3952,7 +4898,7 @@ impl App {
 
                 let svcs = self.services_of(p.pid);
                 if !svcs.is_empty() {
-                    ui.label(RichText::new("Serviços").weak());
+                    ui.label(RichText::new(locale.text("Serviços", "Services")).weak());
                     ui.vertical(|ui| {
                         // Um svchost pode hospedar uma dúzia: os primeiros bastam para
                         // identificar, o resto fica atrás do expansor para não poluir.
@@ -3964,7 +4910,7 @@ impl App {
                             });
                         }
                         if svcs.len() > 3 {
-                            egui::CollapsingHeader::new(format!("mais {} serviço(s)", svcs.len() - 3))
+                            egui::CollapsingHeader::new(if locale == Locale::Portuguese { format!("mais {} serviço(s)", svcs.len() - 3) } else { format!("more {} service(s)", svcs.len() - 3) })
                                 .id_salt("more_svcs")
                                 .show(ui, |ui| {
                                     for (name, display) in svcs.iter().skip(3) {
@@ -3981,19 +4927,20 @@ impl App {
                 }
 
                 if zombie {
-                    ui.label(RichText::new("Zumbi").weak());
+                    ui.label(RichText::new(locale.text("Zumbi", "Zombie")).weak());
                     ui.vertical(|ui| {
-                        ui.add(egui::Label::new(RichText::new("Este processo já terminou: não usa memória nem CPU. A linha existe porque o pai ainda não recolheu o código de saída (wait).").size(12.0)).wrap());
+                        ui.add(egui::Label::new(RichText::new(locale.text("Este processo já terminou: não usa memória nem CPU. A linha existe porque o pai ainda não recolheu o código de saída (wait).", "This process has already exited: it uses no memory or CPU. The row exists because its parent has not reaped the exit status yet (wait). ")).size(12.0)).wrap());
                         let txt = match &holder {
-                            Some((pname, ppid)) => format!("Quem segura: {pname} ({ppid}). Some quando ele recolher ou for finalizado."),
-                            None => "O pai já saiu: o init recolhe sozinho em instantes.".to_string(),
+                            Some((pname, ppid)) if locale == Locale::Portuguese => format!("Quem segura: {pname} ({ppid}). Some quando ele recolher ou for finalizado."),
+                            Some((pname, ppid)) => format!("Holder: {pname} ({ppid}). It disappears when the parent reaps it or is terminated."),
+                            None => locale.text("O pai já saiu: o init recolhe sozinho em instantes.", "The parent has exited: init will reap it shortly.").to_string(),
                         };
                         ui.add(egui::Label::new(RichText::new(txt).size(12.0).color(Color32::from_rgb(230, 120, 120))).wrap());
                     });
                     ui.end_row();
                 }
 
-                ui.label(RichText::new("Origem").weak());
+                ui.label(RichText::new(locale.text("Origem", "Origin")).weak());
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let chain = self.ancestry(p.pid);
@@ -4003,20 +4950,20 @@ impl App {
                             match self.seen_names.get(&p.raw_ppid) {
                                 Some(n) => {
                                     ui.label(RichText::new(format!("{n} (PID {})", p.raw_ppid)).strong());
-                                    ui.label(RichText::new("— já encerrado").weak());
+                                    ui.label(RichText::new(locale.text("— já encerrado", "— exited")).weak());
                                 }
                                 None => {
-                                    ui.label(RichText::new(format!("pai (PID {}) já encerrado", p.raw_ppid)).weak());
+                                    ui.label(RichText::new(format!("{} (PID {}) {}", locale.text("pai", "parent"), p.raw_ppid, locale.text("já encerrado", "exited"))).weak());
                                 }
                             }
                         } else {
-                            ui.label(RichText::new("sem pai conhecido").weak());
+                            ui.label(RichText::new(locale.text("sem pai conhecido", "parent unknown")).weak());
                         }
                     }
                     for a in chain {
                         if let Some(ap) = self.proc(a) {
                             let r = ui.add(egui::Label::new(RichText::new(format!("{} ({})", ap.name, ap.pid)).color(self.cat(a).color())).sense(egui::Sense::click()));
-                            if r.on_hover_text("Selecionar").clicked() {
+                            if r.on_hover_text(locale.text("Selecionar", "Select")).clicked() {
                                 goto = Some(a);
                             }
                             ui.label(RichText::new("›").weak());
@@ -4027,7 +4974,7 @@ impl App {
                 ui.end_row();
 
                 if !p.launcher.is_empty() {
-                    ui.label(RichText::new("Lançado por").weak());
+                    ui.label(RichText::new(locale.text("Lançado por", "Launched by")).weak());
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         let l = &p.launcher;
@@ -4035,18 +4982,18 @@ impl App {
                         if let Some(a) = &l.agent {
                             let mut txt = a.clone();
                             if let Some(sid) = &l.session {
-                                txt.push_str(&format!(" (sessão {sid})"));
+                                txt.push_str(&format!(" ({} {sid})", locale.text("sessão", "session")));
                             }
                             ui.label(RichText::new(txt).color(purple).strong());
                             match l.agent_pid {
                                 Some(apid) => match self.proc(apid) {
                                     Some(ap) => {
                                         let r = ui.add(egui::Label::new(RichText::new(format!("→ {} ({})", ap.name, apid)).color(self.cat(apid).color())).sense(egui::Sense::click()));
-                                        if r.on_hover_text("Selecionar o processo do agente").clicked() {
+                                        if r.on_hover_text(locale.text("Selecionar o processo do agente", "Select the agent process")).clicked() {
                                             goto = Some(apid);
                                         }
                                     }
-                                    None => { ui.label(RichText::new(format!("→ PID {apid} (já encerrado)")).weak()); }
+                                    None => { ui.label(RichText::new(format!("→ PID {apid} ({})", locale.text("já encerrado", "exited"))).weak()); }
                                 },
                                 None => {}
                             }
@@ -4058,33 +5005,33 @@ impl App {
                             let script = l.npm_script.clone().map(|x| format!("npm run {x} ")).unwrap_or_default();
                             ui.label(RichText::new(format!("· {script}em {cwd}")).monospace().small().weak());
                         }
-                        ui.label(RichText::new("(via variáveis de ambiente herdadas)").weak().small());
+                        ui.label(RichText::new(locale.text("(via variáveis de ambiente herdadas)", "(via inherited environment variables)")).weak().small());
                     });
                     ui.end_row();
                 }
 
-                ui.label(RichText::new("Executável").weak());
+                ui.label(RichText::new(locale.text("Executável", "Executable")).weak());
                 ui.vertical(|ui| {
-                    ui.add(egui::Label::new(RichText::new(if p.exe_path.is_empty() { "(sem acesso)" } else { &p.exe_path }).monospace().small()).wrap());
+                    ui.add(egui::Label::new(RichText::new(if p.exe_path.is_empty() { locale.text("(sem acesso)", "(access unavailable)") } else { &p.exe_path }).monospace().small()).wrap());
                     // Sem isto não há como distinguir o wininit.exe verdadeiro de um
                     // impostor de mesmo nome numa pasta qualquer.
                     match sig.as_ref() {
                         Some(s) => {
-                            ui.label(RichText::new(s.label()).color(s.color()).size(11.5))
-                                .on_hover_text(s.tip());
+                            ui.label(RichText::new(s.label_for(locale)).color(s.color()).size(11.5))
+                                .on_hover_text(s.tip_for(locale));
                         }
                         None => {
-                            ui.label(RichText::new("verificando assinatura…").weak().size(11.5));
+                            ui.label(RichText::new(locale.text("verificando assinatura…", "checking signature…")).weak().size(11.5));
                         }
                     }
                 });
                 ui.end_row();
 
-                ui.label(RichText::new("Comando").weak());
-                ui.add(egui::Label::new(RichText::new(if p.cmdline.is_empty() { "(sem acesso)" } else { &p.cmdline }).monospace().small()).wrap());
+                ui.label(RichText::new(locale.text("Comando", "Command")).weak());
+                ui.add(egui::Label::new(RichText::new(if p.cmdline.is_empty() { locale.text("(sem acesso)", "(access unavailable)") } else { &p.cmdline }).monospace().small()).wrap());
                 ui.end_row();
 
-                ui.label(RichText::new("Memória").weak());
+                ui.label(RichText::new(locale.text("Memória", "Memory")).weak());
                 // Próprio e subárvore em linhas separadas e rotuladas: ler "wininit 5,12 GB"
                 // e concluir que o wininit é o vilão é o mal-entendido nº 1 da visão de árvore.
                 // Ele usa 8 MB; os 5 GB são dos filhos.
@@ -4093,13 +5040,14 @@ impl App {
                 ui.vertical(|ui| {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 5.0;
-                        ui.label(RichText::new("deste processo:").weak().size(11.5));
+                        ui.label(RichText::new(locale.text("deste processo:", "this process:")).weak().size(11.5));
                         ui.label(RichText::new(fmt_bytes(p.working_set)).strong());
                         ui.label(
                             RichText::new(format!(
-                                "(privada {} · {} {})",
-                                private_memory_text(&p),
-                                MemMetric::Commit.label(),
+                                "({} {} · {} {})",
+                                locale.text("privada", "private"),
+                                private_memory_text(&p, locale),
+                                MemMetric::Commit.label_for(locale),
                                 fmt_bytes(p.commit)
                             ))
                             .weak()
@@ -4109,10 +5057,10 @@ impl App {
                     if n > 1 {
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing.x = 5.0;
-                            ui.label(RichText::new("com os filhos:").weak().size(11.5));
+                            ui.label(RichText::new(locale.text("com os filhos:", "with children:")).weak().size(11.5));
                             ui.label(RichText::new(fmt_bytes(sub)).strong().color(Color32::from_rgb(230, 190, 80)));
-                            ui.label(RichText::new(format!("em {n} processos")).weak().size(11.5))
-                                .on_hover_text("É este o número que a coluna RAM mostra na visão de árvore — a soma da subárvore, não o consumo deste processo.");
+                            ui.label(RichText::new(format!("{} {n} {}", locale.text("em", "in"), locale.text("processos", "processes"))).weak().size(11.5))
+                                .on_hover_text(locale.text("É este o número que a coluna RAM mostra na visão de árvore — a soma da subárvore, não o consumo deste processo.", "This is the number shown in the RAM tree column — the subtree sum, not this process's own usage."));
                         });
                     }
                 });
@@ -4120,25 +5068,23 @@ impl App {
 
                 #[cfg(target_os = "linux")]
                 { ui.label(RichText::new("GPU").weak());
-                  let vram=self.sys.gpu_linux.memory_by_pid.get(&p.pid).map(|m|fmt_bytes(*m)).unwrap_or_else(||"indisponível".into());
-                  let load=self.sys.gpu_linux.by_pid.get(&p.pid).map(|n|format!("{n:.1}%")).unwrap_or_else(||"indisponível".into());
-                  ui.label(format!("Uso: {load} · memória de GPU: {vram}")); ui.end_row(); }
-                ui.label(RichText::new("Execução").weak());
-                ui.label(format!(
-                    "iniciado há {}   ·   CPU {:.1}% (último intervalo {:.1}%)   ·   {} threads   ·   {}   ·   sessão {}",
-                    fmt_age(secs),
-                    p.cpu_pct,
-                    p.cpu_raw_pct,
-                    p.threads,
-                    if cfg!(windows) {
-                        format!("{} handles", p.handles.map(|n| n.to_string()).unwrap_or_else(|| "—".into()))
-                    } else if cfg!(target_os = "linux") {
-                        format!("{} descritores", p.handles.map(|n| n.to_string()).unwrap_or_else(|| "—".into()))
-                    } else {
-                        "handles: não aplicável".to_string()
-                    },
-                    p.session
-                ));
+                  let vram=self.sys.gpu_linux.memory_by_pid.get(&p.pid).map(|m|fmt_bytes(*m)).unwrap_or_else(||locale.text("indisponível", "unavailable").into());
+                  let load=self.sys.gpu_linux.by_pid.get(&p.pid).map(|n|format!("{n:.1}%")).unwrap_or_else(||locale.text("indisponível", "unavailable").into());
+                  ui.label(format!("{}: {load} · {}: {vram}", locale.text("Uso", "Usage"), locale.text("memória de GPU", "GPU memory"))); ui.end_row(); }
+                ui.label(RichText::new(locale.text("Execução", "Execution")).weak());
+                let handles_label = if cfg!(windows) {
+                    format!("{} handles", p.handles.map(|n| n.to_string()).unwrap_or_else(|| "—".into()))
+                } else if cfg!(target_os = "linux") {
+                    format!("{} {}", p.handles.map(|n| n.to_string()).unwrap_or_else(|| "—".into()), locale.text("descritores", "descriptors"))
+                } else {
+                    locale.text("handles: não aplicável", "handles: not applicable").to_string()
+                };
+                let execution = if locale == Locale::Portuguese {
+                    format!("iniciado há {}   ·   CPU {:.1}% (último intervalo {:.1}%)   ·   {} threads   ·   {}   ·   sessão {}", fmt_age(secs), p.cpu_pct, p.cpu_raw_pct, p.threads, handles_label, p.session)
+                } else {
+                    format!("started {} ago   ·   CPU {:.1}% (last interval {:.1}%)   ·   {} threads   ·   {}   ·   session {}", fmt_age(secs), p.cpu_pct, p.cpu_raw_pct, p.threads, handles_label, p.session)
+                };
+                ui.label(execution);
                 ui.end_row();
             });
         });
@@ -4170,14 +5116,32 @@ impl App {
         let measured: Vec<_> = self.procs.iter().filter_map(|p| p.linux_memory).collect();
         let uss: u64 = measured.iter().map(|m| m.0).sum();
         let pss: u64 = measured.iter().map(|m| m.1).sum();
-        format!("Processos: {} PSS · {} privados · leitura de {}/{} processos.\nPSS divide páginas compartilhadas; privado conta apenas páginas exclusivas. Leituras ausentes não entram nas somas. A RAM global também inclui o kernel e outras alocações.", fmt_gb(pss), fmt_gb(uss), measured.len(), self.procs.len())
+        if self.cfg.locale == Locale::Portuguese {
+            format!("Processos: {} PSS · {} privados · leitura de {}/{} processos.\nPSS divide páginas compartilhadas; privado conta apenas páginas exclusivas. Leituras ausentes não entram nas somas. A RAM global também inclui o kernel e outras alocações.", fmt_gb(pss), fmt_gb(uss), measured.len(), self.procs.len())
+        } else {
+            format!("Processes: {} PSS · {} private · readings for {}/{} processes.\nPSS divides shared pages; private counts exclusive pages only. Missing readings are excluded from sums. Global RAM also includes the kernel and other allocations.", fmt_gb(pss), fmt_gb(uss), measured.len(), self.procs.len())
+        }
     }
 
     fn ui_accounting(&mut self, ui: &mut egui::Ui) {
+        let locale = self.cfg.locale;
         #[cfg(target_os = "linux")]
         if cfg!(target_os = "linux") {
             let available = self.derived.linux_memory_available;
-            ui.label(RichText::new(format!("RAM {} em uso · memória detalhada: {available}/{} processos", fmt_gb(self.mem.used_phys()), self.procs.len())).small().color(MUTED))
+            let summary = if locale == Locale::Portuguese {
+                format!(
+                    "RAM {} em uso · memória detalhada: {available}/{} processos",
+                    fmt_gb(self.mem.used_phys()),
+                    self.procs.len()
+                )
+            } else {
+                format!(
+                    "RAM {} in use · detailed memory: {available}/{} processes",
+                    fmt_gb(self.mem.used_phys()),
+                    self.procs.len()
+                )
+            };
+            ui.label(RichText::new(summary).small().color(MUTED))
                 .on_hover_text(self.linux_memory_summary());
             return;
         }
@@ -4185,12 +5149,75 @@ impl App {
         if b.used == 0 {
             return;
         }
+        if locale == Locale::English {
+            let measured = b
+                .private
+                .saturating_add(b.paged_pool)
+                .saturating_add(b.nonpaged_pool);
+            let overflow = measured > b.used;
+            let head = if b.shared_and_cache > 0 {
+                format!(
+                    "RAM {}: {} measured + {} by difference",
+                    fmt_gb(b.used),
+                    fmt_gb(measured),
+                    fmt_gb(b.shared_and_cache)
+                )
+            } else {
+                format!(
+                    "RAM {}: {} measured",
+                    fmt_gb(b.used),
+                    fmt_gb(measured.min(b.used))
+                )
+            };
+            let color = if b.kernel_ok && !overflow {
+                MUTED
+            } else {
+                Color32::from_rgb(200, 150, 90)
+            };
+            let mut tip = format!("Composition of the {} in use, always in private memory — the only basis that does not count the same physical page twice:\n\nProcesses (private)  {}\n", fmt_gb(b.used), fmt_bytes_short(b.private));
+            if b.kernel_ok {
+                tip.push_str(&format!(
+                    "{}  {}\n",
+                    SysRow::PagedPool.label_for(locale),
+                    fmt_bytes_short(b.paged_pool)
+                ));
+                tip.push_str(&format!(
+                    "{}  {}\n",
+                    SysRow::NonPagedPool.label_for(locale),
+                    fmt_bytes_short(b.nonpaged_pool)
+                ));
+            } else {
+                tip.push_str("Kernel pools: unavailable (GetPerformanceInfo failed)\n");
+            }
+            tip.push_str(&format!(
+                "{}  {}\n",
+                SysRow::SharedAndCache.label_for(locale),
+                fmt_bytes_short(b.shared_and_cache)
+            ));
+            if overflow {
+                tip.push_str("\nMeasured parts already exceed the total in use: paged pool includes the portion on disk, and processes are sampled at a different instant from the memory reading. The remainder was clamped to zero instead of going negative.\n");
+            }
+            if self.cfg.mem_metric != MemMetric::Private {
+                let shown: u64 = self.procs.iter().map(|p| self.mem_of(p)).sum();
+                tip.push_str(&format!("\nThe RAM column uses {} and sums {} — above private memory because each shared page counts in every process that maps it.", self.cfg.mem_metric.label_for(locale).to_lowercase(), fmt_bytes_short(shown)));
+            }
+            ui.label(RichText::new(head).color(color).small())
+                .on_hover_text(tip);
+            return;
+        }
         // "Medido" = privado dos processos + os dois pools, cada um lido de uma API. O resto
         // é um subtraendo, e o rótulo diz isso — chamá-lo de "atribuído" fingiria uma
         // medição que não existe, que é justamente o vício do Gerenciador de Tarefas.
-        let measured = b.private.saturating_add(b.paged_pool).saturating_add(b.nonpaged_pool);
+        let measured = b
+            .private
+            .saturating_add(b.paged_pool)
+            .saturating_add(b.nonpaged_pool);
         let overflow = measured > b.used;
-        let color = if b.kernel_ok && !overflow { MUTED } else { Color32::from_rgb(200, 150, 90) };
+        let color = if b.kernel_ok && !overflow {
+            MUTED
+        } else {
+            Color32::from_rgb(200, 150, 90)
+        };
         let head = if b.shared_and_cache > 0 {
             format!(
                 "RAM {}: {} medidos + {} por diferença",
@@ -4199,7 +5226,11 @@ impl App {
                 fmt_gb(b.shared_and_cache)
             )
         } else {
-            format!("RAM {}: {} medidos", fmt_gb(b.used), fmt_gb(measured.min(b.used)))
+            format!(
+                "RAM {}: {} medidos",
+                fmt_gb(b.used),
+                fmt_gb(measured.min(b.used))
+            )
         };
         let mut tip = format!(
             "Composição dos {} em uso, sempre em memória privada — a única base que não conta \
@@ -4209,12 +5240,24 @@ impl App {
             fmt_bytes_short(b.private)
         );
         if b.kernel_ok {
-            tip.push_str(&format!("{}  {}\n", SysRow::PagedPool.label(), fmt_bytes_short(b.paged_pool)));
-            tip.push_str(&format!("{}  {}\n", SysRow::NonPagedPool.label(), fmt_bytes_short(b.nonpaged_pool)));
+            tip.push_str(&format!(
+                "{}  {}\n",
+                SysRow::PagedPool.label_for(self.cfg.locale),
+                fmt_bytes_short(b.paged_pool)
+            ));
+            tip.push_str(&format!(
+                "{}  {}\n",
+                SysRow::NonPagedPool.label_for(self.cfg.locale),
+                fmt_bytes_short(b.nonpaged_pool)
+            ));
         } else {
             tip.push_str("Pools do kernel: indisponíveis (GetPerformanceInfo falhou)\n");
         }
-        tip.push_str(&format!("{}  {}\n", SysRow::SharedAndCache.label(), fmt_bytes_short(b.shared_and_cache)));
+        tip.push_str(&format!(
+            "{}  {}\n",
+            SysRow::SharedAndCache.label_for(self.cfg.locale),
+            fmt_bytes_short(b.shared_and_cache)
+        ));
         if overflow {
             tip.push_str(
                 "\nAs parcelas medidas já passam do total em uso: o pool paginado inclui a \
@@ -4227,20 +5270,34 @@ impl App {
             tip.push_str(&format!(
                 "\nA coluna RAM está em {} e soma {} — acima do privado porque cada página \
                  compartilhada conta em todo processo que a mapeia.",
-                self.cfg.mem_metric.label().to_lowercase(),
+                self.cfg
+                    .mem_metric
+                    .label_for(self.cfg.locale)
+                    .to_lowercase(),
                 fmt_bytes_short(shown)
             ));
         }
-        ui.label(RichText::new(head).color(color).small()).on_hover_text(tip);
+        ui.label(RichText::new(head).color(color).small())
+            .on_hover_text(tip);
     }
 
     fn save_cfg_if_dirty(&mut self) {
         #[cfg(target_os = "linux")]
-        if self.smoke_started.is_some() { self.cfg_dirty=false; return; }
+        if self.smoke_started.is_some() {
+            self.cfg_dirty = false;
+            return;
+        }
         if self.cfg_dirty {
             self.cfg_dirty = false;
             if let Err(e) = self.cfg.save() {
-                self.toast(format!("Falha ao salvar config: {e}"), true);
+                self.toast(
+                    if self.cfg.locale == Locale::Portuguese {
+                        format!("Falha ao salvar config: {e}")
+                    } else {
+                        format!("Could not save configuration: {e}")
+                    },
+                    true,
+                );
             }
         }
     }
@@ -4256,7 +5313,11 @@ impl App {
                 .anchor(egui::Align2::RIGHT_TOP, [-12.0, 64.0])
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
-                    let bg = if err { Color32::from_rgb(120, 40, 40) } else { Color32::from_rgb(40, 100, 60) };
+                    let bg = if err {
+                        Color32::from_rgb(120, 40, 40)
+                    } else {
+                        Color32::from_rgb(40, 100, 60)
+                    };
                     egui::Frame::popup(ui.style()).fill(bg).show(ui, |ui| {
                         ui.label(RichText::new(msg).color(Color32::WHITE));
                     });
@@ -4268,17 +5329,36 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let locale = self.cfg.locale;
         self.ingest(ctx);
         #[cfg(target_os = "linux")]
-        if let Some(start)=self.smoke_started {
-            let step=(start.elapsed().as_secs()/3) as usize;
-            let views=[ViewMode::List,ViewMode::Tree,ViewMode::Category,ViewMode::Boot,ViewMode::Drains,ViewMode::Screens,ViewMode::Thermal,ViewMode::Clean];
-            self.cfg.view=views[step%views.len()];self.cfg.mini=step%10==8;
-            self.cfg.mem_metric=MemMetric::ALL[step%MemMetric::ALL.len()];
-            self.cfg.group_apps=step%2==0;self.rows_dirty=true;
-            self.derived_dirty=true;
-            self.selected=self.procs.iter().find(|p|p.pid==std::process::id()).map(|p|p.pid);
-            if start.elapsed().as_secs()>=90 {crate::linux::log("SMOKE PASS: 90s, todas as abas, mini e métricas");ctx.send_viewport_cmd(egui::ViewportCommand::Close);}
+        if let Some(start) = self.smoke_started {
+            let step = (start.elapsed().as_secs() / 3) as usize;
+            let views = [
+                ViewMode::List,
+                ViewMode::Tree,
+                ViewMode::Category,
+                ViewMode::Boot,
+                ViewMode::Drains,
+                ViewMode::Screens,
+                ViewMode::Thermal,
+                ViewMode::Clean,
+            ];
+            self.cfg.view = views[step % views.len()];
+            self.cfg.mini = step % 10 == 8;
+            self.cfg.mem_metric = MemMetric::ALL[step % MemMetric::ALL.len()];
+            self.cfg.group_apps = step % 2 == 0;
+            self.rows_dirty = true;
+            self.derived_dirty = true;
+            self.selected = self
+                .procs
+                .iter()
+                .find(|p| p.pid == std::process::id())
+                .map(|p| p.pid);
+            if start.elapsed().as_secs() >= 90 {
+                crate::linux::log("SMOKE PASS: 90s, todas as abas, mini e métricas");
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         self.refresh_derived_if_dirty();
@@ -4322,10 +5402,19 @@ impl eframe::App for App {
         egui::SidePanel::left("nav")
             .exact_width(NAV_W)
             .resizable(false)
-            .frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(10, 12)))
+            .frame(
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .inner_margin(egui::Margin::symmetric(10, 12)),
+            )
             .show(ctx, |ui| self.ui_nav(ui));
         egui::TopBottomPanel::top("header")
-            .frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin { left: 16, right: 16, top: 12, bottom: 8 }))
+            .frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin {
+                left: 16,
+                right: 16,
+                top: 12,
+                bottom: 8,
+            }))
             .show_separator_line(false)
             .show(ctx, |ui| self.ui_header(ui));
         // O painel de detalhes descreve a linha selecionada da tabela. Num addon não há
@@ -4335,39 +5424,59 @@ impl eframe::App for App {
                 .resizable(true)
                 .default_height(150.0)
                 .min_height(40.0)
-                .frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::symmetric(16, 6)))
+                .frame(
+                    egui::Frame::new()
+                        .fill(BG)
+                        .inner_margin(egui::Margin::symmetric(16, 6)),
+                )
                 .show(ctx, |ui| self.ui_details(ui));
         }
         egui::TopBottomPanel::bottom("statusbar").frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(16, 4))).show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("{} processos ({} exibidos)", self.procs.len(), self.shown_count)).weak().small());
+                let count = if locale == Locale::Portuguese {
+                    format!("{} processos ({} exibidos)", self.procs.len(), self.shown_count)
+                } else {
+                    format!("{} processes ({} shown)", self.procs.len(), self.shown_count)
+                };
+                ui.label(RichText::new(count).weak().small());
                 ui.separator();
                 let locked_n = self.cfg.locked.len();
-                ui.label(RichText::new(format!("{locked_n} protegidos")).weak().small())
+                ui.label(RichText::new(format!("{locked_n} {}", locale.text("protegidos", "protected"))).weak().small())
                     .on_hover_text(self.cfg.locked.iter().cloned().collect::<Vec<_>>().join("\n"));
                 ui.separator();
-                ui.label(RichText::new(format!("amostra {:.0} ms", self.sample_ms)).weak().small());
+                ui.label(RichText::new(format!("{} {:.0} ms", locale.text("amostra", "sample"), self.sample_ms)).weak().small());
                 self.ui_sampling_controls(ui);
                 ui.separator();
                 self.ui_accounting(ui);
                 if self.order_frozen {
                     ui.separator();
-                    ui.label(RichText::new("ordem congelada").weak().small())
-                        .on_hover_text("Enquanto o mouse está sobre a tabela a ordem das linhas não muda, para você não clicar no processo errado. Valores continuam atualizando.");
+                    ui.label(RichText::new(locale.text("ordem congelada", "order frozen")).weak().small())
+                        .on_hover_text(locale.text(
+                            "Enquanto o mouse está sobre a tabela a ordem das linhas não muda, para você não clicar no processo errado. Valores continuam atualizando.",
+                            "While the pointer is over the table, row order stays fixed so you do not click the wrong process. Values continue updating.",
+                        ));
                 }
                 // Os atalhos agem sobre a linha selecionada da tabela. Anunciá-los dentro
                 // de um addon é prometer uma tecla que não faz nada ali.
                 if !self.cfg.view.is_addon() {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(RichText::new("atalhos").weak().small())
-                            .on_hover_text("Del: finalizar\nShift+Del: finalizar a árvore\nF5: atualizar\nEsc: limpar seleção\nBotão direito: menu da linha");
+                        ui.label(RichText::new(locale.text("atalhos", "shortcuts")).weak().small())
+                            .on_hover_text(locale.text(
+                                "Del: finalizar\nShift+Del: finalizar a árvore\nF5: atualizar\nEsc: limpar seleção\nBotão direito: menu da linha",
+                                "Del: terminate\nShift+Del: terminate tree\nF5: refresh\nEsc: clear selection\nRight-click: row menu",
+                            ));
                     });
                 }
             });
         });
         let view = self.cfg.view;
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin { left: 16, right: 16, top: 2, bottom: 10 }))
+            .frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin {
+                left: 16,
+                right: 16,
+                top: 2,
+                bottom: 10,
+            }))
             .show(ctx, |ui| {
                 if view.is_addon() {
                     egui::Frame::new()
@@ -4453,15 +5562,34 @@ fn paint_icon(p: &egui::Painter, c: egui::Pos2, color: Color32, icon: Icon) {
         }
         Icon::Grid => {
             for (dx, dy) in [(-6.5, -6.5), (0.5, -6.5), (-6.5, 0.5), (0.5, 0.5)] {
-                p.rect_stroke(Rect::from_min_size(pos2(x + dx, y + dy), Vec2::splat(6.0)), 1.5, s, egui::StrokeKind::Middle);
+                p.rect_stroke(
+                    Rect::from_min_size(pos2(x + dx, y + dy), Vec2::splat(6.0)),
+                    1.5,
+                    s,
+                    egui::StrokeKind::Middle,
+                );
             }
         }
         Icon::Bolt => {
-            let pts = vec![pos2(x + 1.0, y - 7.5), pos2(x - 5.0, y + 1.0), pos2(x - 0.5, y + 1.0), pos2(x - 1.5, y + 7.5), pos2(x + 5.0, y - 1.0), pos2(x + 0.5, y - 1.0)];
+            let pts = vec![
+                pos2(x + 1.0, y - 7.5),
+                pos2(x - 5.0, y + 1.0),
+                pos2(x - 0.5, y + 1.0),
+                pos2(x - 1.5, y + 7.5),
+                pos2(x + 5.0, y - 1.0),
+                pos2(x + 0.5, y - 1.0),
+            ];
             p.add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
         }
         Icon::Warn => {
-            p.add(egui::Shape::closed_line(vec![pos2(x, y - 7.0), pos2(x + 7.5, y + 6.0), pos2(x - 7.5, y + 6.0)], s));
+            p.add(egui::Shape::closed_line(
+                vec![
+                    pos2(x, y - 7.0),
+                    pos2(x + 7.5, y + 6.0),
+                    pos2(x - 7.5, y + 6.0),
+                ],
+                s,
+            ));
             p.line_segment([pos2(x, y - 2.0), pos2(x, y + 1.5)], s);
             p.circle_filled(pos2(x, y + 3.8), 1.0, color);
         }
@@ -4473,7 +5601,12 @@ fn paint_icon(p: &egui::Painter, c: egui::Pos2, color: Color32, icon: Icon) {
             p.circle_filled(pos2(x, y + 3.5), 1.8, color);
         }
         Icon::Display => {
-            p.rect_stroke(Rect::from_center_size(pos2(x, y - 1.5), Vec2::new(15.0, 10.0)), 1.5, s, egui::StrokeKind::Middle);
+            p.rect_stroke(
+                Rect::from_center_size(pos2(x, y - 1.5), Vec2::new(15.0, 10.0)),
+                1.5,
+                s,
+                egui::StrokeKind::Middle,
+            );
             p.line_segment([pos2(x, y + 3.5), pos2(x, y + 7.0)], s);
             p.line_segment([pos2(x - 4.0, y + 7.0), pos2(x + 4.0, y + 7.0)], s);
         }
@@ -4491,23 +5624,48 @@ fn paint_icon(p: &egui::Painter, c: egui::Pos2, color: Color32, icon: Icon) {
             for i in 0..8 {
                 let a = i as f32 * std::f32::consts::TAU / 8.0;
                 let (sa, ca) = a.sin_cos();
-                p.line_segment([pos2(x + ca * 5.5, y + sa * 5.5), pos2(x + ca * 7.5, y + sa * 7.5)], s);
+                p.line_segment(
+                    [
+                        pos2(x + ca * 5.5, y + sa * 5.5),
+                        pos2(x + ca * 7.5, y + sa * 7.5),
+                    ],
+                    s,
+                );
             }
         }
     }
 }
 
 /// Item da barra lateral: ícone + nome, fundo só no ativo e no hover.
-fn nav_item(ui: &mut egui::Ui, icon: Icon, label: &str, on: bool, enabled: bool, tip: &str) -> egui::Response {
+fn nav_item(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    label: &str,
+    on: bool,
+    enabled: bool,
+    tip: &str,
+) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(
         Vec2::new(ui.available_width(), NAV_ITEM_H),
-        if enabled { egui::Sense::click() } else { egui::Sense::hover() },
+        if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
     );
     let p = ui.painter();
     if on {
-        p.rect_filled(rect, 8.0, Color32::from_rgba_unmultiplied(255, 255, 255, 26));
+        p.rect_filled(
+            rect,
+            8.0,
+            Color32::from_rgba_unmultiplied(255, 255, 255, 26),
+        );
     } else if resp.hovered() && enabled {
-        p.rect_filled(rect, 8.0, Color32::from_rgba_unmultiplied(255, 255, 255, 12));
+        p.rect_filled(
+            rect,
+            8.0,
+            Color32::from_rgba_unmultiplied(255, 255, 255, 12),
+        );
     }
     let fg = if !enabled {
         Color32::from_gray(96)
@@ -4545,7 +5703,16 @@ fn chip(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Response {
 }
 
 fn chip_w(ui: &egui::Ui, text: &str) -> f32 {
-    ui.fonts(|f| f.layout_no_wrap(text.to_owned(), egui::FontId::proportional(11.0), Color32::WHITE).size().x) + 16.0 + 14.0
+    ui.fonts(|f| {
+        f.layout_no_wrap(
+            text.to_owned(),
+            egui::FontId::proportional(11.0),
+            Color32::WHITE,
+        )
+        .size()
+        .x
+    }) + 16.0
+        + 14.0
 }
 
 /// Avatar da linha: o ícone do app quando existe; senão a inicial num quadrado da cor
@@ -4562,8 +5729,13 @@ fn avatar(ui: &mut egui::Ui, tex: Option<&TextureHandle>, cat: Category, name: &
             );
         }
         None => {
-            ui.painter().rect_filled(r, 7.0, cat.color().gamma_multiply(0.22));
-            let initial: String = name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
+            ui.painter()
+                .rect_filled(r, 7.0, cat.color().gamma_multiply(0.22));
+            let initial: String = name
+                .chars()
+                .next()
+                .map(|c| c.to_uppercase().collect())
+                .unwrap_or_default();
             ui.painter().text(
                 r.center(),
                 egui::Align2::CENTER_CENTER,
@@ -4579,7 +5751,13 @@ fn avatar(ui: &mut egui::Ui, tex: Option<&TextureHandle>, cat: Category, name: &
 fn sparkline(ui: &mut egui::Ui, size: Vec2, hist: &VecDeque<f32>, color: Color32) {
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let p = ui.painter();
-    p.rect(rect, 6.0, color.gamma_multiply(0.07), Stroke::new(1.0_f32, color.gamma_multiply(0.45)), egui::StrokeKind::Inside);
+    p.rect(
+        rect,
+        6.0,
+        color.gamma_multiply(0.07),
+        Stroke::new(1.0_f32, color.gamma_multiply(0.45)),
+        egui::StrokeKind::Inside,
+    );
     let n = hist.len();
     if n < 2 {
         return;
@@ -4590,7 +5768,12 @@ fn sparkline(ui: &mut egui::Ui, size: Vec2, hist: &VecDeque<f32>, color: Color32
     let pts: Vec<egui::Pos2> = hist
         .iter()
         .enumerate()
-        .map(|(i, v)| egui::pos2(x0 + i as f32 * step, inner.bottom() - (v / 100.0).clamp(0.0, 1.0) * inner.height()))
+        .map(|(i, v)| {
+            egui::pos2(
+                x0 + i as f32 * step,
+                inner.bottom() - (v / 100.0).clamp(0.0, 1.0) * inner.height(),
+            )
+        })
         .collect();
     // Área sob a curva como malha: retângulo por amostra deixava emenda entre um e outro.
     let fill = color.gamma_multiply(0.22);
@@ -4623,31 +5806,77 @@ impl App {
         ui.add_space(12.0);
         let mut go: Option<ViewMode> = None;
         for v in ViewMode::CORE {
-            let label = if v == ViewMode::List { "Processos" } else { v.label() };
-            if nav_item(ui, Icon::of(v), label, self.cfg.view == v, true, v.tip()).clicked() {
+            let label = if v == ViewMode::List {
+                self.cfg.locale.text("Processos", "Processes")
+            } else {
+                v.label_for(self.cfg.locale)
+            };
+            if nav_item(
+                ui,
+                Icon::of(v),
+                label,
+                self.cfg.view == v,
+                true,
+                v.tip_for(self.cfg.locale),
+            )
+            .clicked()
+            {
                 go = Some(v);
             }
         }
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             ui.add_space(12.0);
-            ui.label(RichText::new("ADDONS").size(10.5).color(MUTED));
+            ui.label(
+                RichText::new(self.cfg.locale.text("COMPLEMENTOS", "ADD-ONS"))
+                    .size(10.5)
+                    .color(MUTED),
+            );
         });
         ui.add_space(2.0);
         for v in ViewMode::ADDONS {
             let on = self.cfg.view == v;
             let tip = if !v.available() {
                 if v == ViewMode::Clean {
-                    format!("{} — por enquanto só no Linux.", v.label())
+                    format!(
+                        "{} — {}",
+                        v.label_for(self.cfg.locale),
+                        self.cfg
+                            .locale
+                            .text("por enquanto só no Linux.", "Linux only for now.")
+                    )
                 } else {
-                    format!("{} — indisponível nesta versão para Linux/macOS.", v.label())
+                    format!(
+                        "{} — {}",
+                        v.label_for(self.cfg.locale),
+                        self.cfg.locale.text(
+                            "indisponível nesta versão para Linux/macOS.",
+                            "unavailable on this Linux/macOS build."
+                        )
+                    )
                 }
             } else if on {
-                format!("{}\n\nClique para voltar a {}.", v.tip(), self.last_core.label())
+                format!(
+                    "{}\n\n{}{}.",
+                    v.tip_for(self.cfg.locale),
+                    self.cfg
+                        .locale
+                        .text("Clique para voltar a ", "Click to return to "),
+                    self.last_core.label_for(self.cfg.locale)
+                )
             } else {
-                v.tip().to_string()
+                v.tip_for(self.cfg.locale).to_string()
             };
-            if nav_item(ui, Icon::of(v), v.label(), on, v.available(), &tip).clicked() {
+            if nav_item(
+                ui,
+                Icon::of(v),
+                v.label_for(self.cfg.locale),
+                on,
+                v.available(),
+                &tip,
+            )
+            .clicked()
+            {
                 go = Some(v);
             }
         }
@@ -4656,11 +5885,31 @@ impl App {
             if self.is_admin {
                 ui.horizontal(|ui| {
                     ui.add_space(12.0);
-                    ui.label(RichText::new("ADMIN").color(Color32::from_rgb(90, 220, 130)).strong().size(11.0))
-                        .on_hover_text("Rodando elevado: pode encerrar processos de outros usuários/serviços");
+                    ui.label(
+                        RichText::new("ADMIN")
+                            .color(Color32::from_rgb(90, 220, 130))
+                            .strong()
+                            .size(11.0),
+                    )
+                    .on_hover_text(self.cfg.locale.text(
+                        "Rodando elevado: pode encerrar processos de outros usuários/serviços",
+                        "Running elevated: can terminate other users' processes and services",
+                    ));
                 });
             }
-            if nav_item(ui, Icon::Gear, "Preferências", self.show_prefs, true, "Métrica da coluna RAM, cortes de exibição e ritmo da amostragem").clicked() {
+            if nav_item(
+                ui,
+                Icon::Gear,
+                self.cfg.locale.text("Preferências", "Preferences"),
+                self.show_prefs,
+                true,
+                self.cfg.locale.text(
+                    "Métrica da coluna RAM, cortes de exibição e ritmo da amostragem",
+                    "RAM column metric, display thresholds, and sampling interval",
+                ),
+            )
+            .clicked()
+            {
                 self.show_prefs = !self.show_prefs;
             }
         });
@@ -4684,10 +5933,19 @@ impl App {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
             let v = self.cfg.view;
-            let title = if v == ViewMode::List { "Processos" } else { v.label() };
+            let title = if v == ViewMode::List {
+                self.cfg.locale.text("Processos", "Processes")
+            } else {
+                v.label_for(self.cfg.locale)
+            };
             ui.label(RichText::new(title).size(17.0).strong());
             if !v.is_addon() {
-                ui.label(RichText::new(format!("{} · {} na tela", self.procs.len(), self.shown_count)).color(MUTED).size(12.5));
+                let count = if self.cfg.locale == Locale::Portuguese {
+                    format!("{} · {} na tela", self.procs.len(), self.shown_count)
+                } else {
+                    format!("{} · {} shown", self.procs.len(), self.shown_count)
+                };
+                ui.label(RichText::new(count).color(MUTED).size(12.5));
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().button_padding = Vec2::new(12.0, 5.0);
@@ -4695,7 +5953,10 @@ impl App {
                 let mini = egui::Button::new(RichText::new("Mini").size(13.0)).fill(SURFACE).stroke(Stroke::NONE).corner_radius(8.0);
                 if ui
                     .add(mini)
-                    .on_hover_text("Modo mini: uma janelinha só com CPU, RAM, GPU, disco e temperaturas, por cima das outras janelas")
+                    .on_hover_text(self.cfg.locale.text(
+                        "Modo mini: uma janelinha só com CPU, RAM, GPU, disco e temperaturas, por cima das outras janelas",
+                        "Mini mode: a small window with CPU, RAM, GPU, disk, and temperatures, kept above other windows",
+                    ))
                     .clicked()
                 {
                     self.set_mini(true);
@@ -4705,18 +5966,21 @@ impl App {
                 }
                 if v == ViewMode::List {
                     let on = self.cfg.group_apps;
-                    let text = RichText::new(if on { "Agrupar por app ✓" } else { "Agrupar por app" }).size(13.0);
+                    let text = RichText::new(if on {
+                        self.cfg.locale.text("Agrupar por app ✓", "Group by app ✓")
+                    } else {
+                        self.cfg.locale.text("Agrupar por app", "Group by app")
+                    }).size(13.0);
                     let b = egui::Button::new(text)
                         .fill(if on { ACCENT_BG } else { SURFACE })
                         .stroke(Stroke::NONE)
                         .corner_radius(8.0);
                     if ui
                         .add(b)
-                        .on_hover_text(
-                            "Junta a mesma tarefa numa linha — Overwatch, Sussurro, Claude…\n\
-                             Não junta dois jogos só porque compartilham o wine64.\n\
-                             Clica na linha para ver os PIDs. Desligado, cada PID vira uma linha.",
-                        )
+                        .on_hover_text(self.cfg.locale.text(
+                            "Junta a mesma tarefa numa linha — Overwatch, Sussurro, Claude…\nNão junta dois jogos só porque compartilham o wine64.\nClica na linha para ver os PIDs. Desligado, cada PID vira uma linha.",
+                            "Joins the same app into one row — Overwatch, Sussurro, Claude…\nDoes not merge two games just because they share wine64.\nClick a row to see PIDs. When off, each PID gets its own row.",
+                        ))
                         .clicked()
                     {
                         self.cfg.group_apps = !on;
@@ -4726,18 +5990,18 @@ impl App {
                 }
                 let plain = |t: &str| egui::Button::new(RichText::new(t).size(13.0)).fill(SURFACE).stroke(Stroke::NONE).corner_radius(8.0);
                 if v == ViewMode::Tree {
-                    if ui.add(plain("Recolher")).clicked() {
+                    if ui.add(plain(self.cfg.locale.text("Recolher", "Collapse"))).clicked() {
                         self.expanded.clear();
                     }
-                    if ui.add(plain("Expandir tudo")).clicked() {
+                    if ui.add(plain(self.cfg.locale.text("Expandir tudo", "Expand all"))).clicked() {
                         self.expanded = self.children.keys().copied().collect();
                     }
                 } else if v == ViewMode::List && self.cfg.group_apps {
-                    if !self.expanded_apps.is_empty() && ui.add(plain("Recolher")).clicked() {
+                    if !self.expanded_apps.is_empty() && ui.add(plain(self.cfg.locale.text("Recolher", "Collapse"))).clicked() {
                         self.expanded_apps.clear();
                         self.rows_dirty = true;
                     }
-                    if ui.add(plain("Expandir tudo")).clicked() {
+                    if ui.add(plain(self.cfg.locale.text("Expandir tudo", "Expand all"))).clicked() {
                         self.expanded_apps = self.groups.iter().filter(|g| g.pids.len() >= 2).map(|g| g.key.clone()).collect();
                         self.rows_dirty = true;
                     }
@@ -4749,12 +6013,12 @@ impl App {
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
                         if !self.search.is_empty()
-                            && ui.add(egui::Button::new(RichText::new("✖").size(11.0).color(MUTED)).frame(false)).on_hover_text("Limpar busca").clicked()
+                            && ui.add(egui::Button::new(RichText::new("✖").size(11.0).color(MUTED)).frame(false)).on_hover_text(self.cfg.locale.text("Limpar busca", "Clear search")).clicked()
                         {
                             self.search.clear();
                         }
                         let te = egui::TextEdit::singleline(&mut self.search)
-                            .hint_text("Buscar nome, PID ou comando")
+                            .hint_text(self.cfg.locale.text("Buscar nome, PID ou comando", "Search name, PID, or command"))
                             .frame(false)
                             .desired_width(220.0);
                         if ui.add(te).changed() {
@@ -4768,6 +6032,7 @@ impl App {
     /// Os quatro cards de recurso com histórico. Só nas visões de processo: os addons usam
     /// a janela inteira.
     fn ui_cards(&mut self, ui: &mut egui::Ui) {
+        let locale = self.cfg.locale;
         let gap = 12.0;
         let w = ((ui.available_width() - 3.0 * gap) / 4.0).floor();
         ui.horizontal(|ui| {
@@ -4779,21 +6044,29 @@ impl App {
             let press = self.pressure_snap();
             let cpu_color = if press.load_hot() { Color32::from_rgb(255, 150, 90) } else { C_CPU };
             let split = self.cpu_split();
-            let unlisted = split.and_then(|s| s.unlisted_chip());
+            let unlisted = split.and_then(|s| s.unlisted_chip(locale));
             let cpu_sub = match (self.sys.load1, unlisted.is_some()) {
-                (Some(l), false) => format!("load {} · {ncpu} threads", pt_num(l as f64, 2)),
-                (Some(l), true) => format!("load {}", pt_num(l as f64, 2)),
-                (None, _) => format!("{ncpu} threads"),
+                (Some(l), false) => format!(
+                    "{} {} · {ncpu} {}",
+                    locale.text("carga", "load"),
+                    pt_num(l as f64, 2),
+                    locale.text("núcleos", "threads")
+                ),
+                (Some(l), true) => format!("{} {}", locale.text("carga", "load"), pt_num(l as f64, 2)),
+                (None, _) => format!("{ncpu} {}", locale.text("núcleos", "threads")),
             };
             let mut cpu_tip = match (self.sys.load1, self.sys.load5, self.sys.load15) {
-                (Some(a), Some(b), Some(c)) => format!(
+                (Some(a), Some(b), Some(c)) if locale == Locale::Portuguese => format!(
                     "Uso de CPU (todos os núcleos).\nLoad 1/5/15 min: {a:.2} / {b:.2} / {c:.2}\nLoad acima de {ncpu} significa fila cheia — processo com pouca RAM some na lista ordenada por memória."
                 ),
-                _ => "Uso de CPU (todos os núcleos)".into(),
+                (Some(a), Some(b), Some(c)) => format!(
+                    "CPU usage (all cores).\n1/5/15 min load: {a:.2} / {b:.2} / {c:.2}\nLoad above {ncpu} means the queue is full — a low-RAM process can disappear in a memory-sorted list."
+                ),
+                _ => locale.text("Uso de CPU (todos os núcleos)", "CPU usage (all cores)").into(),
             };
             if let Some(s) = split {
                 cpu_tip.push_str("\n\n");
-                cpu_tip.push_str(&s.explain());
+                cpu_tip.push_str(&s.explain(locale));
             }
             Self::resource_card(ui, w, "CPU", cpu_pct, cpu_color, &self.hist_cpu, &cpu_tip, |ui| {
                 Self::temp_label(ui, cpu_temp);
@@ -4815,15 +6088,15 @@ impl App {
             };
             let ram_color = if press.swap_hot() { Color32::from_rgb(255, 150, 90) } else { C_RAM };
             let ram_tip = if self.mem.swap_total > 0 {
-                format!(
-                    "RAM física em uso.\nSwap: {} / {}.",
-                    fmt_gb(self.mem.swap_used),
-                    fmt_gb(self.mem.swap_total)
-                )
+                if locale == Locale::Portuguese {
+                    format!("RAM física em uso.\nSwap: {} / {}.", fmt_gb(self.mem.swap_used), fmt_gb(self.mem.swap_total))
+                } else {
+                    format!("Physical RAM in use.\nSwap: {} / {}.", fmt_gb(self.mem.swap_used), fmt_gb(self.mem.swap_total))
+                }
             } else {
-                "RAM física em uso".into()
+                locale.text("RAM física em uso", "Physical RAM in use").into()
             };
-            Self::resource_card(ui, w, "Memória", ram_pct, ram_color, &self.hist_ram, &ram_tip, |ui| {
+            Self::resource_card(ui, w, self.cfg.locale.text("Memória", "Memory"), ram_pct, ram_color, &self.hist_ram, &ram_tip, |ui| {
                 Self::temp_label(ui, ram_temp);
                 ui.label(RichText::new(ram_sub).color(if press.swap_hot() { Color32::from_rgb(255, 171, 145) } else { MUTED }).size(11.5));
             });
@@ -4833,23 +6106,23 @@ impl App {
                 Some(g) => {
                     let mut tip = g.name.clone();
                     if let Some(w) = g.power_w {
-                        tip.push_str(&format!("\nPotência: {w:.0} W"));
+                        tip.push_str(&format!("\n{}: {w:.0} W", locale.text("Potência", "Power")));
                     }
                     if let Some(f) = g.fan_pct {
-                        tip.push_str(&format!("\nCooler: {f}%"));
+                        tip.push_str(&format!("\n{}: {f}%", locale.text("Cooler", "Fan")));
                     }
                     let vram = if g.mem_total > 0 { format!("{} / {}", fmt_gb(g.mem_used), fmt_gb(g.mem_total)) } else { String::new() };
                     let t = match g.temp_c {
                         Some(t) => Temp::C(t),
-                        None => Temp::Missing("O driver não reportou temperatura desta GPU.".into()),
+                        None => Temp::Missing(locale.text("O driver não reportou temperatura desta GPU.", "The driver did not report a temperature for this GPU.").into()),
                     };
                     (g.util_pct, t, vram, tip)
                 }
                 None => (
                     None,
-                    Temp::Missing("Leitura de GPU indisponível nesta plataforma ou driver.".into()),
+                    Temp::Missing(locale.text("Leitura de GPU indisponível nesta plataforma ou driver.", "GPU telemetry is unavailable on this platform or driver.").into()),
                     String::new(),
-                    "Leitura de GPU indisponível nesta plataforma ou driver; não significa utilização zero.".to_string(),
+                    locale.text("Leitura de GPU indisponível nesta plataforma ou driver; não significa utilização zero.", "GPU telemetry is unavailable on this platform or driver; this does not mean zero usage.").to_string(),
                 ),
             };
             #[cfg(target_os = "linux")]
@@ -4871,7 +6144,7 @@ impl App {
                             }
                         });
                 } else if let Some(e) = &gpu_error {
-                    ui.label(RichText::new("sem leitura").color(Color32::YELLOW).size(11.5)).on_hover_text(e);
+                    ui.label(RichText::new(locale.text("sem leitura", "unavailable")).color(Color32::YELLOW).size(11.5)).on_hover_text(e);
                 }
                 #[cfg(target_os = "linux")]
                 let many = cards.len() > 1;
@@ -4888,9 +6161,9 @@ impl App {
             }
 
             let disk_pct = self.sys.disk_pct;
-            let disk_sub = self.sys.disk_bps.filter(|bps| *bps >= 1024.0).map(fmt_bps).unwrap_or_else(|| "parado".into());
-            let disk_tip = if disk_pct.is_some() { disk_usage_tip() } else { "Contador de disco indisponível neste host." };
-            Self::resource_card(ui, w, "Disco", disk_pct, C_DISK, &self.hist_disk, disk_tip, |ui| {
+            let disk_sub = self.sys.disk_bps.filter(|bps| *bps >= 1024.0).map(fmt_bps).unwrap_or_else(|| self.cfg.locale.text("parado", "idle").into());
+            let disk_tip = if disk_pct.is_some() { disk_usage_tip(self.cfg.locale) } else { self.cfg.locale.text("Contador de disco indisponível neste host.", "Disk counter is unavailable on this host.") };
+            Self::resource_card(ui, w, self.cfg.locale.text("Disco", "Disk"), disk_pct, C_DISK, &self.hist_disk, disk_tip, |ui| {
                 ui.label(RichText::new(disk_sub).color(MUTED).size(11.5));
             });
         });
@@ -4899,10 +6172,19 @@ impl App {
     fn temp_label(ui: &mut egui::Ui, temp: Temp) {
         match temp {
             Temp::C(t) => {
-                ui.label(RichText::new(format!("{t} °C")).size(11.5).color(Self::temp_color(t)));
+                ui.label(
+                    RichText::new(format!("{t} °C"))
+                        .size(11.5)
+                        .color(Self::temp_color(t)),
+                );
             }
             Temp::Missing(why) => {
-                ui.label(RichText::new("– °C").size(11.5).color(Color32::from_gray(110))).on_hover_text(why);
+                ui.label(
+                    RichText::new("– °C")
+                        .size(11.5)
+                        .color(Color32::from_gray(110)),
+                )
+                .on_hover_text(why);
             }
             Temp::None => {}
         }
@@ -4923,34 +6205,43 @@ impl App {
             .fill(SURFACE)
             .corner_radius(CARD_R)
             .inner_margin(egui::Margin::same(CARD_PAD as i8))
-            .show(ui, |ui| ui.vertical(|ui| {
-                ui.set_width(inner_w);
-                ui.spacing_mut().item_spacing = Vec2::new(6.0, 4.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(label).strong().size(13.5));
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| match pct {
-                        Some(p) => {
-                            ui.label(RichText::new(Self::fmt_pct(p)).size(20.0).strong().color(color));
-                        }
-                        None => {
-                            ui.label(RichText::new("–").size(20.0).color(Color32::from_gray(110)));
-                        }
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(inner_w);
+                    ui.spacing_mut().item_spacing = Vec2::new(6.0, 4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(label).strong().size(13.5));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| match pct {
+                            Some(p) => {
+                                ui.label(
+                                    RichText::new(Self::fmt_pct(p))
+                                        .size(20.0)
+                                        .strong()
+                                        .color(color),
+                                );
+                            }
+                            None => {
+                                ui.label(
+                                    RichText::new("–").size(20.0).color(Color32::from_gray(110)),
+                                );
+                            }
+                        });
                     });
-                });
-                sparkline(ui, Vec2::new(inner_w, SPARK_H), hist, color);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                    sub(ui);
-                });
-            }));
+                    sparkline(ui, Vec2::new(inner_w, SPARK_H), hist, color);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                        sub(ui);
+                    });
+                })
+            });
         r.response.on_hover_text(tip);
     }
 
     fn ui_pressure_banner(&mut self, ui: &mut egui::Ui) {
         let snap = self.pressure_snap();
         let thieves = self.thieves();
-        let Some(text) = pressure::banner(&snap, &thieves) else {
+        let Some(text) = pressure::banner_for(&snap, &thieves, self.cfg.locale) else {
             return;
         };
         let go = ui
@@ -4962,12 +6253,25 @@ impl App {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 10.0;
-                            ui.add(egui::Label::new(RichText::new(text).size(12.5).color(Color32::from_rgb(255, 171, 145))).wrap());
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(text)
+                                        .size(12.5)
+                                        .color(Color32::from_rgb(255, 171, 145)),
+                                )
+                                .wrap(),
+                            );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                let btn = egui::Button::new(RichText::new("Ver disputa").size(12.5).color(Color32::from_rgb(255, 171, 145)))
-                                    .fill(Color32::from_rgb(90, 36, 16))
-                                    .stroke(Stroke::NONE)
-                                    .corner_radius(8.0);
+                                let btn = egui::Button::new(
+                                    RichText::new(
+                                        self.cfg.locale.text("Ver disputa", "View contention"),
+                                    )
+                                    .size(12.5)
+                                    .color(Color32::from_rgb(255, 171, 145)),
+                                )
+                                .fill(Color32::from_rgb(90, 36, 16))
+                                .stroke(Stroke::NONE)
+                                .corner_radius(8.0);
                                 ui.add(btn).clicked()
                             })
                             .inner
@@ -4993,6 +6297,7 @@ impl App {
     /// Chips de categoria: filtram a tabela. Duplo clique isola uma.
     fn ui_chips(&mut self, ui: &mut egui::Ui) {
         let totals = self.cat_totals();
+        let locale = self.cfg.locale;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = Vec2::new(6.0, 4.0);
             ui.spacing_mut().button_padding = Vec2::new(10.0, 3.0);
@@ -5002,14 +6307,20 @@ impl App {
                 let (t, n) = totals.get(&c).copied().unwrap_or((0, 0));
                 let on = self.cat_enabled.contains(&c);
                 let col = c.color();
-                let text = RichText::new(format!("● {}  {}", c.label(), fmt_bytes_short(t)))
+            let text = RichText::new(format!("● {}  {}", c.label_for(locale), fmt_bytes_short(t)))
                     .color(if on { col } else { MUTED })
                     .size(12.0);
                 let btn = egui::Button::new(text)
                     .fill(if on { col.gamma_multiply(0.14) } else { SURFACE })
                     .stroke(Stroke::NONE)
                     .corner_radius(999.0);
-                let r = ui.add(btn).on_hover_text(format!("{n} processos — clique: alterna; duplo clique: só esta"));
+                let r = ui.add(btn).on_hover_text(format!(
+                    "{n} {}",
+                    locale.text(
+                        "processos — clique: alterna; duplo clique: só esta",
+                        "processes — click: toggle; double-click: only this",
+                    )
+                ));
                 if r.double_clicked() {
                     solo = Some(c);
                 } else if r.clicked() {
@@ -5026,7 +6337,7 @@ impl App {
             }
             let disputa_on = self.sort == SortKey::Steal;
             let disputa = egui::Button::new(
-                RichText::new("● Disputa")
+                RichText::new(locale.text("● Disputa", "● Contention"))
                     .color(if disputa_on { Color32::from_rgb(255, 150, 90) } else { MUTED })
                     .size(12.0),
             )
@@ -5035,7 +6346,10 @@ impl App {
             .corner_radius(999.0);
             if ui
                 .add(disputa)
-                .on_hover_text("Ordena por quem come núcleo sem aparecer na RAM: sobra, loop de credencial, CPU barata. É o recorte que o jogo sente e a lista por memória esconde.")
+                .on_hover_text(locale.text(
+                    "Ordena por quem come núcleo sem aparecer na RAM: sobra, loop de credencial, CPU barata. É o recorte que o jogo sente e a lista por memória esconde.",
+                    "Sorts by processes consuming CPU without showing much RAM: leftovers, credential loops, and cheap CPU work. This is what a game feels while a memory-sorted list hides it.",
+                ))
                 .clicked()
             {
                 if disputa_on {
@@ -5055,7 +6369,11 @@ impl App {
                 let on = self.cfg.show_kernel_rows;
                 let col = SysRow::PagedPool.color();
                 let sys_total = b.paged_pool + b.nonpaged_pool + b.shared_and_cache;
-                let text = RichText::new(format!("▣ Sistema (não-processo)  {}", fmt_bytes_short(sys_total)))
+                let text = RichText::new(format!(
+                    "{}  {}",
+                    locale.text("▣ Sistema (não-processo)", "▣ System (non-process)"),
+                    fmt_bytes_short(sys_total)
+                ))
                     .color(if on { col } else { MUTED })
                     .size(12.0);
                 let btn = egui::Button::new(text)
@@ -5064,12 +6382,16 @@ impl App {
                     .corner_radius(999.0);
                 if ui
                     .add(btn)
-                    .on_hover_text(
+                    .on_hover_text(locale.text(
                         "Mostra ou esconde as três linhas de memória que não pertencem a processo \
                          nenhum (pools do kernel e compartilhado/cache).\n\n\
                          Esconder muda só a lista: o medidor do topo e a conferência do rodapé \
                          continuam contando essa memória.",
-                    )
+                        "Shows or hides the three memory rows that do not belong to a process \
+                         (kernel pools and shared/cache memory).\n\n\
+                         Hiding them changes only the list: the top meter and footer reconciliation \
+                         still include this memory.",
+                    ))
                     .clicked()
                 {
                     self.cfg.show_kernel_rows = !on;
@@ -5078,7 +6400,7 @@ impl App {
                 }
             }
             if self.cat_enabled.len() != Category::ALL.len() {
-                let b = egui::Button::new(RichText::new("todas").size(12.0).color(MUTED)).fill(SURFACE).stroke(Stroke::NONE).corner_radius(999.0);
+                let b = egui::Button::new(RichText::new(locale.text("todas", "all")).size(12.0).color(MUTED)).fill(SURFACE).stroke(Stroke::NONE).corner_radius(999.0);
                 if ui.add(b).clicked() {
                     self.cat_enabled = Category::ALL.iter().copied().collect();
                 }
@@ -5092,7 +6414,9 @@ impl App {
             return;
         }
         let mut open = true;
-        egui::Window::new("Preferências")
+        let old_locale = self.cfg.locale;
+        let mut locale = old_locale;
+        egui::Window::new(locale.text("Preferências", "Preferences"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -5101,14 +6425,23 @@ impl App {
             .frame(egui::Frame::window(&ctx.style()).fill(SURFACE).corner_radius(CARD_R).inner_margin(egui::Margin::same(14)))
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
-                ui.label(RichText::new("Coluna de memória").strong());
+                ui.label(RichText::new(locale.text("Idioma", "Language")).strong());
+                egui::ComboBox::from_id_salt("locale")
+                    .selected_text(locale.name())
+                    .width(200.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut locale, Locale::Portuguese, "Português");
+                        ui.selectable_value(&mut locale, Locale::English, "English");
+                    });
+                ui.separator();
+                ui.label(RichText::new(locale.text("Coluna de memória", "Memory column")).strong());
                 let mut metric = self.cfg.mem_metric;
                 egui::ComboBox::from_id_salt("mem_metric")
-                    .selected_text(metric.label())
+                    .selected_text(metric.label_for(locale))
                     .width(200.0)
                     .show_ui(ui, |ui| {
                         for m in MemMetric::ALL {
-                            ui.selectable_value(&mut metric, m, m.label()).on_hover_text(m.tip());
+                            ui.selectable_value(&mut metric, m, m.label_for(locale)).on_hover_text(m.tip_for(locale));
                         }
                     });
                 if metric != self.cfg.mem_metric {
@@ -5117,10 +6450,10 @@ impl App {
                     self.derived_dirty = true;
                     self.rows_dirty = true;
                 }
-                ui.label(RichText::new(self.cfg.mem_metric.tip()).color(MUTED).size(11.5));
+                ui.label(RichText::new(self.cfg.mem_metric.tip_for(locale)).color(MUTED).size(11.5));
                 ui.separator();
-                ui.label(RichText::new("Ocultar abaixo de").strong())
-                    .on_hover_text("Esconde quem está abaixo destes mínimos. Com Agrupar por app, o filtro vale no total do app, não em cada helper. 0 mostra tudo.");
+                ui.label(RichText::new(locale.text("Ocultar abaixo de", "Hide below")).strong())
+                    .on_hover_text(locale.text("Esconde quem está abaixo destes mínimos. Com Agrupar por app, o filtro vale no total do app, não em cada helper. 0 mostra tudo.", "Hides processes below these thresholds. With Group by app, the filter applies to the app total, not each helper. 0 shows everything."));
                 let (mut min_mb, mut min_cpu, mut min_gpu, mut min_vram) = (self.cfg.min_mb, self.cfg.min_cpu, self.cfg.min_gpu, self.cfg.min_vram_mb);
                 let mut changed = false;
                 egui::Grid::new("prefs-cuts").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
@@ -5149,17 +6482,17 @@ impl App {
                 // não calibrar quatro DragValues no susto.
                 ui.horizontal_wrapped(|ui| {
                     let cortes_ativos = self.cfg.min_cpu > 0.0 || self.cfg.min_gpu > 0.0 || self.cfg.min_mb > 0 || self.cfg.min_vram_mb > 0;
-                    if ui.small_button("Só CPU ativa (≥ 3%)").on_hover_text("Esconde quem não está usando CPU agora (corte em 3% da máquina)").clicked() {
+                    if ui.small_button(locale.text("Só CPU ativa (≥ 3%)", "CPU active only (≥ 3%)")).on_hover_text(locale.text("Esconde quem não está usando CPU agora (corte em 3% da máquina)", "Hides processes not using CPU now (3% of the machine)")).clicked() {
                         self.cfg.min_cpu = 3.0;
                         self.cfg_dirty = true;
                         self.rows_dirty = true;
                     }
-                    if ui.small_button("Só GPU em uso (≥ 1%)").on_hover_text("Esconde quem não está com carga na GPU").clicked() {
+                    if ui.small_button(locale.text("Só GPU em uso (≥ 1%)", "GPU in use only (≥ 1%)")).on_hover_text(locale.text("Esconde quem não está com carga na GPU", "Hides processes with no GPU load")).clicked() {
                         self.cfg.min_gpu = 1.0;
                         self.cfg_dirty = true;
                         self.rows_dirty = true;
                     }
-                    if ui.add_enabled(cortes_ativos, egui::Button::new("Mostrar tudo").small()).on_hover_text("Zera os quatro cortes").clicked() {
+                    if ui.add_enabled(cortes_ativos, egui::Button::new(locale.text("Mostrar tudo", "Show all")).small()).on_hover_text(locale.text("Zera os quatro cortes", "Clears all four thresholds")).clicked() {
                         self.cfg.min_mb = 0;
                         self.cfg.min_cpu = 0.0;
                         self.cfg.min_gpu = 0.0;
@@ -5169,16 +6502,20 @@ impl App {
                     }
                 });
                 ui.separator();
-                ui.label(RichText::new("Amostragem").strong());
+                ui.label(RichText::new(locale.text("Amostragem", "Sampling")).strong());
                 ui.horizontal(|ui| self.ui_sampling_controls(ui));
                 #[cfg(windows)]
                 if !self.is_admin {
                     ui.separator();
-                    if ui.button("⬆ Reabrir como administrador").on_hover_text("Necessário para encerrar serviços, processos de outros usuários e ler a temperatura da CPU").clicked() {
+                    if ui.button(locale.text("⬆ Reabrir como administrador", "⬆ Relaunch as administrator")).on_hover_text(locale.text("Necessário para encerrar serviços, processos de outros usuários e ler a temperatura da CPU", "Required to stop services, terminate other users' processes, and read CPU temperature")).clicked() {
                         self.relaunch_as_admin();
                     }
                 }
             });
+        if locale != old_locale {
+            self.cfg.locale = locale;
+            self.cfg_dirty = true;
+        }
         self.show_prefs = open;
     }
 
@@ -5191,7 +6528,11 @@ impl App {
             listed += p.cpu_raw_pct;
             children += p.cpu_children_pct;
         }
-        Some(CpuSplit { total, listed, children })
+        Some(CpuSplit {
+            total,
+            listed,
+            children,
+        })
     }
 
     fn refresh_derived_if_dirty(&mut self) {
@@ -5262,8 +6603,14 @@ impl App {
         };
         push(&mut self.hist_cpu, self.sys.cpu_pct);
         let total = self.mem.total_phys.max(1);
-        push(&mut self.hist_ram, Some(self.mem.used_phys() as f32 / total as f32 * 100.0));
-        push(&mut self.hist_gpu, self.sys.gpu.as_ref().and_then(|g| g.util_pct));
+        push(
+            &mut self.hist_ram,
+            Some(self.mem.used_phys() as f32 / total as f32 * 100.0),
+        );
+        push(
+            &mut self.hist_gpu,
+            self.sys.gpu.as_ref().and_then(|g| g.util_pct),
+        );
         push(&mut self.hist_disk, self.sys.disk_pct);
     }
 }
@@ -5289,36 +6636,68 @@ impl CpuSplit {
 
     /// Chip vermelho no card só quando a diferença engana de verdade: pelo menos 3 pontos
     /// e um quinto do medidor. Fora disso, a conta fecha no arredondamento e a linha some.
-    fn unlisted_chip(&self) -> Option<(String, String)> {
+    fn unlisted_chip(&self, locale: Locale) -> Option<(String, String)> {
         let u = self.unlisted();
         if u < 3.0 || u < self.total * 0.2 {
             return None;
         }
-        Some((format!("fora da lista {}", App::fmt_pct(u)), self.explain()))
+        Some((
+            format!(
+                "{} {}",
+                locale.text("fora da lista", "not listed"),
+                App::fmt_pct(u)
+            ),
+            self.explain(locale),
+        ))
     }
 
-    fn explain(&self) -> String {
+    fn explain(&self, locale: Locale) -> String {
         let u = self.unlisted();
         let kids = self.children.min(u);
         let rest = u - kids;
-        let mut t = format!(
-            "Na lista agora: {} (soma de todos os processos, mesmo os que arredondam pra 0,0%).\nFora da lista: {}",
-            App::fmt_pct(self.listed),
-            App::fmt_pct(u),
-        );
+        let mut t = if locale == Locale::Portuguese {
+            format!(
+                "Na lista agora: {} (soma de todos os processos, mesmo os que arredondam pra 0,0%).\nFora da lista: {}",
+                App::fmt_pct(self.listed),
+                App::fmt_pct(u),
+            )
+        } else {
+            format!(
+                "Listed now: {} (sum of all processes, including those rounded to 0.0%).\nNot listed: {}",
+                App::fmt_pct(self.listed),
+                App::fmt_pct(u),
+            )
+        };
         if kids >= 0.05 {
-            t.push_str(&format!(
-                "\n  · {} em processos que nasceram e morreram entre duas amostras (rg, git, cc, shells). O pai mostra isso como “+filhos” na coluna CPU.",
-                App::fmt_pct(kids)
-            ));
+            if locale == Locale::Portuguese {
+                t.push_str(&format!(
+                    "\n  · {} em processos que nasceram e morreram entre duas amostras (rg, git, cc, shells). O pai mostra isso como “+filhos” na coluna CPU.",
+                    App::fmt_pct(kids)
+                ));
+            } else {
+                t.push_str(&format!(
+                    "\n  · {} in processes that started and exited between two samples (rg, git, cc, shells). The parent shows this as “+children” in the CPU column.",
+                    App::fmt_pct(kids)
+                ));
+            }
         }
         if rest >= 0.05 {
-            t.push_str(&format!(
-                "\n  · {} em interrupções, trabalho do kernel sem PID e processos curtos ainda sem pai que os recolhesse.",
-                App::fmt_pct(rest)
-            ));
+            if locale == Locale::Portuguese {
+                t.push_str(&format!(
+                    "\n  · {} em interrupções, trabalho do kernel sem PID e processos curtos ainda sem pai que os recolhesse.",
+                    App::fmt_pct(rest)
+                ));
+            } else {
+                t.push_str(&format!(
+                    "\n  · {} in interrupts, kernel work without a PID, and short-lived processes whose parent has not reaped them yet.",
+                    App::fmt_pct(rest)
+                ));
+            }
         }
-        t.push_str("\n\nIntervalo menor (a cada 1s) pega mais processo curto na lista.");
+        t.push_str(locale.text(
+            "\n\nIntervalo menor (a cada 1s) pega mais processo curto na lista.",
+            "\n\nA shorter interval (every 1s) captures more short-lived processes in the list.",
+        ));
         t
     }
 }
@@ -5332,31 +6711,64 @@ fn setup_fonts(ctx: &egui::Context) {
     let mut defs = FontDefinitions::default();
     // Segoe UI como fonte principal (visual nativo do Windows, acentos completos)
     if let Ok(bytes) = std::fs::read(format!("{fonts_dir}segoeui.ttf")) {
-        defs.font_data.insert("segoeui".into(), std::sync::Arc::new(FontData::from_owned(bytes)));
-        defs.families.entry(FontFamily::Proportional).or_default().insert(0, "segoeui".into());
+        defs.font_data.insert(
+            "segoeui".into(),
+            std::sync::Arc::new(FontData::from_owned(bytes)),
+        );
+        defs.families
+            .entry(FontFamily::Proportional)
+            .or_default()
+            .insert(0, "segoeui".into());
     }
     // Segoe UI Symbol: ● ▶ ▼ ⏸ e afins, como fallback
     if let Ok(bytes) = std::fs::read(format!("{fonts_dir}seguisym.ttf")) {
-        defs.font_data.insert("seguisym".into(), std::sync::Arc::new(FontData::from_owned(bytes)));
-        defs.families.entry(FontFamily::Proportional).or_default().push("seguisym".into());
-        defs.families.entry(FontFamily::Monospace).or_default().push("seguisym".into());
+        defs.font_data.insert(
+            "seguisym".into(),
+            std::sync::Arc::new(FontData::from_owned(bytes)),
+        );
+        defs.families
+            .entry(FontFamily::Proportional)
+            .or_default()
+            .push("seguisym".into());
+        defs.families
+            .entry(FontFamily::Monospace)
+            .or_default()
+            .push("seguisym".into());
     }
     // Consolas para monospace (comandos/caminhos)
     if let Ok(bytes) = std::fs::read(format!("{fonts_dir}consola.ttf")) {
-        defs.font_data.insert("consolas".into(), std::sync::Arc::new(FontData::from_owned(bytes)));
-        defs.families.entry(FontFamily::Monospace).or_default().insert(0, "consolas".into());
+        defs.font_data.insert(
+            "consolas".into(),
+            std::sync::Arc::new(FontData::from_owned(bytes)),
+        );
+        defs.families
+            .entry(FontFamily::Monospace)
+            .or_default()
+            .insert(0, "consolas".into());
     }
     // Linux: Adwaita Sans/Mono (a fonte do GNOME, que o Omarchy traz) no lugar da
     // Ubuntu-Light embutida no egui. Sem elas, fica o padrão.
     #[cfg(target_os = "linux")]
     {
         if let Ok(bytes) = std::fs::read("/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf") {
-            defs.font_data.insert("adwaita".into(), std::sync::Arc::new(FontData::from_owned(bytes)));
-            defs.families.entry(FontFamily::Proportional).or_default().insert(0, "adwaita".into());
+            defs.font_data.insert(
+                "adwaita".into(),
+                std::sync::Arc::new(FontData::from_owned(bytes)),
+            );
+            defs.families
+                .entry(FontFamily::Proportional)
+                .or_default()
+                .insert(0, "adwaita".into());
         }
         if let Ok(bytes) = std::fs::read("/usr/share/fonts/Adwaita/AdwaitaMono-Regular.ttf") {
-            defs.font_data.insert("adwaitamono".into(), std::sync::Arc::new(FontData::from_owned(bytes)));
-            defs.families.entry(FontFamily::Monospace).or_default().insert(0, "adwaitamono".into());
+            defs.font_data.insert(
+                "adwaitamono".into(),
+                std::sync::Arc::new(FontData::from_owned(bytes)),
+            );
+            defs.families
+                .entry(FontFamily::Monospace)
+                .or_default()
+                .insert(0, "adwaitamono".into());
         }
     }
     ctx.set_fonts(defs);
@@ -5417,18 +6829,37 @@ fn setup_style(ctx: &egui::Context) {
     v.widgets.active.fg_stroke = egui::Stroke::new(1.0_f32, Color32::WHITE);
     v.widgets.open.bg_fill = SURFACE_HI;
     v.widgets.open.weak_bg_fill = SURFACE_HI;
-    for w in [&mut v.widgets.noninteractive, &mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
+    for w in [
+        &mut v.widgets.noninteractive,
+        &mut v.widgets.inactive,
+        &mut v.widgets.hovered,
+        &mut v.widgets.active,
+        &mut v.widgets.open,
+    ] {
         w.corner_radius = 8.0.into();
     }
     v.striped = false;
     ctx.set_visuals(v);
     ctx.style_mut(|s| {
         use egui::{FontFamily, FontId, TextStyle};
-        s.text_styles.insert(TextStyle::Body, FontId::new(13.0, FontFamily::Proportional));
-        s.text_styles.insert(TextStyle::Button, FontId::new(13.0, FontFamily::Proportional));
-        s.text_styles.insert(TextStyle::Small, FontId::new(11.5, FontFamily::Proportional));
-        s.text_styles.insert(TextStyle::Monospace, FontId::new(12.0, FontFamily::Monospace));
-        s.text_styles.insert(TextStyle::Heading, FontId::new(17.0, FontFamily::Proportional));
+        s.text_styles
+            .insert(TextStyle::Body, FontId::new(13.0, FontFamily::Proportional));
+        s.text_styles.insert(
+            TextStyle::Button,
+            FontId::new(13.0, FontFamily::Proportional),
+        );
+        s.text_styles.insert(
+            TextStyle::Small,
+            FontId::new(11.5, FontFamily::Proportional),
+        );
+        s.text_styles.insert(
+            TextStyle::Monospace,
+            FontId::new(12.0, FontFamily::Monospace),
+        );
+        s.text_styles.insert(
+            TextStyle::Heading,
+            FontId::new(17.0, FontFamily::Proportional),
+        );
         s.spacing.item_spacing = egui::vec2(8.0, 4.0);
         s.spacing.button_padding = egui::vec2(10.0, 4.0);
         s.spacing.menu_margin = egui::Margin::same(8);
@@ -5452,7 +6883,11 @@ fn ui_dark() -> bool {
 }
 
 fn ui_text_color(dark: bool) -> Color32 {
-    if dark { TEXT } else { Color32::from_gray(30) }
+    if dark {
+        TEXT
+    } else {
+        Color32::from_gray(30)
+    }
 }
 
 fn ram_color(bytes: u64, default: Color32) -> Color32 {
@@ -5481,16 +6916,24 @@ fn exe_token_end(s: &str) -> Option<usize> {
     if b.len() < 4 {
         return None;
     }
-    (0..=b.len() - 4).find(|&i| b[i..i + 4].eq_ignore_ascii_case(b".exe")).map(|i| i + 4)
+    (0..=b.len() - 4)
+        .find(|&i| b[i..i + 4].eq_ignore_ascii_case(b".exe"))
+        .map(|i| i + 4)
 }
 
 /// A coluna de comando mostrava o caminho completo do exe e truncava antes de chegar nos
 /// argumentos — justamente a parte que diferencia um `brave.exe` do outro. Aqui o caminho
 /// sai (já está na coluna Nome) e sobram os argumentos.
-fn cmd_args(p: &ProcInfo) -> String {
+fn cmd_args(p: &ProcInfo, locale: Locale) -> String {
     let cmd = p.cmdline.trim();
     if cmd.is_empty() {
-        return if p.exe_path.is_empty() { "(sem acesso)".to_string() } else { p.exe_path.clone() };
+        return if p.exe_path.is_empty() {
+            locale
+                .text("(sem acesso)", "(access unavailable)")
+                .to_string()
+        } else {
+            p.exe_path.clone()
+        };
     }
     let rest = if let Some(stripped) = cmd.strip_prefix('"') {
         match stripped.find('"') {
@@ -5542,8 +6985,21 @@ pub fn fmt_bps(bps: f64) -> String {
 fn is_desktop_shell(name_lower: &str) -> bool {
     matches!(
         name_lower.strip_suffix(".exe").unwrap_or(name_lower),
-        "hyprland" | "start-hyprland" | "sway" | "niri" | "river" | "gnome-shell" | "gnome-session-b" | "plasmashell"
-            | "kwin_wayland" | "kwin_x11" | "xfce4-session" | "explorer" | "finder" | "loginwindow" | "windowserver"
+        "hyprland"
+            | "start-hyprland"
+            | "sway"
+            | "niri"
+            | "river"
+            | "gnome-shell"
+            | "gnome-session-b"
+            | "plasmashell"
+            | "kwin_wayland"
+            | "kwin_x11"
+            | "xfce4-session"
+            | "explorer"
+            | "finder"
+            | "loginwindow"
+            | "windowserver"
     )
 }
 
@@ -5615,7 +7071,9 @@ fn fmt_age(secs: u64) -> String {
 
 pub fn open_url(url: &str) {
     #[cfg(windows)]
-    let _ = std::process::Command::new("cmd").args(["/c", "start", "", url]).spawn();
+    let _ = std::process::Command::new("cmd")
+        .args(["/c", "start", "", url])
+        .spawn();
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(url).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -5624,9 +7082,13 @@ pub fn open_url(url: &str) {
 
 fn open_in_explorer(path: &str) {
     #[cfg(windows)]
-    let _ = std::process::Command::new("explorer.exe").arg(format!("/select,{path}")).spawn();
+    let _ = std::process::Command::new("explorer.exe")
+        .arg(format!("/select,{path}"))
+        .spawn();
     #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").args(["-R", path]).spawn();
+    let _ = std::process::Command::new("open")
+        .args(["-R", path])
+        .spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         if let Some(dir) = std::path::Path::new(path).parent() {
@@ -5644,17 +7106,32 @@ fn metric_available(metric: MemMetric, p: &ProcInfo) -> bool {
     true
 }
 
-fn private_memory_text(p: &ProcInfo) -> String {
-    if metric_available(MemMetric::Private, p) { fmt_bytes(p.private_ws) }
-    else { "indisponível".to_string() }
+fn private_memory_text(p: &ProcInfo, locale: Locale) -> String {
+    if metric_available(MemMetric::Private, p) {
+        fmt_bytes(p.private_ws)
+    } else {
+        locale.text("indisponível", "unavailable").to_string()
+    }
 }
 
-fn disk_usage_tip() -> &'static str {
+fn disk_usage_tip(locale: Locale) -> &'static str {
     if cfg!(target_os = "linux") {
-        "Tempo ocupado do disco físico mais ativo. A taxa em bytes/s soma os discos físicos; partições e dispositivos virtuais não são contados novamente."
-    } else { "Tempo ocupado do disco (contador do sistema)." }
+        locale.text(
+            "Tempo ocupado do disco físico mais ativo. A taxa em bytes/s soma os discos físicos; partições e dispositivos virtuais não são contados novamente.",
+            "Busy time of the most active physical disk. The bytes/s rate sums physical disks; partitions and virtual devices are not counted again.",
+        )
+    } else {
+        locale.text(
+            "Tempo ocupado do disco (contador do sistema).",
+            "Disk busy time (system counter).",
+        )
+    }
 }
 
 fn aggregate_memory_text(bytes: u64, complete: bool) -> String {
-    if complete { fmt_bytes(bytes) } else { format!("≥ {}", fmt_bytes(bytes)) }
+    if complete {
+        fmt_bytes(bytes)
+    } else {
+        format!("≥ {}", fmt_bytes(bytes))
+    }
 }
