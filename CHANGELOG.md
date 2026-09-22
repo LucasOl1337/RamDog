@@ -37,6 +37,7 @@ Patch notes: [v0.11.0](docs/releases/v0.11.0.md).
 
 ### Corrigido
 
+- Linux: sem barramento de usuário do systemd, Partida e Desperdício avisam em português em vez de despejar o erro cru do `systemctl`.
 - O medidor de CPU do topo dizia 28% e a lista, somada, não passava de 8%. Dois motivos: processo que nascia depois da amostra anterior entrava com 0,0% e só ganhava número na amostra seguinte, se ainda estivesse vivo (um `rg`, `git` ou `cc` de 3 s a 100% de um núcleo nunca aparecia); e filho que nascia e morria dentro da janela sumia sem deixar rastro. Agora processo novo entra com a taxa desde que nasceu (Linux e Windows), e no Linux o pai mostra `+N%` na coluna CPU com o que os filhos já encerrados gastaram (`cutime`/`cstime`, limitado ao que o medidor não explica). Quando ainda sobra diferença (interrupções, kernel sem PID), o card de CPU mostra o chip **fora da lista N%** com a conta no hover, em vez de deixar a soma não fechar em silêncio.
 - Zumbi não "finalizava": o kernel aceita SIGTERM/SIGKILL num processo `Z` e o RamDog contava como `1 finalizado(s), ~0,0 MB` sem nada mudar. Agora o ✖ num zumbi pede ao pai para recolher (SIGCHLD) e diz quem segura; Shift+✖ finaliza o pai.
 - Linux: o cliente Steam relançado por um atalho (`steam steam://rungameid/2357570`) era rotulado como o jogo (`Overwatch 2 · Steam / Proton`) horas depois de o jogo fechar. Agora é `Steam`.
