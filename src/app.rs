@@ -4050,7 +4050,7 @@ impl App {
                 if !hw.control_ready {
                     if crate::fans_linux::supported(){
                         crate::kit::toolbar(ui, |ui| {
-                            if ui.add(crate::kit::primary(locale.text("Ativar controle de ventoinhas", "Enable fan control"))).on_hover_text(locale.text("Pede senha (pkexec)", "Requests your password (pkexec)")).clicked(){crate::fans_linux::enable();}
+                            if ui.add(crate::kit::primary(locale.text("Ativar controle de ventoinhas", "Enable fan control"))).on_hover_text(locale.text("Usa sudo autorizado ou pede senha (pkexec)", "Uses authorized sudo or requests password (pkexec)")).clicked(){crate::fans_linux::enable();}
                             ui.label(crate::kit::muted(locale.text("Um helper separado restaura o controle anterior quando o RamDog fecha. Faixa manual: 30–100%.", "A separate helper restores the previous control state when RamDog closes. Manual range: 30–100%.")));
                         });
                     } else {crate::kit::intro(ui, locale.text("Rotações disponíveis abaixo. O driver atual não oferece controles PWM graváveis.", "Read-only fan speeds are shown below. The current driver exposes no writable PWM controls."));}

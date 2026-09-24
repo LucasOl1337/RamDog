@@ -110,11 +110,23 @@ pub fn enable() {
         let Ok(exe) = std::env::current_exe() else {
             return;
         };
-        let result = std::process::Command::new("pkexec")
-            .arg(exe)
-            .arg("--fan-helper")
-            .arg(std::process::id().to_string())
-            .status();
+        let pid = std::process::id().to_string();
+        // Prefer already-authorized noninteractive sudo. On desktops without a
+        // running polkit authentication agent, pkexec cannot open its prompt.
+        let sudo_ready = std::process::Command::new("sudo")
+            .args(["-n", "true"])
+            .output()
+            .is_ok_and(|output| output.status.success());
+        let mut command = if sudo_ready {
+            let mut cmd = std::process::Command::new("sudo");
+            cmd.arg("-n").arg(&exe);
+            cmd
+        } else {
+            let mut cmd = std::process::Command::new("pkexec");
+            cmd.arg(&exe);
+            cmd
+        };
+        let result = command.arg("--fan-helper").arg(pid).status();
         if !matches!(result,Ok(s)if s.success()) {
             crate::linux::log("helper de fans encerrado ou autenticação cancelada");
         }
