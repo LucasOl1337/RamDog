@@ -4103,7 +4103,7 @@ impl App {
                             ui.vertical(|ui| {
                                 ui.set_width(286.0);
                                 let (label, bg, fg) = if !stab_on {
-                                    (locale.text("ESTABILIZAR  ·  travar fans em 50%", "STABILIZE  ·  lock fans at 50%").to_owned(), ACCENT_BG, ACCENT)
+                                    (locale.text("ESTABILIZAR  ·  fans conectados em 50%", "STABILIZE  ·  connected fans at 50%").to_owned(), ACCENT_BG, ACCENT)
                                 } else if stab.held > 50.5 {
                                     let tag = if cpu >= 95.0 { locale.text("teto térmico", "thermal ceiling") } else { locale.text("rampa linear", "linear ramp") };
                                     (format!("{} {:.0}%  ·  CPU {cpu:.0}°C ({tag})", locale.text("FANS EM", "FANS AT"), stab.held), THERM_WARN_BG, THERM_WARN_FG)
@@ -4116,8 +4116,8 @@ impl App {
                                     .corner_radius(6.0)
                                     .min_size(Vec2::new(ui.available_width(), 34.0));
                                 let resp = ui.add(btn).on_hover_text(locale.text(
-                                    "Liga/desliga a curva do TempHUD. Só fans SuperIO da placa-mãe — GPU fica no zero-fan dela. Clicar de novo (ou fechar o app) devolve tudo à BIOS.",
-                                    "Toggles the TempHUD curve. Only motherboard SuperIO fans are controlled — the GPU keeps its own zero-fan mode. Click again (or close the app) to return control to BIOS.",
+                                    "Liga/desliga a curva do TempHUD. Só fans conectados (CPU e gabinete) entram na estabilização; bombas e headers sem RPM ficam na BIOS. Clicar de novo (ou fechar o app) devolve os fans controlados à BIOS.",
+                                    "Toggles the TempHUD curve. Only connected CPU/case fans are stabilized; pumps and headers with no RPM stay on BIOS control. Closing the app restores the controlled fans to BIOS.",
                                 ));
                                 if resp.clicked() {
                                     self.toggle_stab();

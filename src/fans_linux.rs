@@ -27,6 +27,10 @@ struct Fan {
 fn number(path: &std::path::Path) -> Option<u32> {
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
+fn stabilize_eligible(name: &str, rpm: Option<u32>) -> bool {
+    let name = name.to_ascii_lowercase();
+    rpm.is_some_and(|rpm| rpm > 0) && !name.contains("pump") && !name.contains("bomba")
+}
 fn discover() -> Vec<Fan> {
     let mut fans = Vec::new();
     let Ok(entries) = std::fs::read_dir("/sys/class/hwmon") else {
@@ -245,7 +249,9 @@ pub fn helper(pid: u32) -> Result<(), String> {
                 if line == "stab on" {
                     stab = true;
                     for fan in &mut fans {
-                        fan.manual = Some(50.0);
+                        if stabilize_eligible(&fan.name, number(&fan.rpm)) {
+                            fan.manual = Some(50.0);
+                        }
                     }
                     return Ok(());
                 }
@@ -300,8 +306,16 @@ pub fn helper(pid: u32) -> Result<(), String> {
                 };
                 fan.guard = guard;
                 let result = (|| -> std::io::Result<()> {
-                    std::fs::write(&fan.enable, "1")?;
-                    std::fs::write(&fan.pwm, ((pct * 255.0 / 100.0).round() as u32).to_string())
+                    let duty = (pct * 255.0 / 100.0).round() as u32;
+                    // The NCT6687 firmware commits a configuration transaction for each
+                    // write. Do not restart that transaction ten times a second at idle.
+                    if number(&fan.enable) != Some(1) {
+                        std::fs::write(&fan.enable, "1")?;
+                    }
+                    if number(&fan.pwm) != Some(duty) {
+                        std::fs::write(&fan.pwm, duty.to_string())?;
+                    }
+                    Ok(())
                 })();
                 if let Err(e) = result {
                     state.error = Some(format!("{}: {e}", fan.name));
@@ -336,6 +350,17 @@ pub fn helper(pid: u32) -> Result<(), String> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stabilization_skips_pump_and_disconnected_headers() {
+        assert!(super::stabilize_eligible("nct6687 CPU Fan", Some(1100)));
+        assert!(super::stabilize_eligible(
+            "nct6687 System Fan #1",
+            Some(1200)
+        ));
+        assert!(!super::stabilize_eligible("nct6687 Pump Fan", Some(2700)));
+        assert!(!super::stabilize_eligible("nct6687 System Fan #4", Some(0)));
+        assert!(!super::stabilize_eligible("nct6687 CPU Fan", None));
+    }
     #[test]
     fn thermal_guard_has_hysteresis_and_missing_sensor_fails_high() {
         assert_eq!(super::target(None, 30.0, false, false), (100.0, true));
