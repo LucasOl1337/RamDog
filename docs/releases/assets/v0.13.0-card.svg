@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1362" font-family="Liberation Sans, sans-serif">
+  <defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#160D31"/><stop offset="1" stop-color="#28184D"/></linearGradient></defs>
+  <rect width="1200" height="1362" fill="url(#bg)"/>
+  <path d="M28 78V28H78M1122 28H1172V78M28 1284V1334H78M1122 1334H1172V1284" fill="none" stroke="#8B7AA2" stroke-width="2" opacity=".7"/>
+  <text x="56" y="90" font-size="43" fill="#F8F5FF" font-weight="700">RamDog</text>
+  <rect x="255" y="50" width="146" height="54" rx="27" fill="#8E65E8"/>
+  <text x="281" y="87" font-size="25" fill="#FFFFFF" font-weight="700">v0.13.0</text>
+  <text x="56" y="145" font-size="25" fill="#FFD6A0" font-weight="700" letter-spacing="3">NOTAS DA ATUALIZAÇÃO</text>
+  <text x="1020" y="88" font-size="18" fill="#BCB1D2" text-anchor="end">25 SET 2026</text>
+  <path d="M56 178H1144" stroke="#76638C" opacity=".5"/>
+  <text x="56" y="224" font-size="23" fill="#D8CFE7">Veja o que está aberto sem uso e feche tudo que você marcar de uma vez.</text>
+    <rect x="56" y="264" width="6" height="28" rx="3" fill="#FFC61A"/>
+  <text x="80" y="287" font-size="26" fill="#FFC61A" font-weight="700">NOVIDADES</text>
+  <text x="1118" y="287" font-size="20" fill="#BCB1D2" text-anchor="end">2 itens</text>
+  <circle cx="86" cy="344" r="6" fill="#FFC61A"/>
+  <text x="108" y="352" font-size="27" fill="#F8F5FF" font-weight="700">Faxina: fechar em massa o que não está em uso</text>
+  <text x="108" y="384" font-size="22" fill="#FFE4A3">Pode fechar, Talvez e Em uso, com o motivo em cada linha.</text>
+  <circle cx="86" cy="438" r="6" fill="#FFC61A"/>
+  <text x="108" y="446" font-size="27" fill="#F8F5FF" font-weight="700">Manter sempre</text>
+  <text x="108" y="478" font-size="22" fill="#FFE4A3">Um toque tira da faxina o app que fica parado de propósito.</text>
+  <path d="M56 530H1144" stroke="#76638C" opacity=".35"/>
+  <rect x="56" y="562" width="6" height="28" rx="3" fill="#2DD29A"/>
+  <text x="80" y="585" font-size="26" fill="#2DD29A" font-weight="700">MELHORIAS</text>
+  <text x="1118" y="585" font-size="20" fill="#BCB1D2" text-anchor="end">2 itens</text>
+  <circle cx="86" cy="642" r="6" fill="#2DD29A"/>
+  <text x="108" y="650" font-size="27" fill="#F8F5FF" font-weight="700">O “parado há” sobrevive a uma atualização</text>
+  <text x="108" y="682" font-size="22" fill="#A7F3D4">A observação continua se o RamDog voltar em até 15 minutos.</text>
+  <circle cx="86" cy="736" r="6" fill="#2DD29A"/>
+  <text x="108" y="744" font-size="27" fill="#F8F5FF" font-weight="700">Limpeza mais enxuta</text>
+  <text x="108" y="776" font-size="22" fill="#A7F3D4">Cache do kernel, zombies e disco; a lista de apps foi para a Faxina.</text>
+  <path d="M56 828H1144" stroke="#76638C" opacity=".35"/>
+  <rect x="56" y="860" width="6" height="28" rx="3" fill="#30BCEF"/>
+  <text x="80" y="883" font-size="26" fill="#30BCEF" font-weight="700">CORREÇÕES</text>
+  <text x="1118" y="883" font-size="20" fill="#BCB1D2" text-anchor="end">3 itens</text>
+  <circle cx="86" cy="940" r="6" fill="#30BCEF"/>
+  <text x="108" y="948" font-size="27" fill="#F8F5FF" font-weight="700">ESTABILIZAR deixa a bomba com a BIOS</text>
+  <text x="108" y="980" font-size="22" fill="#A9E4F8">Só assume fans conectados com RPM, como CPU e gabinete.</text>
+  <circle cx="86" cy="1034" r="6" fill="#30BCEF"/>
+  <text x="108" y="1042" font-size="27" fill="#F8F5FF" font-weight="700">Menos escrita no controlador</text>
+  <text x="108" y="1074" font-size="22" fill="#A9E4F8">O PWM só é regravado quando o valor muda.</text>
+  <circle cx="86" cy="1128" r="6" fill="#30BCEF"/>
+  <text x="108" y="1136" font-size="27" fill="#F8F5FF" font-weight="700">Ativar ventoinhas sem agente polkit</text>
+  <text x="108" y="1168" font-size="22" fill="#A9E4F8">Usa sudo já autorizado e só cai no pkexec se precisar.</text>
+  <path d="M56 1212H1144" stroke="#76638C" opacity=".5"/>
+  <text x="56" y="1260" font-size="25" fill="#FFD6A0" font-weight="700">Menos lixo aberto, sem fechar o que você está usando.</text>
+  <text x="56" y="1300" font-size="18" fill="#BCB1D2">Notas completas e pacotes: github.com/LucasOl1337/RamDog/releases/tag/v0.13.0</text>
+</svg>

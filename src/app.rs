@@ -5583,7 +5583,7 @@ impl App {
         for v in ViewMode::ADDONS {
             let on = self.cfg.view == v;
             let tip = if !v.available() {
-                if v == ViewMode::Clean {
+                if matches!(v, ViewMode::Clean | ViewMode::Sweep) {
                     format!(
                         "{} — {}",
                         v.label_for(self.cfg.locale),

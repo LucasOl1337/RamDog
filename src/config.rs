@@ -353,7 +353,7 @@ impl ViewMode {
     ];
 
     pub fn available(self) -> bool {
-        if self == Self::Clean {
+        if matches!(self, Self::Clean | Self::Sweep) {
             return cfg!(target_os = "linux");
         }
         cfg!(any(windows, target_os = "linux"))

@@ -2,6 +2,28 @@
 
 As mudanças são registradas por versão. As notas descrevem funcionalidades disponíveis e suas limitações; testes de hardware não equivalem a cobertura de todos os drivers e desktops.
 
+## [0.13.0] - 2026-09-25
+
+A nova aba Faxina aponta o que está aberto sem uso e fecha de uma vez tudo que você marcar. O controle de ventoinhas deixa a bomba e os headers vazios com a BIOS.
+
+Patch notes: [v0.13.0](docs/releases/v0.13.0.md).
+
+### Adicionado
+
+- **Faxina** (Linux): cada app com seus processos numa linha, classificado pelo uso observado em **Pode fechar** (já marcado, só sobras com evidência), **Talvez** e **Em uso**, com o motivo escrito. Marcar/desmarcar por grupo ou linha, fechar com confirmação levando os filhos; protegidos e sistema ficam de fora.
+- **Manter sempre** na Faxina: tira um app da classificação de vez, pela identidade dele (não trava o `python3` inteiro).
+
+### Melhorado
+
+- A observação da Faxina fica em `sweep.json` e sobrevive a reinícios de até 15 minutos, como numa atualização.
+- A Limpeza ficou com cache do kernel, zombies (com **encerrar pai**) e disco; a lista de apps passou para a Faxina.
+
+### Corrigido
+
+- **ESTABILIZAR** mexia na bomba e em headers sem ventoinha; agora controla só fans conectados com RPM, e o resto fica com a BIOS.
+- O helper de ventoinhas regravava modo e PWM dez vezes por segundo mesmo sem mudança, reiniciando a transação do controlador NCT6687; agora só grava quando o valor muda.
+- **Ativar controle de ventoinhas** falhava sem agente polkit rodando; agora usa `sudo -n` quando já autorizado e cai no `pkexec` só se precisar.
+
 ## [0.12.1] - 2026-09-22
 
 Patch de manutenção interna da tabela, sem novas funções de interface ou ganho de desempenho medido. Preserva os recursos e os idiomas da v0.12.0.
