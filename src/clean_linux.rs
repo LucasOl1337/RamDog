@@ -623,19 +623,12 @@ pub fn helper(op: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Uma linha da seção de processos: um app (grupo por identidade), com PIDs somados.
-struct AppRow {
-    key: String,
-    label: String,
-    pids: Vec<u32>,
-    ram: u64,
-    cpu: f32,
-    has_window: bool,
-    focused: bool,
-    zombie: bool,
-    leftover: Option<&'static str>,
-    locked: bool,
-    /// Pai de um zombie, quando o pai dá para encerrar.
+/// Um zombie e o pai que o segura. A faxina de apps parados é da aba Faxina; aqui fica só
+/// o que ela não resolve: zombie não morre com sinal, quem resolve é o pai.
+struct Zombie {
+    pid: u32,
+    name: String,
+    /// Pai, quando dá para encerrar (não protegido, não o init).
     parent: Option<(u32, String)>,
 }
 
@@ -645,9 +638,7 @@ pub struct Clean {
     drop: Job<String>,
     /// Alvo (índice em `targets`) esperando confirmação.
     pending: Option<usize>,
-    selected: HashMap<String, bool>,
     last_result: Option<(String, bool)>,
-    min_ram: u64,
 }
 
 impl Default for Clean {
@@ -663,89 +654,31 @@ impl Clean {
             action: Job::default(),
             drop: Job::default(),
             pending: None,
-            selected: HashMap::new(),
             last_result: None,
-            min_ram: 100 << 20,
         }
     }
 
-    fn rows(
-        &self,
-        procs: &[ProcInfo],
-        mem: &dyn Fn(&ProcInfo) -> u64,
-        locked: &dyn Fn(&ProcInfo) -> bool,
-    ) -> Vec<AppRow> {
+    fn zombies(procs: &[ProcInfo], locked: &dyn Fn(&ProcInfo) -> bool) -> Vec<Zombie> {
         let by_pid: HashMap<u32, &ProcInfo> = procs.iter().map(|p| (p.pid, p)).collect();
-        let me = std::process::id();
-        let mut groups: HashMap<String, AppRow> = HashMap::new();
-        for p in procs {
-            if p.pid == me || p.pid <= 2 {
-                continue;
-            }
-            let zombie = p.kernel_state == Some('Z');
-            let leftover = identity::leftover_reason(&p.cmdline, p.kernel_state, p.has_window);
-            let ram = mem(p);
-            if !zombie && leftover.is_none() && ram < self.min_ram {
-                continue;
-            }
-            let id = identity::of(p);
-            // Zombie não soma no app: é uma linha própria, com o pai apontado.
-            let key = if zombie {
-                format!("zombie:{}", p.pid)
-            } else {
-                id.key.clone()
-            };
-            let is_locked = locked(p);
-            let parent = if zombie {
-                by_pid
+        procs
+            .iter()
+            .filter(|p| p.kernel_state == Some('Z') && p.pid > 2)
+            .map(|p| Zombie {
+                pid: p.pid,
+                name: p.name.clone(),
+                parent: by_pid
                     .get(&p.raw_ppid)
                     .filter(|pp| !locked(pp) && pp.pid > 1)
-                    .map(|pp| (pp.pid, identity::of(pp).label))
-            } else {
-                None
-            };
-            let row = groups.entry(key.clone()).or_insert_with(|| AppRow {
-                key,
-                label: if zombie {
-                    format!("{} (zombie)", p.name)
-                } else {
-                    id.label.clone()
-                },
-                pids: Vec::new(),
-                ram: 0,
-                cpu: 0.0,
-                has_window: false,
-                focused: false,
-                zombie,
-                leftover: None,
-                locked: false,
-                parent,
-            });
-            row.pids.push(p.pid);
-            row.ram += ram;
-            row.cpu += p.cpu_pct;
-            row.has_window |= p.has_window;
-            row.focused |= p.focused;
-            row.locked |= is_locked;
-            if row.leftover.is_none() {
-                row.leftover = leftover;
-            }
-        }
-        let mut rows: Vec<AppRow> = groups.into_values().collect();
-        // Sobras primeiro; depois por RAM. Quem tem janela vai para o fim: é o que o usuário
-        // está usando, não sobra.
-        rows.sort_by(|a, b| {
-            let rank = |r: &AppRow| (!(r.zombie || r.leftover.is_some()), r.has_window);
-            rank(a).cmp(&rank(b)).then(b.ram.cmp(&a.ram))
-        });
-        rows
+                    .map(|pp| (pp.pid, identity::of(pp).label)),
+            })
+            .collect()
     }
 
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
         procs: &[ProcInfo],
-        mem: &dyn Fn(&ProcInfo) -> u64,
+        _mem: &dyn Fn(&ProcInfo) -> u64,
         locked: &dyn Fn(&ProcInfo) -> bool,
         locale: Locale,
     ) -> Vec<CleanOut> {
@@ -775,7 +708,7 @@ impl Clean {
             out.push(CleanOut::Toast(msg, err));
         }
 
-        crate::kit::intro(ui, locale.text("O que sobrou rodando sem ninguém usar, e o que está ocupando disco sem precisar. Nada aqui é apagado sem um clique de confirmação; encerrar processo é na hora, como na lista.", "What is still running unused, and what is occupying disk unnecessarily. Nothing is deleted without a confirmation click; terminating a process is immediate, like in the list."));
+        crate::kit::intro(ui, locale.text("Cache do kernel, zombies e o que está ocupando disco sem precisar. Nada aqui é apagado sem um clique de confirmação. Apps abertos sem uso ficam na aba Faxina.", "Kernel cache, zombies, and what is occupying disk unnecessarily. Nothing is deleted without a confirmation click. Unused open apps live in the Sweep tab."));
         ui.add_space(8.0);
 
         egui::ScrollArea::vertical()
@@ -783,7 +716,7 @@ impl Clean {
             .show(ui, |ui| {
                 self.ui_memory(ui, procs, locale);
                 ui.add_space(10.0);
-                self.ui_processes(ui, procs, mem, locked, locale, &mut out);
+                self.ui_processes(ui, procs, locked, locale, &mut out);
                 ui.add_space(10.0);
                 self.ui_disk(ui, locale);
             });
@@ -870,142 +803,37 @@ impl Clean {
         &mut self,
         ui: &mut egui::Ui,
         procs: &[ProcInfo],
-        mem: &dyn Fn(&ProcInfo) -> u64,
         locked: &dyn Fn(&ProcInfo) -> bool,
         locale: Locale,
         out: &mut Vec<CleanOut>,
     ) {
-        let rows = self.rows(procs, mem, locked);
-        let alive: std::collections::HashSet<&str> = rows.iter().map(|r| r.key.as_str()).collect();
-        self.selected.retain(|k, _| alive.contains(k.as_str()));
-        let sel_pids: Vec<u32> = rows
-            .iter()
-            .filter(|r| {
-                !r.locked && !r.zombie && self.selected.get(&r.key).copied().unwrap_or(false)
-            })
-            .flat_map(|r| r.pids.iter().copied())
-            .collect();
-        let sel_ram: u64 = rows
-            .iter()
-            .filter(|r| {
-                !r.locked && !r.zombie && self.selected.get(&r.key).copied().unwrap_or(false)
-            })
-            .map(|r| r.ram)
-            .sum();
-        let n_leftover = rows
-            .iter()
-            .filter(|r| r.zombie || r.leftover.is_some())
-            .count();
-        let title = format!(
-            "{} · {} {} {}",
-            locale.text("Processos", "Processes"),
-            rows.len(),
-            locale.text("apps acima de", "apps above"),
-            fmt_bytes_short(self.min_ram)
-        );
+        let zombies = Self::zombies(procs, locked);
+        let title = format!("Zombies · {}", zombies.len());
         section(ui, &title, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(locale.text("Marca o que não está usando e encerra de uma vez. Sobras e zombies vêm primeiro; quem tem janela aberta fica no fim.", "Select what is unused and terminate it at once. Leftovers and zombies come first; apps with open windows stay at the end.")).color(MUTED));
-            });
-            ui.horizontal(|ui| {
-                ui.label(locale.text("mostrar acima de", "show above"));
-                let mut mb = (self.min_ram >> 20) as u32;
-                if ui.add(egui::DragValue::new(&mut mb).range(0..=8192).suffix(" MB").speed(10)).changed() {
-                    self.min_ram = (mb as u64) << 20;
-                }
-                if n_leftover > 0 && ui.add(crate::kit::button(&format!("{} ({n_leftover})", locale.text("Marcar sobras", "Mark leftovers")))).on_hover_text(locale.text("Zombies ficam de fora: sinal neles não faz nada, o que resolve é o pai.", "Zombies are excluded: signals do nothing; the parent is what fixes it.")).clicked() {
-                    for r in &rows {
-                        if r.leftover.is_some() && !r.zombie && !r.locked {
-                            self.selected.insert(r.key.clone(), true);
-                        }
-                    }
-                }
-                if ui.add(crate::kit::button(locale.text("Marcar sem janela", "Mark without a window"))).on_hover_text(locale.text("Tudo que não tem janela aberta e não é do sistema", "Everything without an open window that is not a system process")).clicked() {
-                    for r in &rows {
-                        if !r.has_window && !r.locked && !r.zombie {
-                            self.selected.insert(r.key.clone(), true);
-                        }
-                    }
-                }
-                if ui.add(crate::kit::button(locale.text("Desmarcar", "Clear selection"))).clicked() {
-                    self.selected.clear();
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let label = if sel_pids.is_empty() {
-                        locale.text("Encerrar selecionados", "Terminate selected").to_string()
-                    } else {
-                        format!("{} · {} PIDs · {}", locale.text("Encerrar selecionados", "Terminate selected"), sel_pids.len(), fmt_bytes(sel_ram))
-                    };
-                    if ui.add_enabled(!sel_pids.is_empty(), crate::kit::primary(&label)).clicked() {
-                        out.push(CleanOut::Kill(sel_pids.clone()));
-                        self.selected.clear();
-                    }
-                });
-            });
+            ui.label(RichText::new(locale.text("Apps abertos sem uso ficam na aba Faxina, que classifica e fecha em massa. Aqui sobram os zombies: já morreram, e quem resolve é o pai.", "Unused open apps live in the Sweep tab, which sorts and closes them in bulk. What remains here are zombies: already dead, fixed only by their parent.")).color(MUTED));
             ui.add_space(4.0);
-            if rows.is_empty() {
+            if zombies.is_empty() {
                 ui.label(
-                    RichText::new(locale.text(
-                        "Nada acima do corte. Sobe o filtro ou baixa o corte de RAM.",
-                        "Nothing above the threshold. Raise the filter or lower the RAM threshold.",
-                    ))
-                    .color(MUTED),
+                    RichText::new(locale.text("Nenhum zombie agora.", "No zombies right now."))
+                        .color(MUTED),
                 );
                 return;
             }
-            egui::Grid::new("clean-procs").num_columns(6).spacing([12.0, 4.0]).striped(true).show(ui, |ui| {
-                ui.label(RichText::new("").small());
-                ui.label(RichText::new(locale.text("App", "App")).color(MUTED).small());
-                ui.label(RichText::new("PIDs").color(MUTED).small());
-                ui.label(RichText::new("RAM").color(MUTED).small());
-                ui.label(RichText::new("CPU").color(MUTED).small());
-                ui.label(RichText::new(locale.text("Estado", "State")).color(MUTED).small());
-                ui.end_row();
-                for r in &rows {
-                    let mut on = self.selected.get(&r.key).copied().unwrap_or(false);
-                    if ui.add_enabled(!r.locked && !r.zombie, egui::Checkbox::without_text(&mut on)).changed() {
-                        self.selected.insert(r.key.clone(), on);
-                    }
-                    ui.label(&r.label);
-                    ui.label(format!("{}", r.pids.len()));
-                    ui.label(fmt_bytes_short(r.ram));
-                    ui.label(if r.cpu >= 0.05 { format!("{:.1}%", r.cpu) } else { "–".into() });
-                    ui.horizontal(|ui| {
-                        let (text, color) = if r.locked {
-                            (locale.text("protegido", "protected"), MUTED)
-                        } else if r.zombie {
-                            ("zombie", Color32::from_rgb(230, 120, 120))
-                        } else if r.leftover.is_some() {
-                            (locale.text("sobra", "leftover"), Color32::from_rgb(230, 170, 90))
-                        } else if r.focused {
-                            (locale.text("em foco", "focused"), Color32::from_rgb(120, 200, 140))
-                        } else if r.has_window {
-                            (locale.text("janela", "window"), Color32::from_rgb(120, 200, 140))
-                        } else {
-                            (locale.text("fundo", "background"), MUTED)
-                        };
-                        let l = crate::kit::badge(ui, text, color);
-                        if let Some(why) = r.leftover {
-                            l.on_hover_text(why);
-                        }
-                        if r.zombie {
-                            match &r.parent {
-                                Some((ppid, pname)) => {
-                                    if ui.small_button(format!("{} · {pname} ({ppid})", locale.text("encerrar pai", "terminate parent"))).on_hover_text(locale.text("Zombie não morre com sinal: já está morto. Some quando o pai recolhe o estado ou quando o pai cai.", "A zombie does not die from a signal: it is already dead. It disappears when the parent reaps it or exits.")).clicked() {
-                                        out.push(CleanOut::Kill(vec![*ppid]));
-                                    }
-                                }
-                                None => {
-                                    ui.label(RichText::new(locale.text("pai protegido", "parent protected")).color(MUTED).small());
-                                }
+            for z in &zombies {
+                ui.horizontal(|ui| {
+                    ui.label(format!("{} ({})", z.name, z.pid));
+                    match &z.parent {
+                        Some((ppid, pname)) => {
+                            if ui.small_button(format!("{} · {pname} ({ppid})", locale.text("encerrar pai", "terminate parent"))).on_hover_text(locale.text("Zombie não morre com sinal: já está morto. Some quando o pai recolhe o estado ou quando o pai cai.", "A zombie does not die from a signal: it is already dead. It disappears when the parent reaps it or exits.")).clicked() {
+                                out.push(CleanOut::Kill(vec![*ppid]));
                             }
-                        } else if !r.locked && ui.small_button("✖").on_hover_text(locale.text("Encerrar agora", "Terminate now")).clicked() {
-                            out.push(CleanOut::Kill(r.pids.clone()));
                         }
-                    });
-                    ui.end_row();
-                }
-            });
+                        None => {
+                            ui.label(RichText::new(locale.text("pai protegido", "parent protected")).color(MUTED).small());
+                        }
+                    }
+                });
+            }
         });
     }
 

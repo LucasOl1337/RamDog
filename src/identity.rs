@@ -461,6 +461,11 @@ fn exe_key(exe: &str, name: &str) -> String {
     }
 }
 
+/// O processo é o próprio CLI de um agente (claude, codex…), não algo que um agente abriu.
+pub fn is_agent_cli(p: &crate::procs::ProcInfo) -> bool {
+    family_from_basename(&basename(&p.exe_path, &p.name)).is_some()
+}
+
 fn basename(exe: &str, name: &str) -> String {
     Path::new(exe)
         .file_name()

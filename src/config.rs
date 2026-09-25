@@ -338,11 +338,13 @@ pub enum ViewMode {
     Thermal,
     Screens,
     Clean,
+    Sweep,
 }
 
 impl ViewMode {
     pub const CORE: [ViewMode; 3] = [ViewMode::List, ViewMode::Tree, ViewMode::Category];
-    pub const ADDONS: [ViewMode; 5] = [
+    pub const ADDONS: [ViewMode; 6] = [
+        ViewMode::Sweep,
         ViewMode::Boot,
         ViewMode::Drains,
         ViewMode::Thermal,
@@ -369,6 +371,7 @@ impl ViewMode {
                 | ViewMode::Thermal
                 | ViewMode::Screens
                 | ViewMode::Clean
+                | ViewMode::Sweep
         )
     }
 
@@ -386,6 +389,7 @@ impl ViewMode {
             ViewMode::Thermal => locale.text("Térmico", "Thermal"),
             ViewMode::Screens => locale.text("Telas", "Screens"),
             ViewMode::Clean => locale.text("Limpeza", "Cleanup"),
+            ViewMode::Sweep => locale.text("Faxina", "Sweep"),
         }
     }
 
@@ -398,6 +402,7 @@ impl ViewMode {
             ViewMode::Thermal => "♨",
             ViewMode::Screens => "▦",
             ViewMode::Clean => "♻",
+            ViewMode::Sweep => "✔",
             _ => "",
         }
     }
@@ -425,8 +430,12 @@ impl ViewMode {
                 "Monitors, windows, and scenes: drag windows on the map, snap them to a grid, and open apps in position",
             ),
             ViewMode::Clean => locale.text(
-                "RAM e disco: sobras, zombies e apps parados em segundo plano para encerrar; caches, lixeira, pacman, journal e coredumps para apagar",
-                "RAM and disk: terminate leftovers, zombies, and idle background apps; remove caches, trash, pacman data, journals, and coredumps",
+                "RAM e disco: cache do kernel e zombies; caches, lixeira, pacman, journal e coredumps para apagar",
+                "RAM and disk: kernel cache and zombies; remove caches, trash, pacman data, journals, and coredumps",
+            ),
+            ViewMode::Sweep => locale.text(
+                "O que está aberto sem uso, já separado em pode fechar, talvez e em uso: marque em massa, desmarque o que fica e feche tudo de uma vez",
+                "What is open but unused, sorted into can close, maybe, and in use: select in bulk, uncheck what stays, and close it all at once",
             ),
         }
     }

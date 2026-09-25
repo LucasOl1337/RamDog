@@ -24,6 +24,7 @@ use crate::procs::{self, KernelMem, MemStatus, ProcInfo};
 use crate::sampler::{self, SamplerHandle};
 use crate::screens::{ScreenOut, Screens};
 use crate::signature::{self, SigInfo};
+use crate::sweep::{Sweep, SweepOut};
 use crate::usage;
 
 const MB: u64 = 1024 * 1024;
@@ -281,6 +282,7 @@ pub struct App {
     boot: Boot,
     screens: Screens,
     clean: Clean,
+    sweep: Sweep,
     /// Última visão de processo (Lista/Árvore/Categorias) antes de entrar num addon.
     /// Clicar de novo no addon aceso volta para ela, em vez de cair sempre em Lista.
     last_core: ViewMode,
@@ -382,6 +384,7 @@ impl App {
             boot: Boot::new(),
             screens: Screens::new(),
             clean: Clean::new(),
+            sweep: Sweep::new(),
             last_core,
             thermal_edit: HashMap::new(),
             stab_pending: None,
@@ -464,6 +467,22 @@ impl App {
         }
         self.refresh_services();
         self.rebuild_indexes();
+        {
+            let metric = self.cfg.mem_metric;
+            let locked = &self.cfg.locked;
+            let me = std::process::id();
+            let cats = &self.cats;
+            self.sweep.observe(
+                &self.procs,
+                &|p| Self::metric_of(metric, p),
+                &|p| {
+                    is_critical(&p.name_lower, p.pid)
+                        || locked.contains(&p.name_lower)
+                        || p.pid == me
+                },
+                &|pid| cats.get(&pid).copied().unwrap_or(Category::Other),
+            );
+        }
         self.row_cache.snapshot_changed();
         self.derived_dirty = true;
         if let Some(pid) = self.selected {
@@ -1219,7 +1238,8 @@ impl App {
             | ViewMode::Thermal
             | ViewMode::Boot
             | ViewMode::Screens
-            | ViewMode::Clean => {
+            | ViewMode::Clean
+            | ViewMode::Sweep => {
                 let list = self.cfg.view == ViewMode::List;
                 // Os addons não desenham esta tabela; nas outras as linhas de sistema
                 // ficam no topo, onde o usuário procura "quem está comendo a RAM".
@@ -3012,6 +3032,21 @@ impl App {
                                 .collect();
                             self.request_kill_many(&pids)
                         }
+                    }
+                }
+            }
+            ViewMode::Sweep => {
+                for ev in self.sweep.ui(ui, self.cfg.locale) {
+                    match ev {
+                        SweepOut::Kill(pids) => {
+                            // A classificação é da última amostra; confere o lock de novo.
+                            let pids: Vec<u32> = pids
+                                .into_iter()
+                                .filter(|pid| self.proc(*pid).is_some_and(|p| !self.is_locked(p)))
+                                .collect();
+                            self.request_kill_many(&pids)
+                        }
+                        SweepOut::Toast(m) => self.toast(m, false),
                     }
                 }
             }
@@ -5040,6 +5075,7 @@ impl eframe::App for App {
                 ViewMode::Screens,
                 ViewMode::Thermal,
                 ViewMode::Clean,
+                ViewMode::Sweep,
             ];
             self.cfg.view = views[step % views.len()];
             self.cfg.mini = step % 10 == 8;
@@ -5219,6 +5255,7 @@ enum Icon {
     Thermo,
     Display,
     Broom,
+    Check,
     Gear,
 }
 
@@ -5233,6 +5270,7 @@ impl Icon {
             ViewMode::Thermal => Icon::Thermo,
             ViewMode::Screens => Icon::Display,
             ViewMode::Clean => Icon::Broom,
+            ViewMode::Sweep => Icon::Check,
         }
     }
 }
@@ -5313,6 +5351,19 @@ fn paint_icon(p: &egui::Painter, c: egui::Pos2, color: Color32, icon: Icon) {
             p.line_segment([pos2(x - 2.5, y - 3.0), pos2(x - 2.5, y - 6.5)], s);
             p.line_segment([pos2(x + 2.5, y - 3.0), pos2(x + 2.5, y - 6.5)], s);
             p.line_segment([pos2(x - 2.5, y - 6.5), pos2(x + 2.5, y - 6.5)], s);
+        }
+        Icon::Check => {
+            // Lista com itens marcados: o que a Faxina faz.
+            for (i, dy) in [-5.0_f32, 0.0, 5.0].into_iter().enumerate() {
+                let bx = x - 5.5;
+                if i < 2 {
+                    p.line_segment([pos2(bx - 1.5, y + dy), pos2(bx, y + dy + 1.5)], s);
+                    p.line_segment([pos2(bx, y + dy + 1.5), pos2(bx + 2.5, y + dy - 1.5)], s);
+                } else {
+                    p.circle_stroke(pos2(bx + 0.5, y + dy), 1.5, s);
+                }
+                p.line_segment([pos2(x - 1.0, y + dy), pos2(x + 7.0, y + dy)], s);
+            }
         }
         Icon::Gear => {
             p.circle_stroke(pos2(x, y), 4.5, s);
@@ -6752,7 +6803,7 @@ fn pt_num(v: f64, decimals: usize) -> String {
     out
 }
 
-fn fmt_age(secs: u64) -> String {
+pub fn fmt_age(secs: u64) -> String {
     if secs < 60 {
         format!("{secs}s")
     } else if secs < 3600 {

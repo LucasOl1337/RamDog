@@ -53,6 +53,7 @@ mod screens;
 mod signature;
 #[cfg(target_os = "linux")]
 mod startup_linux;
+mod sweep;
 #[cfg(windows)]
 mod sys;
 mod usage;
