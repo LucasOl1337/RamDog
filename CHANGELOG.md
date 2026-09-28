@@ -2,6 +2,27 @@
 
 As mudanças são registradas por versão. As notas descrevem funcionalidades disponíveis e suas limitações; testes de hardware não equivalem a cobertura de todos os drivers e desktops.
 
+## [0.14.0] - 2026-09-28
+
+Brave, Claude e qualquer app de vários processos viram uma linha só, com a RAM somada sem contar duas vezes o que eles dividem.
+
+Patch notes: [v0.14.0](docs/releases/v0.14.0.md).
+
+### Adicionado
+
+- **Agrupar por app** também na visão Categorias: dentro de cada categoria, o app aparece numa linha com seus processos, que abre com ▶.
+- O rodapé **Maiores agora** soma por app ("brave ×18 1,81 GB") em vez de listar PIDs soltos.
+
+### Melhorado
+
+- Configurações existentes passam a abrir com **Agrupar por app** ligado e, no Linux, com a coluna RAM em **PSS**. A migração roda uma vez; Privado e Commit escolhidos antes ficam como estavam.
+- No Linux, o padrão da coluna RAM passou de RSS para PSS. Um navegador com 18 processos somava 3,6 GB em RSS para 1,8 GB reais; em PSS a soma do grupo, das categorias e dos chips do topo bate com o que o app ocupa.
+- Processo de interpretador que se renomeia com o nome de um agente (o gateway do Hermes é `python3.11` chamado `hermes`) entra no grupo desse agente.
+
+### Corrigido
+
+- A tabela podia abrir vazia quando o RamDog iniciava com o ponteiro em cima dela, e só aparecia quando o mouse saía.
+
 ## [0.13.0] - 2026-09-25
 
 A nova aba Faxina aponta o que está aberto sem uso e fecha de uma vez tudo que você marcar. O controle de ventoinhas deixa a bomba e os headers vazios com a BIOS.
