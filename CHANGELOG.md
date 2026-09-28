@@ -4,6 +4,10 @@ As mudanças são registradas por versão. As notas descrevem funcionalidades di
 
 ## [Não lançado]
 
+### Corrigido
+
+- **Lista completa ↗** no Gerenciador deixava um processo zumbi por clique até a janela fechar.
+
 ## [0.15.0] - 2026-09-28
 
 Modo **Gerenciador**: uma janela enxuta, no estilo do gerenciador de tarefas, que responde "o que está aberto e quanto pesa" e fecha o app do jeito educado.

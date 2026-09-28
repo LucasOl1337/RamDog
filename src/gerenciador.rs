@@ -1636,7 +1636,12 @@ fn open_full(pid: Option<u32>) -> Result<(), String> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .map(|_| ())
+        .map(|mut child| {
+            // O launcher sai logo; sem esperar por ele sobra um zumbi até o Gerenciador fechar.
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        })
         .map_err(|e| e.to_string())
 }
 
