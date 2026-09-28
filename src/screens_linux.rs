@@ -147,6 +147,7 @@ fn lua_dispatch_for(action: &str, arg: &str, locale: Locale) -> Result<String, S
     };
     Ok(match action {
         "focuswindow" => format!("hl.dsp.focus({{window={}}})", window(arg)?),
+        "closewindow" => format!("hl.dsp.window.close({{window={}}})", window(arg)?),
         "setfloating" | "settiled" => format!(
             "hl.dsp.window.float({{window={},action=\"{}\"}})",
             window(arg)?,
@@ -197,6 +198,16 @@ fn lua_dispatch_for(action: &str, arg: &str, locale: Locale) -> Result<String, S
                 .into())
         }
     })
+}
+
+/// Traz a janela para frente (troca de workspace se precisar). Usado pelo Gerenciador.
+pub fn focus_window(address: &str, locale: Locale) -> Result<(), String> {
+    dispatch_for("focuswindow", &selector_for(address, locale)?, locale)
+}
+
+/// Pede para a janela fechar, como o Super+W: o app pode perguntar se salva antes.
+pub fn close_window(address: &str, locale: Locale) -> Result<(), String> {
+    dispatch_for("closewindow", &selector_for(address, locale)?, locale)
 }
 
 pub fn place(address: &str, monitor: &Monitor, rect: egui::Rect) -> Result<(), String> {
@@ -751,6 +762,15 @@ impl Screens {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lua_close_dispatch_targets_one_window() {
+        assert_eq!(
+            lua_dispatch("closewindow", "address:0x123abc").unwrap(),
+            "hl.dsp.window.close({window=\"address:0x123abc\"})"
+        );
+        assert!(lua_dispatch("closewindow", "address:0xzz").is_err());
+    }
+
     #[test]
     fn lua_float_dispatch_uses_supported_idempotent_actions() {
         // Hyprland's float parser treats unsupported actions as toggle.

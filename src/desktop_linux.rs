@@ -10,11 +10,30 @@ pub struct WindowInfo {
     pub mapped: bool,
 }
 
+/// Uma janela com o endereço do compositor, para o Gerenciador focar e fechar.
+#[derive(Clone, Debug, Default)]
+pub struct ClientWindow {
+    pub address: String,
+    pub pid: u32,
+    pub title: String,
+    pub class: String,
+    pub focused: bool,
+}
+
 #[derive(Clone, Default)]
 struct Desktop {
     windows: Option<HashSet<u32>>,
     focused: Option<u32>,
     by_pid: HashMap<u32, WindowInfo>,
+    clients: Vec<ClientWindow>,
+}
+
+/// Intervalo da leitura do `hyprctl`. A lista completa vive bem com 2 s; o Gerenciador
+/// baixa para 1 s, senão a linha de um app fechado demora a sumir.
+static POLL_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(2000);
+
+pub fn set_poll_ms(ms: u64) {
+    POLL_MS.store(ms.max(250), std::sync::atomic::Ordering::Relaxed);
 }
 fn desktop() -> Desktop {
     static CACHE: OnceLock<Arc<Mutex<Desktop>>> = OnceLock::new();
@@ -25,7 +44,14 @@ fn desktop() -> Desktop {
             let parsed = crate::linux::command("hyprctl", &["-j", "clients"])
                 .ok()
                 .and_then(|s| serde_json::from_str::<Vec<serde_json::Value>>(&s).ok());
+            let focused_window = crate::linux::command("hyprctl", &["-j", "activewindow"])
+                .ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+            let focused_address = focused_window
+                .as_ref()
+                .and_then(|w| w["address"].as_str().map(str::to_owned));
             let mut by_pid = HashMap::new();
+            let mut clients = Vec::new();
             let windows = parsed.as_ref().map(|v| {
                 let mut set = HashSet::new();
                 for w in v {
@@ -40,6 +66,14 @@ fn desktop() -> Desktop {
                     };
                     if mapped {
                         set.insert(pid);
+                        let address = w["address"].as_str().unwrap_or("").to_string();
+                        clients.push(ClientWindow {
+                            focused: focused_address.as_deref() == Some(address.as_str()),
+                            address,
+                            pid,
+                            title: info.title.clone(),
+                            class: info.class.clone(),
+                        });
                     }
                     let richer = !info.title.is_empty() || !info.class.is_empty();
                     by_pid
@@ -53,18 +87,20 @@ fn desktop() -> Desktop {
                 }
                 set
             });
-            let focused = crate::linux::command("hyprctl", &["-j", "activewindow"])
-                .ok()
-                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            let focused = focused_window
+                .as_ref()
                 .and_then(|w| w["pid"].as_u64().map(|n| n as u32));
             if let Ok(mut d) = target.lock() {
                 *d = Desktop {
                     windows,
                     focused,
                     by_pid,
+                    clients,
                 };
             }
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            std::thread::sleep(std::time::Duration::from_millis(
+                POLL_MS.load(std::sync::atomic::Ordering::Relaxed),
+            ));
         });
         cache
     });
@@ -78,6 +114,94 @@ pub fn focused_pid() -> Option<u32> {
 }
 pub fn windows_by_pid() -> HashMap<u32, WindowInfo> {
     desktop().by_pid
+}
+/// Janelas mapeadas, na ordem do compositor, com endereço.
+pub fn clients() -> Vec<ClientWindow> {
+    desktop().clients
+}
+fn name_index() -> &'static (HashMap<String, (u8, String)>, HashMap<String, String>) {
+    static INDEX: OnceLock<(HashMap<String, (u8, String)>, HashMap<String, String>)> =
+        OnceLock::new();
+    INDEX.get_or_init(|| {
+        // Por programa (mesma regra de desempate dos ícones) e por classe de janela
+        // (`StartupWMClass` ou o nome do arquivo `.desktop`).
+        let mut by_program: HashMap<String, (u8, String)> = HashMap::new();
+        let mut by_class: HashMap<String, String> = HashMap::new();
+        for dir in data_dirs().into_iter().rev() {
+            let Ok(entries) = std::fs::read_dir(dir.join("applications")) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                let Ok(text) = std::fs::read_to_string(e.path()) else {
+                    continue;
+                };
+                let fields = crate::startup_linux::desktop_fields(&text);
+                let Some(name) = fields.get("Name").filter(|n| !n.is_empty()) else {
+                    continue;
+                };
+                if fields.get("NoDisplay").is_some_and(|v| v == "true")
+                    && fields.get("StartupWMClass").is_none()
+                {
+                    continue;
+                }
+                let stem = e
+                    .path()
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_lowercase();
+                by_class.insert(stem.clone(), name.clone());
+                if let Some(class) = fields.get("StartupWMClass") {
+                    by_class.insert(class.to_lowercase(), name.clone());
+                }
+                let Some(exec) = fields.get("Exec") else {
+                    continue;
+                };
+                let Ok(words) = crate::linux::words(exec) else {
+                    continue;
+                };
+                let Some(program) = words
+                    .iter()
+                    .find(|s| s.as_str() != "env" && !s.contains('=') && !s.starts_with('-'))
+                else {
+                    continue;
+                };
+                let program = Path::new(program)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
+                let rank = if stem == program.to_lowercase() {
+                    3
+                } else if words.iter().any(|w| w.contains("://")) {
+                    1
+                } else {
+                    2
+                };
+                let slot = by_program.entry(program).or_insert((0, String::new()));
+                if rank > slot.0 {
+                    *slot = (rank, name.clone());
+                }
+            }
+        }
+        (by_program, by_class)
+    })
+}
+/// Nome do app como o menu mostra: pela classe da janela e, sem ela, pelo executável.
+pub fn app_name(exe_path: &str, class: &str) -> Option<String> {
+    let (by_program, by_class) = name_index();
+    if !class.is_empty() {
+        let c = class.to_lowercase();
+        if let Some(n) = by_class.get(&c) {
+            return Some(n.clone());
+        }
+        // `io.github.lol.Sonora` → `sonora`
+        if let Some(n) = c.rsplit('.').next().and_then(|tail| by_class.get(tail)) {
+            return Some(n.clone());
+        }
+    }
+    let program = Path::new(exe_path).file_name()?.to_string_lossy();
+    by_program.get(program.as_ref()).map(|(_, n)| n.clone())
 }
 fn data_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![std::env::var_os("XDG_DATA_HOME")

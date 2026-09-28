@@ -1,14 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 binary="${RAMDOG_BINARY:-$(dirname -- "$(readlink -f -- "$0")")/ramdog}"
+unit=ramdog
+class=ramdog
+if [[ "${1:-}" == "--gerenciador" ]]; then
+  # O Gerenciador é uma janela própria (Super+Alt+Delete), ao lado da principal.
+  unit=ramdog-gerenciador
+  class=ramdog-gerenciador
+fi
+
+focus_existing() {
+  command -v hyprctl >/dev/null || return 0
+  local address=""
+  if command -v jq >/dev/null; then
+    address="$(hyprctl -j clients 2>/dev/null | jq -r --arg c "$class" '[.[] | select(.class == $c)][0].address // empty' 2>/dev/null || true)"
+  fi
+  if [[ -n "$address" ]]; then
+    hyprctl eval "hl.dispatch(hl.dsp.focus({window=\"address:$address\"}))" >/dev/null 2>&1 \
+      || hyprctl dispatch focuswindow "address:$address" >/dev/null 2>&1 || true
+  else
+    hyprctl dispatch focuswindow "class:^${class}\$" >/dev/null 2>&1 || true
+  fi
+}
+
 if ! command -v systemd-run >/dev/null || ! systemctl --user show-environment >/dev/null 2>&1; then
   exec "$binary" "$@"
 fi
-if systemctl --user is-active --quiet ramdog.service; then
-  if command -v hyprctl >/dev/null; then
-    hyprctl eval 'local w=hl.get_windows({class="ramdog"})[1]; if w then hl.dispatch(hl.dsp.focus({window=w})) end' >/dev/null 2>&1 || hyprctl dispatch focuswindow 'class:^ramdog$' >/dev/null 2>&1 || true
-  fi
+if systemctl --user is-active --quiet "$unit.service"; then
+  focus_existing
   exit 0
 fi
-systemctl --user reset-failed ramdog.service >/dev/null 2>&1 || true
-exec systemd-run --user --unit=ramdog --collect --setenv=RUST_BACKTRACE=1 -- "$binary" "$@"
+systemctl --user reset-failed "$unit.service" >/dev/null 2>&1 || true
+exec systemd-run --user --unit="$unit" --collect --setenv=RUST_BACKTRACE=1 -- "$binary" "$@"

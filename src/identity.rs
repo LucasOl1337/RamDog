@@ -104,6 +104,22 @@ pub fn of(p: &crate::procs::ProcInfo) -> Identity {
     })
 }
 
+/// Como `of`, mas sem o agente herdado pelo ambiente: o que o processo é por si.
+/// O Gerenciador usa para quem já saiu da árvore do agente que o abriu.
+pub fn of_own(p: &crate::procs::ProcInfo) -> Identity {
+    resolve(Facts {
+        name: &p.name,
+        exe_path: &p.exe_path,
+        cmdline: &p.cmdline,
+        init_cwd: p.launcher.init_cwd.as_deref(),
+        agent: None,
+        steam_app_id: p.launcher.steam_app_id,
+        wine_prefix: p.launcher.wine_prefix.as_deref(),
+        window_title: p.window_title.as_deref(),
+        window_class: p.window_class.as_deref(),
+    })
+}
+
 pub fn resolve(facts: Facts<'_>) -> Identity {
     // O cliente Steam relançado por um atalho carrega `steam://rungameid/2357570` na linha de
     // comando e fica horas vivo depois do jogo fechar. Não é o jogo: é a Steam.
@@ -300,7 +316,11 @@ pub fn windows_exe_from_cmdline(cmdline: &str) -> Option<&str> {
 
 pub fn qemu_avd(cmdline: &str) -> Option<&str> {
     let rest = find_ci(cmdline, "-avd ")?;
-    let name = rest.split_whitespace().next()?;
+    // `bash -c "emulator -avd atlas"` deixa a aspa grudada no nome.
+    let name = rest
+        .split_whitespace()
+        .next()?
+        .trim_matches(|c| c == '"' || c == '\'');
     if name.is_empty() {
         None
     } else {
@@ -777,6 +797,10 @@ mod tests {
         ));
         assert_eq!(id.key, "qemu:sfr-portfolio");
         assert_eq!(id.label, "Emulador Android (sfr-portfolio)");
+        assert_eq!(
+            qemu_avd("bash -c \"emulator -avd atlas-k1100\""),
+            Some("atlas-k1100")
+        );
     }
 
     #[test]

@@ -117,6 +117,18 @@ esac
         args = (self.base / 'launched').read_text().splitlines()
         self.assertEqual(args[-3:], [str(self.dest / 'ramdog'), '--example', 'two words'])
 
+    def test_launcher_runs_gerenciador_in_its_own_unit(self):
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.mock('systemctl', '''case "$*" in *is-active*ramdog-gerenciador*) exit 3;; *is-active*) exit 0;; *) exit 0;; esac''')
+        self.mock('systemd-run', '''printf '%s\\n' "$@" > "$RAMDOG_TEST_MARKER"''')
+        result = subprocess.run([str(self.dest / 'ramdog-launch'), '--gerenciador'],
+                                env=self.env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = (self.base / 'launched').read_text().splitlines()
+        self.assertIn('--unit=ramdog-gerenciador', args)
+        self.assertEqual(args[-2:], [str(self.dest / 'ramdog'), '--gerenciador'])
+
     def test_source_fallback_installs_launcher_without_opening(self):
         self.mock('curl', 'exit 22')
         self.mock('git', '''for arg do destination="$arg"; done

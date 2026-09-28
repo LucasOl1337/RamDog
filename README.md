@@ -102,6 +102,19 @@ With the classic config, in `~/.config/hypr/bindings.conf`:
 bindd = SUPER SHIFT, R, RamDog, exec, ramdog-launch
 ```
 
+### Task manager mode
+
+`ramdog-launch --gerenciador` opens a compact task-manager window next to the full app: open apps first, then background, then system (collapsed). Each row is one app with its processes summed, CPU and RAM in PSS, in your Omarchy theme colors. A terminal running an AI agent shows up as the agent and its project ("Claude · RamDog"), not as "foot". **Close** asks the window to close (or sends SIGTERM when there is no window); if the app is still there after 5 seconds, **Force quit…** kills the group after a confirmation. Protected processes are never touched. **Full list ↗** opens the main RamDog with that process selected.
+
+It is a good fit for Omarchy's task manager key:
+
+```lua
+o.bind("SUPER + ALT + DELETE", "RamDog task manager", "ramdog-launch --gerenciador")
+o.window({ class = "^ramdog-gerenciador$" }, { float = true, center = true, size = { 880, 580 } })
+```
+
+Keys: type to search, ↑/↓ to pick, Enter to show the app, Delete to close, Shift+Delete to force quit, Esc to leave.
+
 Other Linux desktops get everything except Screens, which needs Hyprland. Details, dependencies and limits are in the [Linux guide](linux/README.md).
 
 ## A tour

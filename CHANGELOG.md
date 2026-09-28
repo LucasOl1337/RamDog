@@ -4,8 +4,19 @@ As mudanças são registradas por versão. As notas descrevem funcionalidades di
 
 ## [Não lançado]
 
+## [0.15.0] - 2026-09-28
+
+Modo **Gerenciador**: uma janela enxuta, no estilo do gerenciador de tarefas, que responde "o que está aberto e quanto pesa" e fecha o app do jeito educado.
+
+Patch notes: [v0.15.0](docs/releases/v0.15.0.md).
+
 ### Adicionado
 
+- **Gerenciador** (`ramdog --gerenciador`, ou `ramdog-launch --gerenciador`): janela flutuante própria, classe `ramdog-gerenciador`, com Apps, Segundo plano e Sistema (recolhido). Cada linha é um app com a soma dos processos, CPU e RAM em PSS; as cores vêm do tema do Omarchy.
+- No Gerenciador, o terminal onde roda um agente aparece com o nome do agente e o projeto ("Claude · RamDog"), não como "foot". Agentes sem janela ficam em Segundo plano com a contagem de sessões.
+- **Fechar** pede para a janela fechar (`closewindow` no Hyprland) ou manda SIGTERM a quem não tem janela. Se o app não sair em 5 segundos, a linha avisa e **Forçar…** mata o grupo depois de uma confirmação. Processos protegidos ficam de fora nos dois casos.
+- **Lista completa ↗** abre o RamDog principal com o processo já selecionado e o grupo aberto.
+- `ramdog-launch --gerenciador` roda o Gerenciador na unidade `ramdog-gerenciador.service`; chamar de novo foca a janela aberta. Exemplo de atalho e regra de janela para o Hyprland no README.
 - README principal em inglês, com guia de instalação, integração com o Omarchy (atalho no Hyprland), passeio pelas visões e explicação do PSS. O português ficou em `README.pt-BR.md`.
 - `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, formulários de issue (bug, hardware, ideia) e template de PR.
 - Pacote Arch em `packaging/aur/ramdog-bin`, montado a partir dos binários da release.
@@ -16,6 +27,10 @@ As mudanças são registradas por versão. As notas descrevem funcionalidades di
 - Instalação nova abre no idioma do sistema (português ou inglês). Configurações existentes mantêm o idioma escolhido.
 - Em inglês, números usam ponto decimal (15.8 GB), sensores de GPU, origem "desktop (browser)" e "project" saem traduzidos, e os botões do modo mini usam glifos que existem na fonte.
 - O aviso de carga compara com os núcleos da máquina, não com os permitidos ao RamDog (dentro de um cgroup limitado aparecia "1 núcleo").
+
+### Corrigido
+
+- Emulador Android aberto por `bash -c "emulator -avd atlas"` ficava com aspas no nome do AVD.
 
 ## [0.14.0] - 2026-09-28
 

@@ -500,11 +500,40 @@ impl App {
         }
         self.row_cache.snapshot_changed();
         self.derived_dirty = true;
+        self.take_select_request();
         if let Some(pid) = self.selected {
             if let Some(&i) = self.by_pid.get(&pid) {
                 self.selected_keep = Some((self.procs[i].clone(), self.cat(pid)));
             }
         }
+    }
+
+    /// O Gerenciador pede "abre a lista completa neste PID" deixando o número num arquivo
+    /// em `$XDG_RUNTIME_DIR/ramdog/select`. Lido uma vez por amostra e apagado em seguida.
+    fn take_select_request(&mut self) {
+        let path = crate::gerenciador::select_request_path();
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let _ = std::fs::remove_file(&path);
+        let Ok(pid) = text.trim().parse::<u32>() else {
+            return;
+        };
+        let Some(p) = self.proc(pid) else { return };
+        let key = categories::group_key(p);
+        if self.cfg.mini {
+            self.set_mini(false);
+        }
+        if self.cfg.view.is_addon() || self.cfg.view == ViewMode::Tree {
+            self.cfg.view = ViewMode::List;
+            self.cfg_dirty = true;
+        }
+        self.search.clear();
+        self.cat_enabled = Category::ALL.iter().copied().collect();
+        self.expanded_apps.insert(key);
+        self.selected = Some(pid);
+        self.scroll_to_selected = true;
+        self.row_cache.invalidate();
     }
 
     fn rebuild_indexes(&mut self) {
@@ -6534,7 +6563,7 @@ impl CpuSplit {
 
 // ---------- util ----------
 
-fn setup_fonts(ctx: &egui::Context) {
+pub(crate) fn setup_fonts(ctx: &egui::Context) {
     use egui::{FontData, FontDefinitions, FontFamily};
     let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into());
     let fonts_dir = format!("{windir}\\Fonts\\");
@@ -6871,6 +6900,10 @@ static ENGLISH_NUMBERS: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 
 pub(crate) fn set_number_locale(locale: Locale) {
     ENGLISH_NUMBERS.store(locale == Locale::English, Ordering::Relaxed);
+}
+
+pub(crate) fn english_numbers() -> bool {
+    ENGLISH_NUMBERS.load(Ordering::Relaxed)
 }
 
 /// Formata número no padrão do idioma: pt-BR (1.234,5) ou inglês (1,234.5).

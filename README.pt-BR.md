@@ -85,6 +85,19 @@ Na config clássica, em `~/.config/hypr/bindings.conf`:
 bindd = SUPER SHIFT, R, RamDog, exec, ramdog-launch
 ```
 
+### Modo Gerenciador
+
+`ramdog-launch --gerenciador` abre uma janela enxuta de gerenciador de tarefas, ao lado do app completo: primeiro os apps abertos, depois o segundo plano e o sistema (recolhido). Cada linha é um app com os processos somados, CPU e RAM em PSS, nas cores do tema do Omarchy. Terminal rodando agente de IA aparece como o agente e o projeto ("Claude · RamDog"), não como "foot". **Fechar** pede pra janela fechar (ou manda SIGTERM quando não tem janela); se o app continuar lá depois de 5 segundos, **Forçar…** mata o grupo depois de uma confirmação. Processo protegido nunca é tocado. **Lista completa ↗** abre o RamDog principal com o processo selecionado.
+
+Cai bem no atalho do gerenciador de tarefas do Omarchy:
+
+```lua
+o.bind("SUPER + ALT + DELETE", "RamDog Gerenciador", "ramdog-launch --gerenciador")
+o.window({ class = "^ramdog-gerenciador$" }, { float = true, center = true, size = { 880, 580 } })
+```
+
+Teclas: digite pra buscar, ↑/↓ pra escolher, Enter mostra o app, Delete fecha, Shift+Delete força, Esc sai.
+
 ## Um passeio
 
 | | |

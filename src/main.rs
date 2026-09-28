@@ -29,6 +29,7 @@ mod drains;
 mod drains;
 #[cfg(target_os = "linux")]
 mod fans_linux;
+mod gerenciador;
 #[cfg(target_os = "linux")]
 mod gpu_linux;
 mod hwtemp;
@@ -120,6 +121,9 @@ fn run() -> eframe::Result<()> {
             })
         );
         return Ok(());
+    }
+    if gerenciador::wanted() {
+        return gerenciador::run();
     }
     procs::enable_debug_privilege();
     // A janela já nasce no modo em que o app foi fechado. Abrir grande e encolher no
