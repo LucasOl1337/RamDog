@@ -26,6 +26,7 @@ class InstallerTests(unittest.TestCase):
             info.size, info.mode = len(data), 0o755
             archive.addfile(info, io.BytesIO(data))
             archive.add(ROOT / 'linux/ramdog-launch', arcname='./ramdog-launch')
+            archive.add(ROOT / 'assets/ramdog-256.png', arcname='./ramdog.png')
         digest = hashlib.sha256(self.package.read_bytes()).hexdigest()
         self.checksums = self.base / 'SHA256SUMS.txt'
         self.checksums.write_text(f'{digest}  RamDog-linux-x86_64.tar.gz\n')
@@ -34,7 +35,8 @@ class InstallerTests(unittest.TestCase):
                         RAMDOG_NO_LAUNCH='1', RAMDOG_TEST_PACKAGE=str(self.package),
                         RAMDOG_TEST_CHECKSUMS=str(self.checksums),
                         RAMDOG_TEST_MARKER=str(self.base / 'launched'),
-                        RAMDOG_TEST_URLS=str(self.base / 'urls'))
+                        RAMDOG_TEST_URLS=str(self.base / 'urls'),
+                        XDG_DATA_HOME=str(self.base / 'data'))
         self.mock('uname', 'case "$1" in -s) echo Linux;; -m) echo x86_64;; esac')
         self.mock('curl', '''
 while [ "$#" -gt 0 ]; do
@@ -69,6 +71,22 @@ esac
         self.assertTrue(os.access(self.dest / 'ramdog-launch', os.X_OK))
         self.assertFalse((self.base / 'launched').exists())
         self.assertIn('/download/v0.9.0/', (self.base / 'urls').read_text())
+
+    def test_desktop_entry_points_to_launcher_and_packaged_icon(self):
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        entry = (self.base / 'data/applications/ramdog.desktop').read_text()
+        self.assertIn(f'Exec="{self.dest}/ramdog-launch"', entry)
+        self.assertIn('Icon=ramdog', entry)
+        self.assertIn('StartupWMClass=ramdog', entry)
+        icon = self.base / 'data/icons/hicolor/256x256/apps/ramdog.png'
+        self.assertEqual(icon.read_bytes(), (ROOT / 'assets/ramdog-256.png').read_bytes())
+
+    def test_no_desktop_opt_out_skips_launcher_entry(self):
+        self.env['RAMDOG_NO_DESKTOP'] = '1'
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.base / 'data/applications').exists())
 
     def test_corrupt_checksum_preserves_existing_binary(self):
         self.dest.mkdir()

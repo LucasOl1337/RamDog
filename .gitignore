@@ -13,3 +13,8 @@ hwtemp/pub/
 # Diagnósticos locais podem conter dados da sessão e caminhos pessoais.
 /diagnostico-linux.md
 /linux/validation/
+packaging/aur/*/src/
+packaging/aur/*/pkg/
+packaging/aur/*/*.pkg.tar.*
+packaging/aur/*/*.tar.gz
+packaging/aur/*/*.png

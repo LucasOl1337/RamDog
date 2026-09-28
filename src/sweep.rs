@@ -990,12 +990,13 @@ impl Sweep {
                                 .truncate(),
                             );
                         });
+                        let base = crate::app::launcher_label(r.detail.clone(), locale);
                         let detail = match (r.children, locale) {
-                            (0, _) => r.detail.clone(),
+                            (0, _) => base,
                             (n, Locale::English) => {
-                                format!("{} · takes {n} child process(es)", r.detail)
+                                format!("{base} · takes {n} child process(es)")
                             }
-                            (n, _) => format!("{} · leva {n} filho(s) junto", r.detail),
+                            (n, _) => format!("{base} · leva {n} filho(s) junto"),
                         };
                         ui.horizontal(|ui| {
                             ui.add_space(26.0);

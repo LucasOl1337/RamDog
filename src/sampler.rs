@@ -100,7 +100,7 @@ pub fn spawn(ctx: egui::Context, interval_ms: u64) -> SamplerHandle {
                         if let Some(temp) = gpu.temp_c {
                             hwtemp.sensors.push(crate::hwtemp::SensorRow {
                                 hw: format!("GPU · {}", gpu.name),
-                                name: "Temperatura".into(),
+                                name: "Temperature".into(),
                                 kind: "temp".into(),
                                 value: temp as f32,
                             });
@@ -108,7 +108,7 @@ pub fn spawn(ctx: egui::Context, interval_ms: u64) -> SamplerHandle {
                         if let Some(load) = gpu.util_pct {
                             hwtemp.sensors.push(crate::hwtemp::SensorRow {
                                 hw: format!("GPU · {}", gpu.name),
-                                name: "Utilização".into(),
+                                name: "Load".into(),
                                 kind: "load".into(),
                                 value: load,
                             });

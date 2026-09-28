@@ -1,0 +1,12 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap');
+* { margin: 0; box-sizing: border-box; }
+body { background: #0b111b; color: #f3f5f8; font-family: Inter, sans-serif; overflow: hidden; }
+.kicker { font-size: 20px; letter-spacing: .06em; text-transform: uppercase; color: #73d8ee; display: flex; align-items: center; gap: 14px; }
+.kicker::before { content: ""; width: 22px; height: 2px; background: #73d8ee; }
+.title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; letter-spacing: -.01em; line-height: .95; }
+.sub { color: #aab3c2; }
+.chips { display: flex; gap: 12px; }
+.chip { font-weight: 600; font-size: 19px; padding: 8px 16px; border-radius: 6px; background: #1c2230; color: #e6e9ef; }
+.chip.win { background: #0b3a4a; color: #4fc3f7; }
+.chip.omarchy { background: #1e3320; color: #9ece6a; }
+.chip.hypr { background: #13303a; color: #73d8ee; }

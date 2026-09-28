@@ -71,6 +71,7 @@ jobs:
           if [ "$RUNNER_OS" = Linux ]; then
             cp linux/ramdog-launch package/
             cp linux/README.md package/README-linux.md
+            cp assets/ramdog-256.png package/ramdog.png
           fi
           tar -C package -czf "dist/$ASSET.tar.gz" .
       - uses: actions/setup-dotnet@v4

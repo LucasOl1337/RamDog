@@ -8,6 +8,7 @@ O comando do repositório é `./release vX.Y.Z`. Ao pedir `/release` a um agente
 4. Faça commit dos arquivos e envie `main` ao GitHub. Aguarde o workflow `release` de `main` passar nas cinco plataformas.
 5. Execute `./release vX.Y.Z`. O comando verifica versão, notas, branch e árvore limpa, roda testes e envia uma tag anotada.
 6. Acompanhe com `gh run list --workflow release.yml --branch vX.Y.Z`, `gh run watch ID` e `gh release view vX.Y.Z`.
+7. Com a release publicada, atualize o pacote Arch em `packaging/aur/ramdog-bin`: `pkgver`, `pkgrel=1` e os três `sha256sums` (os dois tarballs Linux do `SHA256SUMS.txt` e o ícone). Rode `makepkg --printsrcinfo > .SRCINFO` e `makepkg -f` para conferir, e faça commit do PKGBUILD e do `.SRCINFO`.
 
 O workflow testa e compila Linux x86_64/aarch64, macOS Apple Silicon/Intel e Windows x64. O pacote Linux inclui `ramdog-launch` e a documentação. O Windows inclui o helper térmico, que requer o runtime .NET 8. Os nomes dos pacotes correspondem aos instaladores.
 
@@ -17,4 +18,4 @@ Se falhar infraestrutura ou upload, use `gh run rerun ID --failed`. Se o código
 
 Os binários Linux são compilados no Ubuntu 24.04 e exigem glibc 2.39 ou posterior e bibliotecas gráficas compatíveis. Em distribuições anteriores, compile do código na própria distribuição. ARM64 e macOS têm validação de build/testes em CI; suporte específico a hardware e compositor precisa de teste real. O desktop Linux de referência continua sendo Omarchy/Hyprland.
 
-A imagem de preview social do GitHub (1280×640) está em `docs/media/banners/og.png`. Depois de publicar, confira em Settings → General → Social preview se o GitHub já a escolheu; se não, envie esse arquivo.
+A imagem de preview social do GitHub (1280×640) está em `docs/media/banners/og-en.png` (versão em português: `og.png`). Depois de publicar, confira em Settings → General → Social preview se o GitHub já a escolheu; se não, envie esse arquivo.

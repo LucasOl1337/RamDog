@@ -1,0 +1,58 @@
+# Maintainer: LucasOl1337 <https://github.com/LucasOl1337>
+pkgname=ramdog-bin
+pkgver=0.14.0
+pkgrel=1
+pkgdesc='Process manager that groups apps, counts memory with PSS and shows where each process came from (built for Omarchy/Hyprland)'
+arch=('x86_64' 'aarch64')
+url='https://github.com/LucasOl1337/RamDog'
+license=('MIT')
+# egui loads Wayland/X11 and OpenGL at runtime, so they are not visible to ldd.
+depends=('gcc-libs' 'glibc' 'libxkbcommon' 'wayland' 'libx11' 'libxcursor' 'libxi' 'libxrandr' 'libglvnd')
+optdepends=(
+  'hyprland: Screens view and focused-app tracking'
+  'polkit: cleanup and fan-control helpers'
+  'pacman-contrib: pacman cache cleanup (paccache)'
+  'nvidia-utils: NVIDIA GPU load and VRAM per process'
+  'lm_sensors: sensor drivers for the Thermal view'
+  'librsvg: SVG app icons'
+)
+provides=('ramdog')
+conflicts=('ramdog')
+options=('!debug' '!strip')
+source=("ramdog-${pkgver}.png::https://raw.githubusercontent.com/LucasOl1337/RamDog/v${pkgver}/assets/ramdog-256.png")
+source_x86_64=("RamDog-linux-x86_64-${pkgver}.tar.gz::https://github.com/LucasOl1337/RamDog/releases/download/v${pkgver}/RamDog-linux-x86_64.tar.gz")
+source_aarch64=("RamDog-linux-aarch64-${pkgver}.tar.gz::https://github.com/LucasOl1337/RamDog/releases/download/v${pkgver}/RamDog-linux-aarch64.tar.gz")
+sha256sums=('293465684639e0055fb0f6daba78779da8e638fa010c2c92fbf5aedb48c9c693')
+sha256sums_x86_64=('392fcaec5c83ba1cc3ef7220a58661f237e7ec300300e9d3b9e0d6f7c758cfd0')
+sha256sums_aarch64=('f09ae887528e14753c4acda38d11793965970045f8bf406dec6bc94685a2ac93')
+
+package() {
+  install -Dm755 ramdog "${pkgdir}/usr/bin/ramdog"
+  # ramdog-launch runs the binary next to it; point it at /usr/bin explicitly.
+  install -Dm755 ramdog-launch "${pkgdir}/usr/lib/ramdog/ramdog-launch"
+  install -dm755 "${pkgdir}/usr/bin"
+  cat > "${pkgdir}/usr/bin/ramdog-launch" <<'LAUNCH'
+#!/bin/sh
+RAMDOG_BINARY=/usr/bin/ramdog exec /usr/lib/ramdog/ramdog-launch "$@"
+LAUNCH
+  chmod 755 "${pkgdir}/usr/bin/ramdog-launch"
+
+  install -Dm644 "ramdog-${pkgver}.png" "${pkgdir}/usr/share/icons/hicolor/256x256/apps/ramdog.png"
+  install -Dm644 /dev/stdin "${pkgdir}/usr/share/applications/ramdog.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=RamDog
+GenericName=Process Manager
+Comment=See who is using your machine: apps grouped, real memory, process origin
+Exec=ramdog-launch
+Icon=ramdog
+Terminal=false
+Categories=System;Monitor;
+Keywords=task;manager;process;memory;ram;cpu;htop;
+StartupWMClass=ramdog
+DESKTOP
+
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+  install -Dm644 README-linux.md "${pkgdir}/usr/share/doc/${pkgname}/README-linux.md"
+}

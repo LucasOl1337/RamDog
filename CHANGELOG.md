@@ -2,6 +2,21 @@
 
 As mudanças são registradas por versão. As notas descrevem funcionalidades disponíveis e suas limitações; testes de hardware não equivalem a cobertura de todos os drivers e desktops.
 
+## [Não lançado]
+
+### Adicionado
+
+- README principal em inglês, com guia de instalação, integração com o Omarchy (atalho no Hyprland), passeio pelas visões e explicação do PSS. O português ficou em `README.pt-BR.md`.
+- `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, formulários de issue (bug, hardware, ideia) e template de PR.
+- Pacote Arch em `packaging/aur/ramdog-bin`, montado a partir dos binários da release.
+- O instalador Linux cria a entrada **RamDog** no lançador de apps, com ícone. `RAMDOG_NO_DESKTOP=1` pula essa etapa.
+
+### Melhorado
+
+- Instalação nova abre no idioma do sistema (português ou inglês). Configurações existentes mantêm o idioma escolhido.
+- Em inglês, números usam ponto decimal (15.8 GB), sensores de GPU, origem "desktop (browser)" e "project" saem traduzidos, e os botões do modo mini usam glifos que existem na fonte.
+- O aviso de carga compara com os núcleos da máquina, não com os permitidos ao RamDog (dentro de um cgroup limitado aparecia "1 núcleo").
+
 ## [0.14.0] - 2026-09-28
 
 Brave, Claude e qualquer app de vários processos viram uma linha só, com a RAM somada sem contar duas vezes o que eles dividem.
@@ -65,7 +80,7 @@ Patch notes: [v0.12.0](docs/releases/v0.12.0.md).
 ### Adicionado
 
 - Seletor persistido **Português / English** nas Preferências. Configurações existentes continuam em português e mantêm locks, categorias, presets e os demais ajustes.
-- [`README.en.md`](README.en.md) completo, com instalação, recursos, plataformas, limites e terminologia da interface.
+- [`README.en.md`](README.md) completo, com instalação, recursos, plataformas, limites e terminologia da interface.
 
 ### Melhorado
 

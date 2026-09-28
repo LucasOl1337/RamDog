@@ -9,14 +9,14 @@ $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 if (-not [Environment]::Is64BitOperatingSystem) {
-    throw "RamDog é Windows x64."
+    throw "This installer supports Windows x64 only."
 }
 
 $repo = 'LucasOl1337/RamDog'
 $dest = Join-Path $env:LOCALAPPDATA 'RamDog'
 $assetName = 'RamDog-windows-x64.zip'
 
-Write-Host "RamDog — baixando o release mais recente..."
+Write-Host "RamDog: downloading the latest release..."
 
 $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers @{
     'User-Agent' = 'RamDog-install'
@@ -24,7 +24,7 @@ $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/l
 }
 $asset = $release.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
 if (-not $asset) {
-    throw "Release $($release.tag_name) não tem $assetName."
+    throw "Release $($release.tag_name) does not include $assetName."
 }
 
 $tmp = Join-Path $env:TEMP "RamDog-$($release.tag_name)"
@@ -37,7 +37,7 @@ Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -UseBasicParsin
 Expand-Archive -Path $zip -DestinationPath $tmp -Force
 
 $exe = Get-ChildItem $tmp -Filter 'ramdog.exe' -Recurse | Select-Object -First 1
-if (-not $exe) { throw "ramdog.exe não veio no zip." }
+if (-not $exe) { throw "ramdog.exe is missing from the zip." }
 
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 Get-ChildItem $tmp -Recurse -File | ForEach-Object {
@@ -78,13 +78,13 @@ if ($env:Path -notlike "*$dest*") {
 }
 
 Write-Host ""
-Write-Host "Instalado em $dest  ($($release.tag_name))"
-Write-Host "Abrir:  ramdog    ou o atalho RamDog no Desktop (o RamDog pede elevacao ao abrir)"
+Write-Host "Installed to $dest  ($($release.tag_name))"
+Write-Host "Run:  ramdog    or the RamDog desktop shortcut (RamDog asks for elevation when it opens)"
 Write-Host ""
 
 $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
 if (-not $dotnet) {
-    Write-Host "Opcional: .NET 8 runtime para temperatura de CPU/RAM (helper hwtemp)."
+    Write-Host "Optional: .NET 8 runtime for CPU/RAM temperature (hwtemp helper)."
     Write-Host "  https://dotnet.microsoft.com/download/dotnet/8.0"
 }
 

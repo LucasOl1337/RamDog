@@ -20,6 +20,45 @@ impl Default for Locale {
 }
 
 impl Locale {
+    /// Idioma de uma instalação nova: português quando o sistema está em português, inglês
+    /// no resto. Config gravada sem o campo continua em português (`Default`), que era o
+    /// único idioma quando ela foi criada.
+    pub fn from_system() -> Self {
+        #[cfg(windows)]
+        {
+            // LANG_PORTUGUESE = 0x16 no identificador primário do LANGID.
+            let lang = unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() };
+            if lang & 0x3ff == 0x16 {
+                Self::Portuguese
+            } else {
+                Self::English
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let tag = ["LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"]
+                .iter()
+                .filter_map(|k| std::env::var(k).ok())
+                .find(|v| !v.is_empty() && v != "C" && v != "POSIX")
+                .unwrap_or_default();
+            Self::from_tag(&tag)
+        }
+    }
+
+    /// `pt_BR.UTF-8`, `pt-PT`, `pt:en` → português; qualquer outro → inglês.
+    pub fn from_tag(tag: &str) -> Self {
+        let first = tag.split(':').next().unwrap_or("").to_ascii_lowercase();
+        if first == "pt"
+            || first.starts_with("pt_")
+            || first.starts_with("pt-")
+            || first.starts_with("pt.")
+        {
+            Self::Portuguese
+        } else {
+            Self::English
+        }
+    }
+
     pub fn text(self, portuguese: &'static str, english: &'static str) -> &'static str {
         match self {
             Self::Portuguese => portuguese,
@@ -462,7 +501,7 @@ impl Default for Config {
             locked: BTreeSet::new(),
             overrides: BTreeMap::new(),
             refresh_ms: 1000,
-            locale: Locale::Portuguese,
+            locale: Locale::from_system(),
             min_mb: 0,
             min_cpu: 0.0,
             min_gpu: 0.0,
@@ -597,6 +636,16 @@ mod tests {
         };
         private.migrate();
         assert_eq!(private.mem_metric, MemMetric::Private);
+    }
+
+    #[test]
+    fn new_installs_follow_the_system_language() {
+        for tag in ["pt_BR.UTF-8", "pt-PT", "pt", "pt_BR:en_US"] {
+            assert_eq!(Locale::from_tag(tag), Locale::Portuguese, "{tag}");
+        }
+        for tag in ["en_US.UTF-8", "de_DE", "", "C.UTF-8", "ptx", "en_US:pt_BR"] {
+            assert_eq!(Locale::from_tag(tag), Locale::English, "{tag}");
+        }
     }
 
     #[test]

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/LucasOl1337/RamDog/discussions
+    about: Ask how something works or share how you use RamDog.
+  - name: Report a security issue
+    url: https://github.com/LucasOl1337/RamDog/security/advisories/new
+    about: Privately report a vulnerability.

@@ -35,8 +35,13 @@ const AVATAR: f32 = 26.0;
 /// Barra lateral, cards e histórico dos medidores.
 const NAV_W: f32 = 200.0;
 
-fn launcher_label(label: String, locale: Locale) -> String {
+/// Rótulos de origem que nascem em português na coleta (launcher e identidade) e
+/// precisam sair no idioma da interface.
+pub(crate) fn launcher_label(label: String, locale: Locale) -> String {
     if locale == Locale::English {
+        if label == "projeto" {
+            return "project".into();
+        }
         label.replace("desktop (navegador)", "desktop (browser)")
     } else {
         label
@@ -367,9 +372,7 @@ impl App {
             sig_rx,
             last_sample: None,
             sample_ms: 0.0,
-            ncpu: std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(1),
+            ncpu: machine_cpus(),
             sys: SysSample::default(),
             gpu_per_proc: true,
             hwtemp: HwTemp::default(),
@@ -791,6 +794,7 @@ impl App {
             identity::Kind::Game | identity::Kind::Project | identity::Kind::Emulator
         ) {
             if let Some(origin) = id.origin {
+                let origin = launcher_label(origin, locale);
                 let mut tip = origin.clone();
                 if let Some(title) = &p.window_title {
                     tip.push_str(&format!("\n{}: {title}", locale.text("janela", "window")));
@@ -2769,14 +2773,14 @@ impl App {
                 .on_hover_text(self.cfg.locale.text("Arraste para mover", "Drag to move"));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
-                    .small_button("✕")
+                    .small_button("🗙")
                     .on_hover_text(self.cfg.locale.text("Fechar", "Close"))
                     .clicked()
                 {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
                 if ui
-                    .small_button("⤢")
+                    .small_button("🗖")
                     .on_hover_text(self.cfg.locale.text(
                         "Voltar ao completo (ou duplo clique)",
                         "Return to full view (or double-click)",
@@ -3427,7 +3431,7 @@ impl App {
                                 let mut sub = format!("{count} {} · {}", self.cfg.locale.text("processos", "processes"), cat.label_for(self.cfg.locale));
                                 if !origin.is_empty() {
                                     sub.push_str(" · ");
-                                    sub.push_str(&origin);
+                                    sub.push_str(&launcher_label(origin.clone(), self.cfg.locale));
                                 }
                                 ui.vertical(|ui| {
                                     ui.spacing_mut().item_spacing = Vec2::new(8.0, 1.0);
@@ -4371,8 +4375,12 @@ impl App {
                         ui.scope(|ui| {
                             ui.set_width((avail - 148.0).max(40.0));
                             ui.add(
-                                egui::Label::new(RichText::new(&s.name).color(MUTED).size(12.0))
-                                    .truncate(),
+                                egui::Label::new(
+                                    RichText::new(sensor_label(&s.name, locale))
+                                        .color(MUTED)
+                                        .size(12.0),
+                                )
+                                .truncate(),
                             );
                         });
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -5136,6 +5144,7 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        set_number_locale(self.cfg.locale);
         let locale = self.cfg.locale;
         self.ingest(ctx);
         #[cfg(target_os = "linux")]
@@ -6856,8 +6865,21 @@ fn fmt_gb(b: u64) -> String {
     format!("{} GB", pt_num(b as f64 / GB as f64, 1))
 }
 
-/// Formata número no padrão pt-BR (1.234,5).
+/// Separadores dos números seguem o idioma da interface. `fmt_bytes` é chamado em dezenas
+/// de lugares sem acesso ao `Config`; `update()` grava o idioma aqui a cada quadro.
+static ENGLISH_NUMBERS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn set_number_locale(locale: Locale) {
+    ENGLISH_NUMBERS.store(locale == Locale::English, Ordering::Relaxed);
+}
+
+/// Formata número no padrão do idioma: pt-BR (1.234,5) ou inglês (1,234.5).
 fn pt_num(v: f64, decimals: usize) -> String {
+    format_num(v, decimals, ENGLISH_NUMBERS.load(Ordering::Relaxed))
+}
+
+fn format_num(v: f64, decimals: usize, english: bool) -> String {
+    let (group, point) = if english { (',', '.') } else { ('.', ',') };
     let s = format!("{:.*}", decimals, v);
     let (int, frac) = match s.split_once('.') {
         Some((i, f)) => (i.to_string(), Some(f.to_string())),
@@ -6867,12 +6889,12 @@ fn pt_num(v: f64, decimals: usize) -> String {
     let digits: Vec<char> = int.chars().collect();
     for (i, c) in digits.iter().enumerate() {
         if i > 0 && (digits.len() - i) % 3 == 0 {
-            out.push('.');
+            out.push(group);
         }
         out.push(*c);
     }
     if let Some(f) = frac {
-        out.push(',');
+        out.push(point);
         out.push_str(&f);
     }
     out
@@ -6949,10 +6971,51 @@ fn disk_usage_tip(locale: Locale) -> &'static str {
     }
 }
 
+/// Núcleos da máquina, não os que o RamDog pode usar. `available_parallelism` respeita
+/// afinidade e cota de cgroup: rodando num serviço limitado a 1,5 CPU ele dizia "1 núcleo"
+/// e a carga normal da máquina virava "fila de CPU cheia". O sampler do Linux já mede CPU
+/// contra os núcleos online; o card e a faixa de pressão precisam da mesma base.
+fn machine_cpus() -> usize {
+    #[cfg(unix)]
+    {
+        let n = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+        if n > 0 {
+            return n as usize;
+        }
+    }
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+}
+
+/// Nome de uma leitura térmica no idioma da interface. Os sensores vêm do driver ou do
+/// LibreHardwareMonitor em inglês; só os nomes genéricos que o próprio RamDog cria para
+/// a GPU no Linux têm tradução, o resto ("CPU Package", "Tctl") é nome técnico.
+fn sensor_label(name: &str, locale: Locale) -> &str {
+    match name {
+        "Temperature" => locale.text("Temperatura", "Temperature"),
+        "Load" => locale.text("Utilização", "Load"),
+        other => other,
+    }
+}
+
 fn aggregate_memory_text(bytes: u64, complete: bool) -> String {
     if complete {
         fmt_bytes(bytes)
     } else {
         format!("≥ {}", fmt_bytes(bytes))
+    }
+}
+
+#[cfg(test)]
+mod number_tests {
+    use super::format_num;
+
+    #[test]
+    fn numbers_follow_the_interface_language() {
+        assert_eq!(format_num(1234.5, 1, false), "1.234,5");
+        assert_eq!(format_num(1234.5, 1, true), "1,234.5");
+        assert_eq!(format_num(15.84, 1, true), "15.8");
+        assert_eq!(format_num(999.0, 0, true), "999");
     }
 }

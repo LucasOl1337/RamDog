@@ -1,0 +1,52 @@
+name: Bug report
+description: Something is wrong, missing or crashes
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. English or Portuguese are both fine.
+        Security problems (privilege escalation, helpers, checksum bypass) go to the [private advisory form](https://github.com/LucasOl1337/RamDog/security/advisories/new), not here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead. Screenshots help.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: RamDog version
+      placeholder: v0.14.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Omarchy
+        - Arch Linux (other desktop)
+        - Other Linux
+        - Windows
+        - macOS
+    validations:
+      required: true
+  - type: input
+    id: desktop
+    attributes:
+      label: Desktop, compositor and GPU
+      placeholder: Hyprland 0.56, NVIDIA RTX 4070 + AMD iGPU
+  - type: textarea
+    id: diagnose
+    attributes:
+      label: Output of `ramdog --diagnose` (Linux)
+      description: A read-only JSON inventory of sensors, GPUs and counts. Remove anything you consider private.
+      render: json
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "Linux: `journalctl --user -u ramdog.service -n 100` or `~/.local/state/RamDog/ramdog.log`."
+      render: text

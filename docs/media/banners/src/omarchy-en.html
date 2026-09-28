@@ -1,0 +1,26 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"><style>
+body { width: 1920px; height: 560px; background:
+  linear-gradient(90deg, rgba(11,17,27,0) 0%, rgba(11,17,27,.0) 52%, #0d1528 54%),
+  #0d1528; }
+.dog { position: absolute; left: 0; top: 0; width: 1040px; height: 560px;
+  -webkit-mask-image: linear-gradient(90deg, #000 78%, transparent 100%); }
+.grid { position: absolute; inset: 0; background-image:
+  linear-gradient(rgba(115,140,200,.07) 1px, transparent 1px),
+  linear-gradient(90deg, rgba(115,140,200,.07) 1px, transparent 1px);
+  background-size: 48px 48px; }
+.text { position: absolute; left: 1088px; top: 104px; display: flex; flex-direction: column; gap: 14px; }
+.kicker { color: #9ece6a; } .kicker::before { background: #9ece6a; }
+.pre { font-family: 'Space Grotesk', sans-serif; font-weight: 500; font-size: 42px; color: #c9d1dd; }
+.title { font-size: 96px; margin-top: -6px; }
+.sub { font-size: 27px; line-height: 1.4; margin-top: 6px; }
+.chips { margin-top: 12px; }
+</style></head><body>
+<div class="grid"></div>
+<img class="dog" src="omarchy-dog.png">
+<div class="text">
+  <div class="kicker">Native support</div>
+  <div class="pre">Built for</div>
+  <div class="title">Omarchy</div>
+  <div class="sub">Hyprland, UWSM and Quickshell protected.<br>A /proc sampler built for long Wayland sessions.</div>
+  <div class="chips"><span class="chip hypr">Hyprland</span><span class="chip">Arch Linux</span><span class="chip">NVIDIA + AMD</span></div>
+</div></body></html>

@@ -1,0 +1,38 @@
+name: Hardware or desktop report
+description: A sensor, fan, GPU, monitor or compositor reading is missing or wrong
+labels: [hardware]
+body:
+  - type: markdown
+    attributes:
+      value: RamDog reads hardware through drivers that vary a lot between machines. These reports are how support grows beyond the reference setup.
+  - type: textarea
+    id: what
+    attributes:
+      label: What is missing or wrong
+      description: For example "CPU temperature shows —", "fans are listed but STABILIZE does nothing", "Screens does not see my second monitor".
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Motherboard, CPU and GPU
+      placeholder: MSI B650, Ryzen 7 7800X3D, RTX 4070 Ti SUPER
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: OS, kernel, desktop and RamDog version
+      placeholder: Omarchy, 6.x, Hyprland 0.56, RamDog v0.14.0
+    validations:
+      required: true
+  - type: textarea
+    id: diagnose
+    attributes:
+      label: Output of `ramdog --diagnose`
+      render: json
+  - type: textarea
+    id: sensors
+    attributes:
+      label: Output of `sensors` (lm_sensors), if installed
+      render: text
