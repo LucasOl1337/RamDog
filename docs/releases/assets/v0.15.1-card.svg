@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="696" font-family="Liberation Sans, sans-serif">
+  <defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#160D31"/><stop offset="1" stop-color="#28184D"/></linearGradient></defs>
+  <rect width="1200" height="696" fill="url(#bg)"/>
+  <path d="M28 78V28H78M1122 28H1172V78M28 618V668H78M1122 668H1172V618" fill="none" stroke="#8B7AA2" stroke-width="2" opacity=".7"/>
+  <text x="56" y="90" font-size="43" fill="#F8F5FF" font-weight="700">RamDog</text>
+  <rect x="255" y="50" width="146" height="54" rx="27" fill="#8E65E8"/>
+  <text x="281" y="87" font-size="25" fill="#FFFFFF" font-weight="700">v0.15.1</text>
+  <text x="56" y="145" font-size="25" fill="#FFD6A0" font-weight="700" letter-spacing="3">NOTAS DA ATUALIZAÇÃO</text>
+  <text x="1020" y="88" font-size="18" fill="#BCB1D2" text-anchor="end">28 SET 2026</text>
+  <path d="M56 178H1144" stroke="#76638C" opacity=".5"/>
+  <text x="56" y="224" font-size="23" fill="#D8CFE7">Patch do Gerenciador: duas pontas soltas da v0.15.0 fechadas.</text>
+  <rect x="56" y="264" width="6" height="28" rx="3" fill="#30BCEF"/>
+  <text x="80" y="287" font-size="26" fill="#30BCEF" font-weight="700">CORREÇÕES</text>
+  <text x="1118" y="287" font-size="20" fill="#BCB1D2" text-anchor="end">2 itens</text>
+  <circle cx="86" cy="344" r="6" fill="#30BCEF"/>
+  <text x="108" y="352" font-size="27" fill="#F8F5FF" font-weight="700">Lista completa ↗ sem zumbi</text>
+  <text x="108" y="384" font-size="22" fill="#A9E4F8">O Gerenciador recolhe o launcher assim que ele termina.</text>
+  <circle cx="86" cy="438" r="6" fill="#30BCEF"/>
+  <text x="108" y="446" font-size="27" fill="#F8F5FF" font-weight="700">Teste que falhava às vezes</text>
+  <text x="108" y="478" font-size="22" fill="#A9E4F8">Confere a thread pelo TID, sem corrida com a suíte em paralelo.</text>
+  <path d="M56 542H1144" stroke="#76638C" opacity=".5"/>
+  <text x="56" y="590" font-size="25" fill="#FFD6A0" font-weight="700">Menos lixo na tabela de processos, suíte estável em paralelo.</text>
+  <text x="56" y="630" font-size="18" fill="#BCB1D2">Notas completas e pacotes: github.com/LucasOl1337/RamDog/releases/tag/v0.15.1</text>
+</svg>

@@ -946,25 +946,25 @@ mod tests {
 
     #[test]
     fn sampling_does_not_turn_threads_into_processes() {
+        // Comparar com uma segunda leitura do /proc/self/status é corrida: os outros testes
+        // do mesmo binário abrem e fecham threads entre as duas leituras. O que precisa valer
+        // é que uma thread viva não vira linha própria e entra na contagem do processo.
+        let (tid_tx, tid_rx) = std::sync::mpsc::channel::<u32>();
         let (tx, rx) = std::sync::mpsc::channel::<()>();
         let worker = std::thread::spawn(move || {
+            let tid = unsafe { libc::syscall(libc::SYS_gettid) } as u32;
+            tid_tx.send(tid).unwrap();
             let _ = rx.recv();
         });
+        let tid = tid_rx.recv().unwrap();
+        let own = std::process::id();
+        assert_ne!(tid, own);
+        assert!(std::path::Path::new(&format!("/proc/self/task/{tid}")).exists());
         let mut sampler = Sampler::new();
         let rows = sampler.sample();
-        let own = std::process::id();
         let process = rows.iter().find(|p| p.pid == own).unwrap();
-        let status = std::fs::read_to_string("/proc/self/status").unwrap();
-        let threads: u32 = status
-            .lines()
-            .find(|s| s.starts_with("Threads:"))
-            .unwrap()
-            .split_whitespace()
-            .nth(1)
-            .unwrap()
-            .parse()
-            .unwrap();
-        assert_eq!(process.threads, threads);
+        assert!(rows.iter().all(|p| p.pid != tid));
+        assert!(process.threads >= 2);
         assert!(process.private_ws <= process.working_set || process.working_set == 0);
         tx.send(()).unwrap();
         worker.join().unwrap();

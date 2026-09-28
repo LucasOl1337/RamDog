@@ -4,9 +4,16 @@ As mudanças são registradas por versão. As notas descrevem funcionalidades di
 
 ## [Não lançado]
 
+## [0.15.1] - 2026-09-28
+
+Patch do Gerenciador e da suíte de testes.
+
+Patch notes: [v0.15.1](docs/releases/v0.15.1.md).
+
 ### Corrigido
 
 - **Lista completa ↗** no Gerenciador deixava um processo zumbi por clique até a janela fechar.
+- O teste `sampling_does_not_turn_threads_into_processes` falhava às vezes com a suíte em paralelo: comparava a contagem de threads da amostra com uma segunda leitura do `/proc/self/status`, e os outros testes abriam e fechavam threads no meio. Agora ele confere o que importa (a thread viva não vira linha e entra na contagem do processo) sem depender do momento.
 
 ## [0.15.0] - 2026-09-28
 
