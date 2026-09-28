@@ -88,6 +88,14 @@ fn new_snapshot_is_reconciled_once_while_hovering() {
 }
 
 #[test]
+fn empty_first_build_is_rebuilt_even_under_hover() {
+    let mut cache = RowCache::default();
+    cache.rebuilt(7, Vec::new(), 0);
+    cache.snapshot_changed();
+    assert_eq!(cache.action(7, true), RowCacheAction::Rebuild);
+}
+
+#[test]
 fn new_snapshot_reorders_once_when_not_hovering() {
     let mut cache = cached();
     cache.snapshot_changed();

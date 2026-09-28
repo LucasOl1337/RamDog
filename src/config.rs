@@ -87,7 +87,15 @@ pub struct Config {
     /// melhor que `--type=utility --utility-sub-type=...`.
     #[serde(default)]
     pub cmd_column: bool,
+    /// Migrações de padrão já aplicadas a esta config. Ausente no arquivo = 0, config
+    /// gravada antes delas; ver `Config::migrate`.
+    #[serde(default)]
+    pub config_rev: u32,
 }
+
+/// Revisão atual dos padrões. Subir quando um padrão novo precisar valer também para
+/// quem já tem config gravada, e descrever o passo em `Config::migrate`.
+pub const CONFIG_REV: u32 = 1;
 
 /// Em que fatias a lista da Partida se quebra.
 ///
@@ -210,6 +218,13 @@ pub enum MemMetric {
 }
 
 impl MemMetric {
+    /// PSS onde o kernel dá: é a única leitura por processo que soma sem contar duas
+    /// vezes a mesma página, e é o que o agrupamento por app precisa.
+    #[cfg(target_os = "linux")]
+    pub const DEFAULT: MemMetric = MemMetric::Proportional;
+    #[cfg(not(target_os = "linux"))]
+    pub const DEFAULT: MemMetric = MemMetric::WorkingSet;
+
     #[cfg(target_os = "linux")]
     pub const ALL: [MemMetric; 4] = [
         MemMetric::WorkingSet,
@@ -454,7 +469,7 @@ impl Default for Config {
             min_vram_mb: 0,
             view: ViewMode::List,
             show_system: true,
-            mem_metric: MemMetric::WorkingSet,
+            mem_metric: MemMetric::DEFAULT,
             show_kernel_rows: true,
             group_apps: true,
             mini: false,
@@ -465,6 +480,7 @@ impl Default for Config {
             screen_grid: String::new(),
             screen_snap: true,
             cmd_column: false,
+            config_rev: CONFIG_REV,
         }
     }
 }
@@ -490,9 +506,30 @@ impl Config {
     pub fn load() -> Self {
         let path = config_path();
         match std::fs::read_to_string(&path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+            Ok(s) => {
+                let mut cfg: Self = serde_json::from_str(&s).unwrap_or_default();
+                cfg.migrate();
+                cfg
+            }
             Err(_) => Self::default(),
         }
+    }
+
+    /// Leva uma config antiga aos padrões atuais sem apagar escolha feita depois deles.
+    ///
+    /// Rev 1: Brave com 20 processos virava 20 linhas e a soma em RSS dava 3,6 GB para
+    /// 1,8 GB reais, porque cada renderizador conta de novo as páginas que divide com os
+    /// outros. Agrupar por app passa a valer para todos, e no Linux a coluna troca o RSS
+    /// pelo PSS, que reparte o compartilhado e soma certo. Quem estava em Privado ou
+    /// Commit escolheu isso e fica como está.
+    pub fn migrate(&mut self) {
+        if self.config_rev < 1 {
+            self.group_apps = true;
+            if self.mem_metric == MemMetric::WorkingSet {
+                self.mem_metric = MemMetric::DEFAULT;
+            }
+        }
+        self.config_rev = CONFIG_REV;
     }
 
     pub fn save(&self) -> Result<(), String> {
@@ -523,6 +560,43 @@ mod tests {
             serde_json::from_value::<Config>(value).unwrap().locale,
             Locale::Portuguese
         );
+    }
+
+    #[test]
+    fn legacy_config_migrates_to_grouped_apps_and_real_memory() {
+        let mut value = serde_json::to_value(Config {
+            group_apps: false,
+            mem_metric: MemMetric::WorkingSet,
+            ..Config::default()
+        })
+        .unwrap();
+        value.as_object_mut().unwrap().remove("config_rev");
+        let mut cfg: Config = serde_json::from_value(value).unwrap();
+        assert_eq!(cfg.config_rev, 0);
+        cfg.migrate();
+        assert!(cfg.group_apps);
+        assert_eq!(cfg.mem_metric, MemMetric::DEFAULT);
+        assert_eq!(cfg.config_rev, CONFIG_REV);
+    }
+
+    #[test]
+    fn migration_keeps_choices_made_after_it() {
+        let mut cfg = Config {
+            group_apps: false,
+            mem_metric: MemMetric::WorkingSet,
+            ..Config::default()
+        };
+        cfg.migrate();
+        assert!(!cfg.group_apps);
+        assert_eq!(cfg.mem_metric, MemMetric::WorkingSet);
+
+        let mut private = Config {
+            mem_metric: MemMetric::Private,
+            config_rev: 0,
+            ..Config::default()
+        };
+        private.migrate();
+        assert_eq!(private.mem_metric, MemMetric::Private);
     }
 
     #[test]

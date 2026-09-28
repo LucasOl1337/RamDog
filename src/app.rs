@@ -82,6 +82,18 @@ enum Temp {
 /// renderizadores é uma linha de 90%, aqui eram 30 linhas de 3% que não chegavam nem
 /// perto do topo da lista ordenada por CPU. O maior consumidor da máquina ficava
 /// invisível por estar picado.
+/// Uma entrada do rodapé "Maiores agora": um app somado ou, sem agrupamento, um PID.
+struct Largest {
+    name: String,
+    cat: Category,
+    bytes: u64,
+    count: usize,
+    /// Quantos membros têm leitura na métrica atual; abaixo de `count` a soma é parcial.
+    measured: usize,
+    /// Maior membro até agora, para escolher nome e cor.
+    top: u64,
+}
+
 struct AppGroup {
     /// Família conhecida (`app:claude`); demais apps mantêm o caminho do executável.
     key: String,
@@ -740,8 +752,14 @@ impl App {
                 min_gpu: self.cfg.min_gpu,
                 min_vram_mb: self.cfg.min_vram_mb,
             },
-            grouped: self.cfg.view == ViewMode::List && self.cfg.group_apps,
+            grouped: self.groups_apps_in_view(),
         }
+    }
+
+    /// Lista e Categorias juntam os processos do mesmo app; a Árvore mostra quem abriu
+    /// quem e já põe os renderizadores embaixo do processo principal.
+    fn groups_apps_in_view(&self) -> bool {
+        self.cfg.group_apps && matches!(self.cfg.view, ViewMode::List | ViewMode::Category)
     }
 
     fn descendants(&self, pid: u32) -> Vec<u32> {
@@ -1276,6 +1294,7 @@ impl App {
                     })
                     .collect();
                 cats.sort_by(|a, b| b.1.cmp(&a.1));
+                self.groups.clear();
                 let mut rows = Vec::new();
                 for (cat, total, mut pids) in cats {
                     let collapsed = self.collapsed_cats.contains(&cat);
@@ -1285,7 +1304,9 @@ impl App {
                         total,
                         collapsed,
                     });
-                    if !collapsed {
+                    if !collapsed && self.cfg.group_apps {
+                        rows.extend(self.push_app_rows(pids));
+                    } else if !collapsed {
                         self.sort_pids(&mut pids, false);
                         for pid in pids {
                             rows.push(Row::Proc {
@@ -1362,6 +1383,14 @@ impl App {
     /// abre em uma linha idêntica é ruído. O agrupamento existe para o caso do Chrome
     /// e das dezenas de Claude/Codex, não para enfeitar o resto da lista.
     fn build_app_rows(&mut self, hits: Vec<u32>) -> Vec<Row> {
+        self.groups.clear();
+        self.push_app_rows(hits)
+    }
+
+    /// Agrupa `hits` por app e acrescenta os grupos a `self.groups`, sem limpar os que já
+    /// estão lá: a visão Categorias chama uma vez por categoria e os índices das linhas
+    /// continuam valendo para a tabela inteira.
+    fn push_app_rows(&mut self, hits: Vec<u32>) -> Vec<Row> {
         let mut by_key: HashMap<String, Vec<u32>> = HashMap::new();
         for pid in hits {
             let Some(p) = self.proc(pid) else { continue };
@@ -1461,9 +1490,10 @@ impl App {
             ord.then(ga.key.cmp(&gb.key))
         });
 
-        self.groups = groups;
-        let mut rows: Vec<Row> = Vec::with_capacity(self.groups.len() + 8);
-        for gi in order {
+        let base = self.groups.len();
+        self.groups.extend(groups);
+        let mut rows: Vec<Row> = Vec::with_capacity(order.len() + 8);
+        for gi in order.into_iter().map(|i| base + i) {
             let g = &self.groups[gi];
             if g.pids.len() < 2 {
                 rows.push(Row::Proc {
@@ -3131,7 +3161,7 @@ impl App {
         // Com grupos, toda linha de processo cede a mesma goteira que a seta do cabeçalho
         // ocupa. Sem isso o filho fica desenhado à esquerda do nome do app e a hierarquia
         // aparece invertida.
-        let group_gutter = self.cfg.view == ViewMode::List && self.cfg.group_apps;
+        let group_gutter = self.groups_apps_in_view();
         let disputa_on = self.sort == SortKey::Steal;
         let mut click_select: Option<u32> = None;
         let mut toggle_expand: Option<u32> = None;
@@ -4431,13 +4461,54 @@ impl App {
         );
     }
 
+    /// Os maiores consumidores para o rodapé. Com o agrupamento ligado soma por app, do
+    /// mesmo jeito que a tabela: "brave ×20 1,8 GB" em vez de quatro PIDs soltos do brave.
+    fn largest_now(&self, n: usize) -> Vec<Largest> {
+        let m = self.cfg.mem_metric;
+        let mut by_key: HashMap<String, Largest> = HashMap::new();
+        for p in &self.procs {
+            let key = if self.cfg.group_apps {
+                categories::group_key(p)
+            } else {
+                format!("pid:{}", p.pid)
+            };
+            let bytes = Self::metric_of(m, p);
+            let e = by_key.entry(key).or_insert_with(|| Largest {
+                name: String::new(),
+                cat: self.cat(p.pid),
+                bytes: 0,
+                count: 0,
+                measured: 0,
+                top: 0,
+            });
+            e.bytes += bytes;
+            e.count += 1;
+            if metric_available(m, p) {
+                e.measured += 1;
+            }
+            // Nome e cor do membro mais pesado: é o processo principal do app, não o
+            // helper que por acaso apareceu primeiro em /proc.
+            if e.name.is_empty() || bytes > e.top {
+                e.top = bytes;
+                e.cat = self.cat(p.pid);
+                e.name = if self.cfg.group_apps {
+                    identity::of(p).label
+                } else {
+                    p.name.clone()
+                };
+            }
+        }
+        let mut top: Vec<Largest> = by_key.into_values().collect();
+        top.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.name.cmp(&b.name)));
+        top.truncate(n);
+        top
+    }
+
     fn ui_details(&mut self, ui: &mut egui::Ui) {
         let locale = self.cfg.locale;
         let Some(sel) = self.selected else {
             // Estado vazio útil: em vez de só instruir, já responde "quem está comendo minha RAM".
-            let m = self.cfg.mem_metric;
-            let mut top: Vec<&ProcInfo> = self.procs.iter().collect();
-            top.sort_by_key(|p| std::cmp::Reverse(Self::metric_of(m, p)));
+            let top = self.largest_now(4);
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.add_space(10.0);
@@ -4446,18 +4517,22 @@ impl App {
                         .color(MUTED)
                         .size(11.5),
                 );
-                for p in top.iter().take(4) {
-                    let cat = self.cat(p.pid);
+                for t in &top {
                     ui.add_space(6.0);
-                    ui.label(RichText::new("●").color(cat.color()).size(10.0));
-                    ui.label(RichText::new(&p.name).size(12.0));
+                    ui.label(RichText::new("●").color(t.cat.color()).size(10.0));
+                    let name = if t.count > 1 {
+                        format!("{} ×{}", t.name, t.count)
+                    } else {
+                        t.name.clone()
+                    };
+                    ui.label(RichText::new(name).size(12.0));
                     ui.label(
-                        num(if metric_available(m, p) {
-                            fmt_bytes(Self::metric_of(m, p))
-                        } else {
+                        num(if t.measured == 0 {
                             "—".into()
+                        } else {
+                            aggregate_memory_text(t.bytes, t.measured == t.count)
                         })
-                        .color(ram_color(Self::metric_of(m, p), MUTED)),
+                        .color(ram_color(t.bytes, MUTED)),
                     );
                 }
             });
@@ -5710,7 +5785,7 @@ impl App {
                 if v.is_addon() {
                     return;
                 }
-                if v == ViewMode::List {
+                if matches!(v, ViewMode::List | ViewMode::Category) {
                     let on = self.cfg.group_apps;
                     let text = RichText::new(if on {
                         self.cfg.locale.text("Agrupar por app ✓", "Group by app ✓")
@@ -5742,7 +5817,7 @@ impl App {
                     if ui.add(plain(self.cfg.locale.text("Expandir tudo", "Expand all"))).clicked() {
                         self.expanded = self.children.keys().copied().collect();
                     }
-                } else if v == ViewMode::List && self.cfg.group_apps {
+                } else if self.groups_apps_in_view() {
                     if !self.expanded_apps.is_empty() && ui.add(plain(self.cfg.locale.text("Recolher", "Collapse"))).clicked() {
                         self.expanded_apps.clear();
                         self.row_cache.invalidate();

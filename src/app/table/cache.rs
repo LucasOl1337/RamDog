@@ -53,7 +53,10 @@ impl RowCache {
         if self.rows.is_none() || self.rows_dirty || key != self.key {
             RowCacheAction::Rebuild
         } else if self.snapshot_dirty {
-            if hovering {
+            // Lista vazia não tem ordem a proteger. Sem isso, abrir o app com o ponteiro já
+            // em cima da tabela congelava a primeira montagem, ainda sem processos, e ela
+            // ficava vazia até o mouse sair.
+            if hovering && self.rows.as_ref().is_some_and(|r| !r.is_empty()) {
                 RowCacheAction::ReconcileSnapshot
             } else {
                 RowCacheAction::Rebuild

@@ -171,7 +171,7 @@ pub fn resolve(facts: Facts<'_>) -> Identity {
             kind: Kind::Agent,
         };
     }
-    if let Some(fam) = family_from_basename(&basename(facts.exe_path, facts.name)) {
+    if let Some(fam) = cli_family(facts.exe_path, facts.name) {
         return Identity {
             key: format!("app:{fam}"),
             label: family_label(fam),
@@ -463,7 +463,17 @@ fn exe_key(exe: &str, name: &str) -> String {
 
 /// O processo é o próprio CLI de um agente (claude, codex…), não algo que um agente abriu.
 pub fn is_agent_cli(p: &crate::procs::ProcInfo) -> bool {
-    family_from_basename(&basename(&p.exe_path, &p.name)).is_some()
+    cli_family(&p.exe_path, &p.name).is_some()
+}
+
+/// Família do CLI pelo executável ou, se ele for um interpretador genérico, pelo nome que
+/// o processo se deu. O gateway do Hermes roda `python3.11` e se renomeia para `hermes`:
+/// só pelo exe ele caía no grupo do python, separado dos filhos que o Hermes abriu.
+fn cli_family(exe: &str, name: &str) -> Option<&'static str> {
+    family_from_basename(&basename(exe, name)).or_else(|| {
+        let name = name.to_lowercase();
+        family_from_basename(name.trim_end_matches(".exe"))
+    })
 }
 
 fn basename(exe: &str, name: &str) -> String {
@@ -724,6 +734,22 @@ mod tests {
         assert_eq!(a.label, "Sussurro");
         assert_eq!(b.key, "project:sonora");
         assert_ne!(a.key, b.key);
+    }
+
+    #[test]
+    fn interpreter_renamed_to_an_agent_joins_that_agent() {
+        let gateway = resolve(facts(
+            "hermes",
+            "/home/lol/.local/share/uv/python/cpython-3.11.16-linux-x86_64-gnu/bin/python3.11",
+            "/home/lol/.hermes/hermes-agent/venv/bin/python -m hermes_cli.main gateway run",
+        ));
+        let child = resolve(Facts {
+            agent: Some("Hermes"),
+            ..facts("node", "/usr/bin/node", "node scripts/whatsapp.js")
+        });
+        assert_eq!(gateway.key, "app:hermes");
+        assert_eq!(gateway.key, child.key);
+        assert_eq!(gateway.label, "Hermes");
     }
 
     #[test]
