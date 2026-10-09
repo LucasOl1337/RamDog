@@ -214,6 +214,12 @@ pub struct ProcInfo {
     pub cmdline: String,
     #[cfg(target_os = "linux")]
     pub linux_memory: Option<(u64, u64)>, // USS, PSS; None = unavailable
+    /// Páginas deste processo que estão no swap (no Omarchy, zram: comprimidas na RAM).
+    #[cfg(target_os = "linux")]
+    pub swap: u64,
+    /// CPU acumulada na vida inteira do processo (user + sys), em segundos.
+    #[cfg(target_os = "linux")]
+    pub cpu_secs: f64,
     pub private_ws: u64,
     pub working_set: u64,
     pub commit: u64,
@@ -263,6 +269,10 @@ impl Default for ProcInfo {
             cmdline: String::new(),
             #[cfg(target_os = "linux")]
             linux_memory: None,
+            #[cfg(target_os = "linux")]
+            swap: 0,
+            #[cfg(target_os = "linux")]
+            cpu_secs: 0.0,
             private_ws: 0,
             working_set: 0,
             commit: 0,
@@ -336,7 +346,7 @@ impl MemStatus {
 /// Fonte: `GetPerformanceInfo` (psapi), documentada e estável. Não usamos o campo
 /// `SystemCache` dela: no Windows 10+ ele reporta standby + cache (23,6 GB numa máquina
 /// com 1,8 GB de cache realmente residente), ou seja memória *disponível*, não em uso.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct KernelMem {
     /// Pool paginado (`KernelPaged`). Drivers e o próprio kernel; pode ser paginado ao disco,
     /// então superestima o residente em ~2% na prática.
@@ -345,6 +355,35 @@ pub struct KernelMem {
     pub nonpaged_pool: u64,
     /// `false` quando a chamada falhou — a UI omite as linhas em vez de mostrar zero.
     pub ok: bool,
+    /// Linux: o que o `/proc/meminfo` e o zram dizem sobre a RAM que não é de processo.
+    #[cfg(target_os = "linux")]
+    pub linux: LinuxMem,
+}
+
+/// No Linux o buraco entre "em uso" e a soma dos processos tem nome: arquivos guardados
+/// em tmpfs (`/tmp` é RAM no Omarchy), o zram que guarda o swap comprimido e o kernel.
+///
+/// O caso que motivou: topo em 33 GB, árvore somando 11 GB. Eram 15 GB de arquivos no
+/// `/tmp` que foram parar no zram, e o zram ocupando 16 GB de RAM sem aparecer em lista
+/// nenhuma, porque não pertence a processo nenhum.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug, Default)]
+pub struct LinuxMem {
+    /// `Shmem` residente: tmpfs, `/dev/shm`, memfd. O que já foi pro swap está no zram.
+    pub shmem: u64,
+    /// RAM que os dispositivos zram ocupam de verdade (`mem_used_total` do `mm_stat`).
+    pub zram_used: u64,
+    /// Dados guardados no zram antes da compressão (`orig_data_size`).
+    pub zram_orig: u64,
+    /// Swap em uso no total (zram + disco), para repartir o zram entre processos e arquivos.
+    pub swap_used: u64,
+    /// Kernel que não volta sozinho: slab não-recuperável, pilhas, tabelas de página,
+    /// percpu e vmalloc.
+    pub kernel: u64,
+    /// tmpfs graváveis pelo usuário com o que ocupam: (`/tmp`, bytes).
+    pub tmpfs: Vec<(String, u64)>,
+    /// Maiores pastas dentro dos tmpfs, descendo enquanto uma filha domina a mãe.
+    pub tmp_top: Vec<(String, u64)>,
 }
 
 #[cfg(windows)]
@@ -364,9 +403,19 @@ pub fn kernel_mem() -> KernelMem {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 pub fn kernel_mem() -> KernelMem {
-    // macOS/Linux: a wired memory do kernel não tem equivalente barato via sysinfo.
+    let linux = procs_unix::linux_mem();
+    KernelMem {
+        ok: linux.is_some(),
+        linux: linux.unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn kernel_mem() -> KernelMem {
+    // macOS: a wired memory do kernel não tem equivalente barato via sysinfo.
     KernelMem::default()
 }
 

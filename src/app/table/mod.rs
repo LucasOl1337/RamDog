@@ -57,6 +57,12 @@ pub(super) enum Row {
 pub(super) enum SysRow {
     PagedPool,
     NonPagedPool,
+    /// Linux: arquivos em tmpfs (`/tmp`, `/dev/shm`), residentes ou já comprimidos no zram.
+    RamFiles,
+    /// Linux: parte do zram que guarda páginas de processos trocadas.
+    ZramSwap,
+    /// Linux: slab não-recuperável, pilhas, tabelas de página, vmalloc.
+    LinuxKernel,
     SharedAndCache,
 }
 

@@ -58,7 +58,7 @@ impl StealKind {
             StealKind::SoftwareGpu => "gráficos por software, a GPU real fica parada",
             StealKind::Leftover => "sobra",
             StealKind::CredentialSpin => "loop de credencial",
-            StealKind::CheapCpu => "CPU sem RAM",
+            StealKind::CheapCpu => "CPU alta com pouca RAM",
         }
     }
 
@@ -136,6 +136,10 @@ pub struct Snapshot {
     pub swap_total: u64,
     pub gpu_pct: Option<f32>,
     pub game_open: bool,
+    /// RAM ocupada pelo zram. Com swap em zram "swap em uso" não é disco: é RAM comprimida.
+    pub zram_used: u64,
+    /// Arquivos em tmpfs (residentes + fatia do zram), o motivo mais comum do zram encher.
+    pub ram_files: u64,
 }
 
 impl Snapshot {
@@ -179,6 +183,56 @@ fn fmt_gb(bytes: u64) -> String {
     format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
 }
 
+const GB: u64 = 1024 * 1024 * 1024;
+
+fn swap_text(p: &Snapshot, locale: Locale) -> String {
+    let mut t = format!(
+        "{} {}",
+        locale.text("Swap em uso:", "Swap in use:"),
+        fmt_gb(p.swap_used)
+    );
+    if p.zram_used > 0 {
+        t.push_str(&format!(
+            "{} {} {}",
+            locale.text(", no zram, que ocupa", ", in zram, taking"),
+            fmt_gb(p.zram_used),
+            locale.text("de RAM", "of RAM")
+        ));
+        if p.ram_files >= GB {
+            t.push_str(&format!(
+                "{} {} {}",
+                locale.text("; arquivos em RAM (/tmp) somam", "; files in RAM (/tmp) add up to"),
+                fmt_gb(p.ram_files),
+                locale.text("e só saem apagando", "and only go away when deleted")
+            ));
+        }
+    }
+    t.push('.');
+    t
+}
+
+/// "Codex (núcleo) · Codex (núcleo) · Codex (núcleo)" vira "Codex ×3 (núcleo)".
+fn thief_list(thieves: &[Thief], locale: Locale) -> String {
+    let mut groups: Vec<(&str, StealKind, usize)> = Vec::new();
+    for t in thieves {
+        match groups
+            .iter_mut()
+            .find(|(l, k, _)| *l == t.label.as_str() && *k == t.kind)
+        {
+            Some(g) => g.2 += 1,
+            None => groups.push((t.label.as_str(), t.kind, 1)),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(label, kind, n)| {
+            let count = if n > 1 { format!(" ×{n}") } else { String::new() };
+            format!("{label}{count} ({})", kind.short_for(locale))
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
 /// Texto do aviso acima da tabela. `None` = máquina calma, não desenha faixa.
 pub fn banner(p: &Snapshot, thieves: &[Thief]) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
@@ -193,15 +247,11 @@ pub fn banner(p: &Snapshot, thieves: &[Thief]) -> Option<String> {
         }
     }
     if p.swap_hot() {
-        parts.push(format!("Swap em uso: {}.", fmt_gb(p.swap_used)));
+        parts.push(swap_text(p, Locale::Portuguese));
     }
     if !thieves.is_empty() {
-        let list = thieves
-            .iter()
-            .map(|t| format!("{} ({})", t.label, t.kind.short()))
-            .collect::<Vec<_>>()
-            .join(" · ");
-        parts.push(format!("Quem disputa: {list}."));
+        let list = thief_list(thieves, Locale::Portuguese);
+        parts.push(format!("Quem disputa CPU: {list}."));
     }
     if parts.is_empty() {
         None
@@ -229,14 +279,10 @@ pub fn banner_for(p: &Snapshot, thieves: &[Thief], locale: Locale) -> Option<Str
         }
     }
     if p.swap_hot() {
-        parts.push(format!("Swap in use: {}.", fmt_gb(p.swap_used)));
+        parts.push(swap_text(p, locale));
     }
     if !thieves.is_empty() {
-        let list = thieves
-            .iter()
-            .map(|t| format!("{} ({})", t.label, t.kind.short_for(locale)))
-            .collect::<Vec<_>>()
-            .join(" · ");
+        let list = thief_list(thieves, locale);
         parts.push(format!("Contention: {list}."));
     }
     (!parts.is_empty()).then(|| parts.join(" "))
@@ -409,6 +455,28 @@ mod tests {
         assert!(text.contains("Emulador Android (sfr-portfolio)"));
         assert!(text.contains("loop de credencial"));
         assert!(banner(&Snapshot::default(), &[]).is_none());
+    }
+
+    #[test]
+    fn banner_explains_zram_and_groups_repeated_thieves() {
+        let p = Snapshot {
+            swap_used: 27 * GB,
+            swap_total: 120 * GB,
+            zram_used: 16 * GB,
+            ram_files: 10 * GB,
+            ..Snapshot::default()
+        };
+        let codex = |pid| Thief {
+            pid,
+            label: "Codex".into(),
+            kind: StealKind::CheapCpu,
+            cores: 1.0,
+        };
+        let text = banner(&p, &[codex(1), codex(2), codex(3)]).expect("banner");
+        assert!(text.contains("no zram, que ocupa 16.0 GB de RAM"));
+        assert!(text.contains("arquivos em RAM (/tmp) somam 10.0 GB"));
+        assert!(text.contains("Codex ×3 (CPU alta com pouca RAM)"));
+        assert_eq!(text.matches("Codex").count(), 1);
     }
 
     #[test]

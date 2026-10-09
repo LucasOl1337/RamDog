@@ -136,6 +136,22 @@ impl SysRow {
             SysRow::NonPagedPool => {
                 locale.text("Kernel — pool não-paginado", "Kernel — non-paged pool")
             }
+            SysRow::RamFiles => locale.text(
+                "Arquivos em RAM (/tmp, /dev/shm)",
+                "Files in RAM (/tmp, /dev/shm)",
+            ),
+            SysRow::ZramSwap => locale.text(
+                "Swap comprimido de processos (zram)",
+                "Compressed process swap (zram)",
+            ),
+            SysRow::LinuxKernel => locale.text(
+                "Kernel (slab, pilhas, tabelas de página)",
+                "Kernel (slab, stacks, page tables)",
+            ),
+            SysRow::SharedAndCache if cfg!(target_os = "linux") => locale.text(
+                "Bibliotecas compartilhadas, cache preso e drivers",
+                "Shared libraries, pinned cache, and drivers",
+            ),
             SysRow::SharedAndCache => locale.text(
                 "Compartilhado, cache e tabelas",
                 "Shared, cache, and tables",
@@ -169,6 +185,58 @@ impl SysRow {
                     "Kernel memory that never leaves physical RAM — I/O queues, driver structures, and network buffers.\n\nAlways resident, always invisible in the process list."
                 ),
             ),
+            SysRow::RamFiles => locale.text(
+                concat!(
+                    "Arquivos guardados em tmpfs. No Omarchy o /tmp é RAM: tudo que agentes, ",
+                    "builds e testes deixam lá ocupa memória até alguém apagar.\n\n",
+                    "Quando a RAM aperta, esses arquivos vão para o zram (swap comprimido na ",
+                    "própria RAM) e continuam custando memória, só que sem aparecer em processo ",
+                    "nenhum. Esta linha soma a parte residente e a parte que está no zram.\n\n",
+                    "Para liberar: apagar os arquivos. Matar processo não devolve nada aqui."
+                ),
+                concat!(
+                    "Files stored in tmpfs. On Omarchy /tmp is RAM: whatever agents, builds and tests leave there uses memory until someone deletes it.\n\n",
+                    "Under pressure these files move to zram (compressed swap inside RAM) and keep costing memory without showing up in any process. This row adds the resident part and the part in zram.\n\n",
+                    "To free it, delete the files. Killing processes returns nothing here."
+                ),
+            ),
+            SysRow::ZramSwap => locale.text(
+                concat!(
+                    "Páginas de processos que o kernel tirou da RAM e comprimiu no zram. ",
+                    "Elas não entram na coluna RAM do processo (que é só o residente), mas o zram ",
+                    "que as guarda ocupa RAM de verdade.\n\n",
+                    "Rateado pelo swap de cada processo; o detalhe por processo está no inspetor."
+                ),
+                concat!(
+                    "Process pages the kernel moved out of RAM and compressed in zram. They are not in the process RAM column (resident only), but the zram holding them uses real RAM.\n\n",
+                    "Split by each process's swap; per-process detail is in the inspector."
+                ),
+            ),
+            SysRow::LinuxKernel => locale.text(
+                concat!(
+                    "Memória do kernel que não volta sozinha: slab não-recuperável, pilhas de ",
+                    "thread, tabelas de página, percpu e vmalloc (inclui parte do driver de GPU).\n\n",
+                    "Não pertence a processo nenhum. Acima de ~3 GB vale desconfiar de vazamento."
+                ),
+                concat!(
+                    "Kernel memory that is not reclaimed on its own: unreclaimable slab, thread stacks, page tables, percpu and vmalloc (includes part of the GPU driver).\n\n",
+                    "It belongs to no process. Above ~3 GB, suspect a leak."
+                ),
+            ),
+            SysRow::SharedAndCache if cfg!(target_os = "linux") => locale.text(
+                concat!(
+                    "O que sobra do \"em uso\" depois de descontar a memória privada dos ",
+                    "processos, os arquivos em RAM, o zram e o kernel.\n\n",
+                    "É sobretudo biblioteca compartilhada residente (contada uma vez só aqui), ",
+                    "cache de arquivo que o kernel não considera liberável e memória de driver.\n\n",
+                    "Calculado por diferença: é um resto, não uma medição direta."
+                ),
+                concat!(
+                    "What remains of \"in use\" after subtracting private process memory, files in RAM, zram and the kernel.\n\n",
+                    "Mostly resident shared libraries (counted once here), file cache the kernel does not consider reclaimable, and driver memory.\n\n",
+                    "Calculated by difference: a remainder, not a direct measurement."
+                ),
+            ),
             SysRow::SharedAndCache => locale.text(
                 concat!(
                     "O que sobra do \"em uso\" depois de descontar a memória privada dos processos ",
@@ -191,6 +259,9 @@ impl SysRow {
         match self {
             SysRow::PagedPool => Color32::from_rgb(216, 130, 88),
             SysRow::NonPagedPool => Color32::from_rgb(190, 108, 74),
+            SysRow::RamFiles => Color32::from_rgb(214, 170, 72),
+            SysRow::ZramSwap => Color32::from_rgb(170, 120, 210),
+            SysRow::LinuxKernel => Color32::from_rgb(216, 130, 88),
             SysRow::SharedAndCache => Color32::from_rgb(120, 132, 150),
         }
     }
@@ -206,10 +277,49 @@ struct MemBreakdown {
     private: u64,
     paged_pool: u64,
     nonpaged_pool: u64,
+    /// Linux: tmpfs residente + a fatia do zram que guarda esses arquivos.
+    ram_files: u64,
+    /// Linux: fatia do zram que guarda páginas de processos.
+    zram_swap: u64,
+    /// Linux: kernel não-recuperável.
+    linux_kernel: u64,
     /// Resto: compartilhado residente + cache + tabelas de página + driver locked.
     shared_and_cache: u64,
     /// `false` quando `GetPerformanceInfo` falhou — sem separar os pools do resto.
     kernel_ok: bool,
+}
+
+impl MemBreakdown {
+    /// Parcelas medidas que não são processo, na ordem em que aparecem no medidor.
+    /// O resto (`shared_and_cache`) fica de fora: ele sai por diferença.
+    fn parts(&self) -> Vec<(SysRow, u64)> {
+        if cfg!(target_os = "linux") {
+            vec![
+                (SysRow::RamFiles, self.ram_files),
+                (SysRow::ZramSwap, self.zram_swap),
+                (SysRow::LinuxKernel, self.linux_kernel),
+            ]
+        } else {
+            vec![
+                (SysRow::PagedPool, self.paged_pool),
+                (SysRow::NonPagedPool, self.nonpaged_pool),
+            ]
+        }
+    }
+
+    /// Privado dos processos + parcelas medidas: tudo que não é resto.
+    fn measured(&self) -> u64 {
+        self.parts()
+            .iter()
+            .fold(self.private, |acc, (_, b)| acc.saturating_add(*b))
+    }
+
+    /// Tudo que não é processo, inclusive o resto.
+    fn non_process(&self) -> u64 {
+        self.parts()
+            .iter()
+            .fold(self.shared_and_cache, |acc, (_, b)| acc.saturating_add(*b))
+    }
 }
 
 /// Agregados que dependem da amostra inteira. A UI pode repintar dezenas de vezes por
@@ -323,6 +433,9 @@ pub struct App {
     hist_gpu: VecDeque<f32>,
     hist_disk: VecDeque<f32>,
     show_prefs: bool,
+    /// Super botão: janela de confirmação aberta e as linhas desmarcadas nela.
+    purge_open: bool,
+    purge_off: HashSet<String>,
     logo: Option<TextureHandle>,
 }
 
@@ -411,6 +524,8 @@ impl App {
             hist_gpu: VecDeque::with_capacity(HIST_LEN),
             hist_disk: VecDeque::with_capacity(HIST_LEN),
             show_prefs: false,
+            purge_open: false,
+            purge_off: HashSet::new(),
             logo: image::load_from_memory(include_bytes!("../assets/ramdog-256.png"))
                 .ok()
                 .map(|img| {
@@ -724,15 +839,30 @@ impl App {
         // privado dos processos é amostrado num instante diferente do MEMORYSTATUSEX. Em
         // máquina com pouca RAM livre as duas folgas podem estourar o total — preferimos um
         // resto zerado a um número negativo travestido de dado.
-        let attributed = private.saturating_add(paged).saturating_add(nonpaged);
-        MemBreakdown {
+        let mut b = MemBreakdown {
             used,
             private,
             paged_pool: paged,
             nonpaged_pool: nonpaged,
-            shared_and_cache: used.saturating_sub(attributed),
             kernel_ok: self.kernel.ok,
+            ..Default::default()
+        };
+        #[cfg(target_os = "linux")]
+        if self.kernel.ok {
+            let l = &self.kernel.linux;
+            // O zram guarda páginas de processo e páginas de tmpfs misturadas. O swap de
+            // cada processo vem do smaps_rollup; o que sobra do swap em uso é de arquivo.
+            // A RAM que o zram ocupa é repartida na mesma proporção.
+            let proc_swap: u64 = self.procs.iter().map(|p| p.swap).sum();
+            let swap = l.swap_used.max(l.zram_orig).max(1);
+            let zram_procs =
+                (l.zram_used as u128 * proc_swap.min(swap) as u128 / swap as u128) as u64;
+            b.zram_swap = zram_procs;
+            b.ram_files = l.shmem.saturating_add(l.zram_used.saturating_sub(zram_procs));
+            b.linux_kernel = l.kernel;
         }
+        b.shared_and_cache = used.saturating_sub(b.measured());
+        b
     }
 
     fn attach_windows(&mut self) {
@@ -1175,6 +1305,10 @@ impl App {
                 .procs
                 .iter()
                 .any(|p| self.cat(p.pid) == Category::Games),
+            #[cfg(target_os = "linux")]
+            zram_used: self.kernel.linux.zram_used,
+            ram_files: self.calculate_breakdown().ram_files,
+            ..Default::default()
         }
     }
 
@@ -1265,16 +1399,73 @@ impl App {
         if !b.kernel_ok {
             return Vec::new();
         }
-        let mut out = vec![
-            (SysRow::PagedPool, b.paged_pool),
-            (SysRow::NonPagedPool, b.nonpaged_pool),
-            (SysRow::SharedAndCache, b.shared_and_cache),
-        ];
+        let mut out = b.parts();
+        out.push((SysRow::SharedAndCache, b.shared_and_cache));
         out.retain(|(_, bytes)| *bytes > 0);
         out.sort_by_key(|(_, bytes)| std::cmp::Reverse(*bytes));
         out.into_iter()
             .map(|(kind, bytes)| Row::System { kind, bytes })
             .collect()
+    }
+
+    /// Explicação da linha de sistema. No Linux as linhas de arquivo e de zram dizem
+    /// também *onde* está o peso: as pastas do tmpfs e os processos com mais swap.
+    fn sys_row_tip(&self, kind: SysRow) -> String {
+        let locale = self.cfg.locale;
+        let mut tip = kind.tip_for(locale).to_string();
+        #[cfg(target_os = "linux")]
+        {
+            let l = &self.kernel.linux;
+            match kind {
+                SysRow::RamFiles => {
+                    if !l.tmpfs.is_empty() {
+                        tip.push_str(locale.text("\n\nOcupado por tmpfs:", "\n\nUsed per tmpfs:"));
+                        for (dir, bytes) in l.tmpfs.iter().filter(|(_, b)| *b > 0) {
+                            tip.push_str(&format!("\n{dir}  {}", fmt_bytes_short(*bytes)));
+                        }
+                    }
+                    if !l.tmp_top.is_empty() {
+                        tip.push_str(locale.text(
+                            "\n\nPastas que mais pesam:",
+                            "\n\nHeaviest folders:",
+                        ));
+                        for (dir, bytes) in &l.tmp_top {
+                            tip.push_str(&format!("\n{}  {dir}", fmt_bytes_short(*bytes)));
+                        }
+                    }
+                }
+                SysRow::ZramSwap => {
+                    if l.zram_orig > 0 {
+                        tip.push_str(&format!(
+                            "\n\n{} {} {} {}.",
+                            locale.text("O zram guarda", "zram holds"),
+                            fmt_bytes_short(l.zram_orig),
+                            locale.text("descomprimidos em", "uncompressed in"),
+                            fmt_bytes_short(l.zram_used)
+                        ));
+                    }
+                    let mut top: Vec<&ProcInfo> =
+                        self.procs.iter().filter(|p| p.swap > 0).collect();
+                    top.sort_by_key(|p| std::cmp::Reverse(p.swap));
+                    if !top.is_empty() {
+                        tip.push_str(locale.text(
+                            "\n\nProcessos com mais swap:",
+                            "\n\nProcesses with the most swap:",
+                        ));
+                        for p in top.into_iter().take(8) {
+                            tip.push_str(&format!(
+                                "\n{}  {} (PID {})",
+                                fmt_bytes_short(p.swap),
+                                identity::of(p).label,
+                                p.pid
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        tip
     }
 
     fn build_rows(&mut self) -> Vec<Row> {
@@ -2341,8 +2532,9 @@ impl App {
         for (c, t) in &segs {
             band(&mut x, *t, c.color().gamma_multiply(0.85));
         }
-        band(&mut x, b.paged_pool, SysRow::PagedPool.color());
-        band(&mut x, b.nonpaged_pool, SysRow::NonPagedPool.color());
+        for (kind, bytes) in b.parts() {
+            band(&mut x, bytes, kind.color());
+        }
         band(&mut x, b.shared_and_cache, SysRow::SharedAndCache.color());
         p.rect_stroke(rect, 3.0, Stroke::new(1.0_f32, LINE), StrokeKind::Inside);
         // O compromisso saía numa linha extra embaixo da barra — era a única linha que só a
@@ -2379,16 +2571,13 @@ impl App {
             fmt_bytes_short(b.private)
         ));
         if b.kernel_ok {
-            tip.push_str(&format!(
-                "\n{}  {}",
-                SysRow::PagedPool.label_for(self.cfg.locale),
-                fmt_bytes_short(b.paged_pool)
-            ));
-            tip.push_str(&format!(
-                "\n{}  {}",
-                SysRow::NonPagedPool.label_for(self.cfg.locale),
-                fmt_bytes_short(b.nonpaged_pool)
-            ));
+            for (kind, bytes) in b.parts() {
+                tip.push_str(&format!(
+                    "\n{}  {}",
+                    kind.label_for(self.cfg.locale),
+                    fmt_bytes_short(bytes)
+                ));
+            }
         }
         tip.push_str(&format!(
             "\n{}  {}",
@@ -3382,7 +3571,7 @@ impl App {
                                 ui.label(RichText::new(self.cfg.locale.text("não pode ser encerrado", "cannot be terminated")).weak().small());
                             });
                             row.col(|_ui| {});
-                            row.response().on_hover_text(kind.tip_for(self.cfg.locale));
+                            row.response().on_hover_text(self.sys_row_tip(kind));
                         }
                         Row::CatHeader { cat, count, total, collapsed } => {
                             let (cat, count, total, collapsed) = (*cat, *count, *total, *collapsed);
@@ -4969,156 +5158,115 @@ impl App {
 
     fn ui_accounting(&mut self, ui: &mut egui::Ui) {
         let locale = self.cfg.locale;
-        #[cfg(target_os = "linux")]
-        if cfg!(target_os = "linux") {
-            let available = self.derived.linux_memory_available;
-            let summary = if locale == Locale::Portuguese {
-                format!(
-                    "RAM {} em uso · memória detalhada: {available}/{} processos",
-                    fmt_gb(self.mem.used_phys()),
-                    self.procs.len()
-                )
-            } else {
-                format!(
-                    "RAM {} in use · detailed memory: {available}/{} processes",
-                    fmt_gb(self.mem.used_phys()),
-                    self.procs.len()
-                )
-            };
-            ui.label(RichText::new(summary).small().color(MUTED))
-                .on_hover_text(self.linux_memory_summary());
-            return;
-        }
         let b = self.breakdown();
         if b.used == 0 {
             return;
         }
-        if locale == Locale::English {
-            let measured = b
-                .private
-                .saturating_add(b.paged_pool)
-                .saturating_add(b.nonpaged_pool);
-            let overflow = measured > b.used;
-            let head = if b.shared_and_cache > 0 {
-                format!(
-                    "RAM {}: {} measured + {} by difference",
-                    fmt_gb(b.used),
-                    fmt_gb(measured),
-                    fmt_gb(b.shared_and_cache)
-                )
-            } else {
-                format!(
-                    "RAM {}: {} measured",
-                    fmt_gb(b.used),
-                    fmt_gb(measured.min(b.used))
-                )
-            };
-            let color = if b.kernel_ok && !overflow {
-                MUTED
-            } else {
-                Color32::from_rgb(200, 150, 90)
-            };
-            let mut tip = format!("Composition of the {} in use, always in private memory — the only basis that does not count the same physical page twice:\n\nProcesses (private)  {}\n", fmt_gb(b.used), fmt_bytes_short(b.private));
-            if b.kernel_ok {
-                tip.push_str(&format!(
-                    "{}  {}\n",
-                    SysRow::PagedPool.label_for(locale),
-                    fmt_bytes_short(b.paged_pool)
-                ));
-                tip.push_str(&format!(
-                    "{}  {}\n",
-                    SysRow::NonPagedPool.label_for(locale),
-                    fmt_bytes_short(b.nonpaged_pool)
-                ));
-            } else {
-                tip.push_str("Kernel pools: unavailable (GetPerformanceInfo failed)\n");
-            }
-            tip.push_str(&format!(
-                "{}  {}\n",
-                SysRow::SharedAndCache.label_for(locale),
-                fmt_bytes_short(b.shared_and_cache)
-            ));
-            if overflow {
-                tip.push_str("\nMeasured parts already exceed the total in use: paged pool includes the portion on disk, and processes are sampled at a different instant from the memory reading. The remainder was clamped to zero instead of going negative.\n");
-            }
-            if self.cfg.mem_metric != MemMetric::Private {
-                let shown: u64 = self.procs.iter().map(|p| self.mem_of(p)).sum();
-                tip.push_str(&format!("\nThe RAM column uses {} and sums {} — above private memory because each shared page counts in every process that maps it.", self.cfg.mem_metric.label_for(locale).to_lowercase(), fmt_bytes_short(shown)));
-            }
-            ui.label(RichText::new(head).color(color).small())
-                .on_hover_text(tip);
-            return;
-        }
-        // "Medido" = privado dos processos + os dois pools, cada um lido de uma API. O resto
-        // é um subtraendo, e o rótulo diz isso — chamá-lo de "atribuído" fingiria uma
-        // medição que não existe, que é justamente o vício do Gerenciador de Tarefas.
-        let measured = b
-            .private
-            .saturating_add(b.paged_pool)
-            .saturating_add(b.nonpaged_pool);
+        // "Medido" = privado dos processos + parcelas lidas de uma API (pools no Windows;
+        // tmpfs, zram e kernel no Linux). O resto é um subtraendo, e o rótulo diz isso.
+        let measured = b.measured();
         let overflow = measured > b.used;
         let color = if b.kernel_ok && !overflow {
             MUTED
         } else {
             Color32::from_rgb(200, 150, 90)
         };
-        let head = if b.shared_and_cache > 0 {
+        let head = if b.kernel_ok && cfg!(target_os = "linux") {
+            // A pergunta do rodapé é "cadê o resto?": no Linux a resposta mais comum é
+            // arquivo em RAM e zram, então eles vão nomeados na própria linha.
+            let mut parts = vec![format!(
+                "{} {}",
+                fmt_gb(b.private),
+                locale.text("processos", "processes")
+            )];
+            for (kind, bytes) in b.parts() {
+                if bytes >= 256 * 1024 * 1024 {
+                    let short = match kind {
+                        SysRow::RamFiles => locale.text("arquivos em RAM", "files in RAM"),
+                        SysRow::ZramSwap => locale.text("zram", "zram"),
+                        SysRow::LinuxKernel => locale.text("kernel", "kernel"),
+                        _ => kind.label_for(locale),
+                    };
+                    parts.push(format!("{} {short}", fmt_gb(bytes)));
+                }
+            }
+            if b.shared_and_cache > 0 {
+                parts.push(format!(
+                    "{} {}",
+                    fmt_gb(b.shared_and_cache),
+                    locale.text("resto", "other")
+                ));
+            }
+            format!("RAM {} = {}", fmt_gb(b.used), parts.join(" + "))
+        } else if b.shared_and_cache > 0 {
             format!(
-                "RAM {}: {} medidos + {} por diferença",
+                "RAM {}: {} {} + {} {}",
                 fmt_gb(b.used),
                 fmt_gb(measured),
-                fmt_gb(b.shared_and_cache)
+                locale.text("medidos", "measured"),
+                fmt_gb(b.shared_and_cache),
+                locale.text("por diferença", "by difference")
             )
         } else {
             format!(
-                "RAM {}: {} medidos",
+                "RAM {}: {} {}",
                 fmt_gb(b.used),
-                fmt_gb(measured.min(b.used))
+                fmt_gb(measured.min(b.used)),
+                locale.text("medidos", "measured")
             )
         };
         let mut tip = format!(
-            "Composição dos {} em uso, sempre em memória privada — a única base que não conta \
-             a mesma página física duas vezes:\n\n\
-             Processos (privado)  {}\n",
-            fmt_gb(b.used),
+            "{}\n\n{}  {}\n",
+            locale.text(
+                "Composição da RAM em uso, sempre em memória privada, a única base que não conta a mesma página física duas vezes:",
+                "Composition of RAM in use, always in private memory, the only basis that does not count the same physical page twice:"
+            ),
+            locale.text("Processos (privado)", "Processes (private)"),
             fmt_bytes_short(b.private)
         );
         if b.kernel_ok {
-            tip.push_str(&format!(
-                "{}  {}\n",
-                SysRow::PagedPool.label_for(self.cfg.locale),
-                fmt_bytes_short(b.paged_pool)
-            ));
-            tip.push_str(&format!(
-                "{}  {}\n",
-                SysRow::NonPagedPool.label_for(self.cfg.locale),
-                fmt_bytes_short(b.nonpaged_pool)
-            ));
+            for (kind, bytes) in b.parts() {
+                tip.push_str(&format!(
+                    "{}  {}\n",
+                    kind.label_for(locale),
+                    fmt_bytes_short(bytes)
+                ));
+            }
         } else {
-            tip.push_str("Pools do kernel: indisponíveis (GetPerformanceInfo falhou)\n");
+            tip.push_str(locale.text(
+                "Memória do kernel: indisponível nesta leitura\n",
+                "Kernel memory: unavailable in this reading\n",
+            ));
         }
         tip.push_str(&format!(
             "{}  {}\n",
-            SysRow::SharedAndCache.label_for(self.cfg.locale),
+            SysRow::SharedAndCache.label_for(locale),
             fmt_bytes_short(b.shared_and_cache)
         ));
+        #[cfg(target_os = "linux")]
+        {
+            tip.push('\n');
+            tip.push_str(self.linux_memory_summary());
+            tip.push('\n');
+        }
         if overflow {
-            tip.push_str(
-                "\nAs parcelas medidas já passam do total em uso: o pool paginado inclui a \
-                 fração que está no disco, e os processos são amostrados num instante \
-                 diferente da leitura de memória. O resto foi zerado em vez de negativado.\n",
-            );
+            tip.push_str(locale.text(
+                "\nAs parcelas medidas já passam do total em uso: os processos são amostrados num instante diferente da leitura de memória. O resto foi zerado em vez de negativado.\n",
+                "\nMeasured parts already exceed the total in use: processes are sampled at a different instant from the memory reading. The remainder was clamped to zero instead of going negative.\n",
+            ));
         }
         if self.cfg.mem_metric != MemMetric::Private {
             let shown = self.derived.metric_total;
             tip.push_str(&format!(
-                "\nA coluna RAM está em {} e soma {} — acima do privado porque cada página \
-                 compartilhada conta em todo processo que a mapeia.",
-                self.cfg
-                    .mem_metric
-                    .label_for(self.cfg.locale)
-                    .to_lowercase(),
-                fmt_bytes_short(shown)
+                "{} {} {} {}{}",
+                locale.text("\nA coluna RAM está em", "\nThe RAM column uses"),
+                self.cfg.mem_metric.label_for(locale).to_lowercase(),
+                locale.text("e soma", "and sums"),
+                fmt_bytes_short(shown),
+                locale.text(
+                    ": acima do privado porque cada página compartilhada conta em todo processo que a mapeia.",
+                    ": above private memory because each shared page counts in every process that maps it."
+                )
             ));
         }
         ui.label(RichText::new(head).color(color).small())
@@ -5349,6 +5497,7 @@ impl eframe::App for App {
             });
 
         self.ui_prefs(ctx);
+        self.ui_purge(ctx);
         self.ui_status(ctx);
         self.save_cfg_if_dirty();
     }
@@ -5820,6 +5969,7 @@ impl App {
                 {
                     self.set_mini(true);
                 }
+                self.ui_purge_button(ui);
                 if v.is_addon() {
                     return;
                 }
@@ -6227,7 +6377,7 @@ impl App {
             if b.kernel_ok {
                 let on = self.cfg.show_kernel_rows;
                 let col = SysRow::PagedPool.color();
-                let sys_total = b.paged_pool + b.nonpaged_pool + b.shared_and_cache;
+                let sys_total = b.non_process();
                 let text = RichText::new(format!(
                     "{}  {}",
                     locale.text("▣ Sistema (não-processo)", "▣ System (non-process)"),
@@ -6265,6 +6415,163 @@ impl App {
                 }
             }
         });
+    }
+
+    /// Linhas do super botão e se cada uma vai: "pode fechar" marcado, o resto desmarcado,
+    /// e o que o usuário trocou na janela.
+    fn purge_rows(&self) -> Vec<(crate::sweep::Row, bool)> {
+        self.sweep
+            .leftovers()
+            .into_iter()
+            .map(|r| {
+                let default = r.tier == crate::sweep::Tier::Close;
+                let on = default != self.purge_off.contains(&r.key);
+                (r, on)
+            })
+            .collect()
+    }
+
+    /// PIDs e RAM do que está marcado, sem contar duas vezes o mesmo PID.
+    fn purge_pick(rows: &[(crate::sweep::Row, bool)]) -> (usize, Vec<u32>, u64) {
+        let mut seen = HashSet::new();
+        let (mut apps, mut pids, mut ram) = (0, Vec::new(), 0u64);
+        for (r, on) in rows {
+            if !on {
+                continue;
+            }
+            apps += 1;
+            for &(pid, m) in &r.kill {
+                if seen.insert(pid) {
+                    pids.push(pid);
+                    ram += m;
+                }
+            }
+        }
+        (apps, pids, ram)
+    }
+
+    /// Super botão no cabeçalho: mata de uma vez as sobras que a Faxina acha.
+    fn ui_purge_button(&mut self, ui: &mut egui::Ui) {
+        let locale = self.cfg.locale;
+        let rows = self.purge_rows();
+        let (apps, _, ram) = Self::purge_pick(&rows);
+        let label = if apps == 0 {
+            locale.text("Sem sobras", "No leftovers").to_string()
+        } else {
+            format!(
+                "{} {apps} · {}",
+                locale.text("Matar sobras", "Kill leftovers"),
+                fmt_bytes_short(ram)
+            )
+        };
+        let b = if apps == 0 {
+            egui::Button::new(RichText::new(label).size(13.0).color(MUTED))
+                .fill(SURFACE)
+                .stroke(Stroke::NONE)
+                .corner_radius(8.0)
+        } else {
+            crate::kit::danger(&label)
+        };
+        if ui
+            .add(b)
+            .on_hover_text(locale.text(
+                "Encerra o que ficou para trás: processo de agente que já saiu, script largado girando CPU sem ninguém esperar, emulador escondido. Abre uma lista para conferir antes.\nArquivos em RAM (/tmp) não somem matando processo: só apagando.",
+                "Ends what was left behind: processes from agents that already exited, abandoned scripts burning CPU, hidden emulators. Opens a list to review first.\nFiles in RAM (/tmp) don't go away by killing processes, only by deleting them.",
+            ))
+            .clicked()
+        {
+            self.purge_open = !self.purge_open;
+            self.purge_off.clear();
+        }
+    }
+
+    fn ui_purge(&mut self, ctx: &egui::Context) {
+        if !self.purge_open {
+            return;
+        }
+        let locale = self.cfg.locale;
+        let rows = self.purge_rows();
+        let (apps, pids, ram) = Self::purge_pick(&rows);
+        let mut open = true;
+        let mut kill = false;
+        let mut flip: Option<String> = None;
+        egui::Window::new(locale.text("Matar sobras", "Kill leftovers"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(560.0)
+            .anchor(egui::Align2::CENTER_TOP, [0.0, 90.0])
+            .frame(egui::Frame::window(&ctx.style()).fill(SURFACE).corner_radius(CARD_R).inner_margin(egui::Margin::same(14)))
+            .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(8.0, 6.0);
+                if rows.is_empty() {
+                    ui.label(crate::kit::muted(locale.text(
+                        "Nada largado agora. Se a RAM continua alta, olhe as linhas de sistema na Árvore: arquivos em /tmp e zram não são processo.",
+                        "Nothing left behind right now. If RAM is still high, check the system rows in the Tree: /tmp files and zram are not processes.",
+                    )));
+                    return;
+                }
+                ui.label(crate::kit::muted(locale.text(
+                    "Marcados saem com tudo que roda abaixo deles. Protegidos e o sistema ficam de fora.",
+                    "Checked items go with everything below them. Protected and system processes are skipped.",
+                )));
+                egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                    for (r, on) in &rows {
+                        ui.horizontal(|ui| {
+                            let mut v = *on;
+                            if ui.checkbox(&mut v, "").changed() {
+                                flip = Some(r.key.clone());
+                            }
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(&r.label).strong());
+                                    ui.label(crate::kit::muted(&fmt_bytes_short(r.ram)));
+                                    if r.kill.len() > 1 {
+                                        ui.label(crate::kit::muted(&format!("· {} {}", r.kill.len(), locale.text("processos", "processes"))));
+                                    }
+                                });
+                                ui.label(RichText::new(r.why.text(locale)).size(12.0).color(MUTED));
+                                if !r.detail.is_empty() {
+                                    ui.label(RichText::new(&r.detail).size(11.5).color(MUTED));
+                                }
+                            });
+                        });
+                        ui.add_space(2.0);
+                    }
+                });
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let n = pids.len();
+                    let label = if locale == Locale::English {
+                        format!("Kill {apps} · {n} process{} · {}", if n == 1 { "" } else { "es" }, fmt_bytes(ram))
+                    } else {
+                        format!("Matar {apps} · {n} processo{} · {}", if n == 1 { "" } else { "s" }, fmt_bytes(ram))
+                    };
+                    if ui.add_enabled(!pids.is_empty(), crate::kit::danger(&label)).clicked() {
+                        kill = true;
+                    }
+                    if ui.add(crate::kit::button(locale.text("Cancelar", "Cancel"))).clicked() {
+                        self.purge_open = false;
+                    }
+                });
+            });
+        if let Some(k) = flip {
+            if !self.purge_off.remove(&k) {
+                self.purge_off.insert(k);
+            }
+        }
+        if kill {
+            // A classificação é da última amostra; confere o lock de novo.
+            let pids: Vec<u32> = pids
+                .into_iter()
+                .filter(|pid| self.proc(*pid).is_some_and(|p| !self.is_locked(p)))
+                .collect();
+            self.request_kill_many(&pids);
+            self.purge_open = false;
+        }
+        if !open {
+            self.purge_open = false;
+        }
     }
 
     /// Janela de preferências: o que antes ficava espalhado pela fileira de filtros.

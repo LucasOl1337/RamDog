@@ -40,6 +40,13 @@ const IDLE_HIDDEN: u64 = 30 * 60;
 const UNFOCUSED: u64 = 2 * 3600;
 /// Lançado por um agente que já saiu e parado desde então: pode fechar.
 const ORPHAN_IDLE: u64 = 10 * 60;
+/// Largado e girando CPU: idade mínima e média de núcleos na vida inteira.
+/// O caso real: um `python3 -` que um agente abriu num heredoc, o agente saiu e o
+/// script ficou 10 h comendo um núcleo inteiro sem ninguém esperar a resposta.
+const RUNAWAY_AGE: u64 = 30 * 60;
+const RUNAWAY_CORES: f64 = 0.5;
+/// Parado e escondido só entra no super botão se segurar pelo menos isto.
+const PURGE_MAYBE_RAM: u64 = 256 << 20;
 /// Segundos entre gravações do sweep.json.
 const SAVE_SECS: u64 = 60;
 /// Restart mais longo que isso descarta o que foi visto: com o RamDog fechado ninguém
@@ -79,6 +86,8 @@ pub enum Tier {
 pub enum Why {
     Leftover(&'static str, &'static str),
     AgentGone { agent: String, idle: u64 },
+    /// Quem abriu já saiu e o processo segue gastando CPU sem ninguém olhar.
+    Runaway { cores: f64, age: u64 },
     IdleHidden(u64),
     Unfocused(u64),
     Busy(u64),
@@ -90,7 +99,7 @@ pub enum Why {
 }
 
 impl Why {
-    fn text(&self, locale: Locale) -> String {
+    pub fn text(&self, locale: Locale) -> String {
         let en = locale == Locale::English;
         match self {
             Why::Leftover(pt, e) => (if en { e } else { pt }).to_string(),
@@ -104,6 +113,19 @@ impl Why {
                     format!(
                         "aberto por um {agent} que já saiu; parado há {}",
                         fmt_age(*idle)
+                    )
+                }
+            }
+            Why::Runaway { cores, age } => {
+                if en {
+                    format!(
+                        "whoever started it is gone; burning {cores:.1} cores for {}",
+                        fmt_age(*age)
+                    )
+                } else {
+                    format!(
+                        "quem abriu já saiu; comendo {cores:.1} núcleo há {}",
+                        fmt_age(*age)
                     )
                 }
             }
@@ -334,6 +356,8 @@ struct Inst {
     unfocused: Option<u64>,
     observed: u64,
     window: bool,
+    /// CPU da vida inteira dos membros, em segundos.
+    cpu_secs: f64,
 }
 
 /// Classifica as instâncias. Função pura: o `Sweep` só fornece a atividade observada.
@@ -382,6 +406,7 @@ pub fn classify(
                 unfocused: None,
                 observed: 0,
                 window: false,
+                cpu_secs: 0.0,
             });
             insts.len() - 1
         });
@@ -398,6 +423,10 @@ pub fn classify(
         };
         it.observed = it.observed.max(a.observed);
         it.window |= p.has_window;
+        #[cfg(target_os = "linux")]
+        {
+            it.cpu_secs += p.cpu_secs;
+        }
     }
     for n in 0..insts.len() {
         let rp = &procs[insts[n].root];
@@ -458,6 +487,26 @@ pub fn classify(
         }
         None
     };
+    // Largado: subindo pelos shells, o primeiro pai de verdade é o init ou o systemd do
+    // usuário, ou seja, o terminal/agente que abriu já morreu e o kernel reparentou.
+    let detached = |n: usize| -> bool {
+        let mut cur = insts[n].parent;
+        for _ in 0..32 {
+            let Some(c) = cur else { return true };
+            let r = &procs[insts[c].root];
+            if r.pid == 1 || base_name(r) == "systemd" {
+                return true;
+            }
+            if insts[c].protected {
+                return false;
+            }
+            if !insts[c].thin {
+                return false;
+            }
+            cur = insts[c].parent;
+        }
+        false
+    };
     let recently_used = |n: usize| {
         insts[n].idle < RECENT_BUSY || insts[n].unfocused.is_some_and(|u| u < RECENT_FOCUS)
     };
@@ -494,10 +543,27 @@ pub fn classify(
             Some((pt, en))
         });
         let unfocused = sub_unfocused[n].unwrap_or(it.observed);
+        let age = ((now_ft - rp.create_time).max(0) / 10_000_000) as u64;
+        let avg_cores = it.cpu_secs / age.max(1) as f64;
+        let runaway = age >= RUNAWAY_AGE
+            && avg_cores >= RUNAWAY_CORES
+            && it.idle < 60
+            && !it.window
+            && is_service(rp).is_none()
+            && !identity::is_agent_cli(rp)
+            && detached(n);
         let v = if keep.contains(&ids[it.root].key) {
             (Tier::Keep, Why::Pinned)
         } else if let Some((pt, en)) = leftover {
             (Tier::Close, Why::Leftover(pt, en))
+        } else if runaway {
+            (
+                Tier::Close,
+                Why::Runaway {
+                    cores: avg_cores,
+                    age,
+                },
+            )
         } else if sub_idle[n] < RECENT_BUSY {
             (Tier::Keep, Why::Busy(sub_idle[n]))
         } else if unfocused < RECENT_FOCUS && sub_unfocused[n].is_some() {
@@ -748,6 +814,21 @@ impl Sweep {
         if let Ok(s) = serde_json::to_string(&store) {
             let _ = std::fs::write(&path, s);
         }
+    }
+
+    /// O que o super botão oferece: tudo que a Faxina marcaria sozinha, mais os parados
+    /// sem janela que seguram RAM de verdade (estes desmarcados).
+    pub fn leftovers(&self) -> Vec<Row> {
+        self.rows
+            .iter()
+            .filter(|r| {
+                r.tier == Tier::Close
+                    || (r.tier == Tier::Maybe
+                        && matches!(r.why, Why::IdleHidden(_))
+                        && r.ram >= PURGE_MAYBE_RAM)
+            })
+            .cloned()
+            .collect()
     }
 
     fn is_picked(&self, r: &Row) -> bool {
@@ -1180,6 +1261,39 @@ mod tests {
         assert_eq!(rows[0].tier, Tier::Close);
         let pids: Vec<u32> = rows[0].kill.iter().map(|(p, _)| *p).collect();
         assert_eq!(pids, vec![30, 31]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn script_orphaned_to_systemd_burning_cpu_is_close() {
+        let user = proc(5, 1, "systemd");
+        let shell = proc(50, 5, "bash");
+        let mut py = proc(51, 50, "python3");
+        // 10 h de vida, 9,5 h de CPU: o `python3 -` que ficou girando sozinho.
+        let hours = 10 * 3600;
+        py.create_time = -(hours as i64) * 10_000_000;
+        py.cpu_secs = 9.5 * 3600.0;
+        let mut calm = proc(60, 5, "python3");
+        calm.create_time = py.create_time;
+        calm.cpu_secs = 60.0;
+        let mut owned = proc(70, 1, "foot");
+        owned.has_window = true;
+        let mut child = proc(71, 70, "python3");
+        child.create_time = py.create_time;
+        child.cpu_secs = 9.5 * 3600.0;
+        let procs = [proc(1, 0, "systemd"), user, shell, py, calm, owned, child];
+        let rows = run(&procs, &HashMap::new());
+        let r = rows.iter().find(|r| r.pid == 51 || r.pid == 50).unwrap();
+        assert_eq!(r.tier, Tier::Close);
+        assert!(matches!(r.why, Why::Runaway { .. }));
+        assert!(
+            rows.iter().all(|r| r.pid != 60 || r.tier != Tier::Close),
+            "órfão quieto não é desgovernado"
+        );
+        assert!(
+            rows.iter().all(|r| r.pid != 71 || !matches!(r.why, Why::Runaway { .. })),
+            "com o terminal vivo, quem abriu ainda está lá"
+        );
     }
 
     #[test]

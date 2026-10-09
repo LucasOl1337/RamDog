@@ -125,7 +125,7 @@ pub struct Sampler {
     #[cfg(target_os = "linux")]
     live: HashMap<(u32, u64), Live>,
     #[cfg(target_os = "linux")]
-    smaps: HashMap<ProcessKey, CachedRead<(u64, u64)>>,
+    smaps: HashMap<ProcessKey, CachedRead<(u64, u64, u64)>>,
     #[cfg(target_os = "linux")]
     fds: HashMap<ProcessKey, CachedRead<u32>>,
     /// Instante da amostra anterior: a janela que o medidor do topo também mede.
@@ -337,7 +337,9 @@ impl Sampler {
                     at: now,
                 },
             );
-            let linux_memory = cached_value(&self.smaps, &key);
+            let smaps = cached_value(&self.smaps, &key);
+            let linux_memory = smaps.map(|m| (m.0, m.1));
+            let swap = smaps.map(|m| m.2).unwrap_or(0);
             let private_ws = linux_memory
                 .map(|m| m.0)
                 .unwrap_or_else(|| p.rss.saturating_sub(p.shared));
@@ -359,6 +361,8 @@ impl Sampler {
                 exe_path: st.exe_path.clone(),
                 cmdline: st.cmdline.clone(),
                 linux_memory,
+                swap,
+                cpu_secs: ticks as f64 / self.clk_tck.max(1) as f64,
                 private_ws,
                 working_set: p.rss,
                 commit: p.virt,
@@ -856,11 +860,209 @@ fn kb_field(text: &str, key: &str) -> Option<u64> {
     value.checked_mul(1024)
 }
 
+/// Memória que não é de processo, lida do `/proc/meminfo`, do zram e dos tmpfs.
+/// `None` só quando o `/proc/meminfo` não abre.
 #[cfg(target_os = "linux")]
-fn parse_smaps_rollup(text: &str) -> Option<(u64, u64)> {
+pub fn linux_mem() -> Option<super::LinuxMem> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let f = |k: &str| kb_field(&text, k).unwrap_or(0);
+    let (zram_orig, zram_used) = zram_totals();
+    let tmpfs = user_tmpfs();
+    Some(super::LinuxMem {
+        shmem: f("Shmem:"),
+        zram_used,
+        zram_orig,
+        swap_used: f("SwapTotal:").saturating_sub(f("SwapFree:")),
+        kernel: f("SUnreclaim:")
+            + f("KernelStack:")
+            + f("PageTables:")
+            + f("SecPageTables:")
+            + f("Percpu:")
+            + f("VmallocUsed:"),
+        tmp_top: tmp_top(&tmpfs),
+        tmpfs,
+    })
+}
+
+/// (dados originais, RAM ocupada) somando todos os `/sys/block/zram*`.
+#[cfg(target_os = "linux")]
+fn zram_totals() -> (u64, u64) {
+    let Ok(rd) = std::fs::read_dir("/sys/block") else {
+        return (0, 0);
+    };
+    let mut total = (0, 0);
+    for e in rd.flatten() {
+        if !e.file_name().to_string_lossy().starts_with("zram") {
+            continue;
+        }
+        if let Ok(t) = std::fs::read_to_string(e.path().join("mm_stat")) {
+            let (orig, used) = parse_mm_stat(&t);
+            total.0 += orig;
+            total.1 += used;
+        }
+    }
+    total
+}
+
+/// `mm_stat`: orig_data_size compr_data_size mem_used_total ... (bytes).
+#[cfg(target_os = "linux")]
+fn parse_mm_stat(text: &str) -> (u64, u64) {
+    let n: Vec<u64> = text
+        .split_whitespace()
+        .filter_map(|x| x.parse().ok())
+        .collect();
+    (
+        n.first().copied().unwrap_or(0),
+        n.get(2).copied().unwrap_or(0),
+    )
+}
+
+/// tmpfs onde o usuário escreve arquivos (`/tmp`, `/dev/shm`, `/run/user/N`), com o usado.
+/// Ficam de fora os de sistema (`/run`, credenciais), que o usuário não tem como limpar.
+#[cfg(target_os = "linux")]
+fn user_tmpfs() -> Vec<(String, u64)> {
+    let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+    let mut out: Vec<(String, u64)> = Vec::new();
+    for line in mounts.lines() {
+        let mut it = line.split_whitespace();
+        let (Some(_), Some(dir), Some(fs)) = (it.next(), it.next(), it.next()) else {
+            continue;
+        };
+        if fs != "tmpfs" {
+            continue;
+        }
+        let dir = dir.replace("\\040", " ");
+        let user_dir = dir == "/tmp"
+            || dir == "/dev/shm"
+            || dir == "/var/tmp"
+            || dir.starts_with("/run/user/");
+        if !user_dir || out.iter().any(|(d, _)| *d == dir) {
+            continue;
+        }
+        if let Some(used) = statvfs_used(&dir) {
+            out.push((dir, used));
+        }
+    }
+    out.sort_by_key(|(_, b)| std::cmp::Reverse(*b));
+    out
+}
+
+#[cfg(target_os = "linux")]
+fn statvfs_used(dir: &str) -> Option<u64> {
+    let c = std::ffi::CString::new(dir).ok()?;
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    Some((st.f_blocks.saturating_sub(st.f_bfree)) as u64 * st.f_frsize as u64)
+}
+
+/// Maiores pastas dos tmpfs. Percorrer 15 GB de `/tmp` a cada 2 s seria desperdício,
+/// então a lista é refeita no máximo a cada 2 minutos e só para tmpfs com mais de 512 MB.
+#[cfg(target_os = "linux")]
+fn tmp_top(tmpfs: &[(String, u64)]) -> Vec<(String, u64)> {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<(Instant, Vec<(String, u64)>)>> = Mutex::new(None);
+    const EVERY: Duration = Duration::from_secs(120);
+    if let Ok(c) = CACHE.lock() {
+        if let Some((at, top)) = c.as_ref() {
+            if at.elapsed() < EVERY {
+                return top.clone();
+            }
+        }
+    }
+    let mut top = Vec::new();
+    for (dir, used) in tmpfs {
+        if *used >= 512 * 1024 * 1024 {
+            top.extend(largest_dirs(std::path::Path::new(dir), 4));
+        }
+    }
+    top.sort_by_key(|(_, b)| std::cmp::Reverse(*b));
+    top.truncate(6);
+    if let Ok(mut c) = CACHE.lock() {
+        *c = Some((Instant::now(), top.clone()));
+    }
+    top
+}
+
+/// Filhas de `dir` por tamanho. Se uma filha tem mais da metade da mãe, desce nela:
+/// `/tmp` → `/tmp/claude-1000` → as pastas de sessão que de fato pesam.
+#[cfg(target_os = "linux")]
+fn largest_dirs(dir: &std::path::Path, depth: u32) -> Vec<(String, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut kids: Vec<(std::path::PathBuf, u64)> = rd
+        .flatten()
+        .filter_map(|e| {
+            let md = e.metadata().ok()?;
+            let bytes = if md.is_dir() {
+                du_bytes(&e.path())
+            } else {
+                md.blocks() * 512
+            };
+            Some((e.path(), bytes))
+        })
+        .collect();
+    kids.sort_by_key(|(_, b)| std::cmp::Reverse(*b));
+    let total: u64 = kids.iter().map(|(_, b)| b).sum();
+    if depth > 0 {
+        if let Some((path, bytes)) = kids.first() {
+            if *bytes > total / 2 && path.is_dir() {
+                let mut out = largest_dirs(path, depth - 1);
+                if !out.is_empty() {
+                    out.extend(
+                        kids.iter()
+                            .skip(1)
+                            .filter(|(_, b)| *b >= 64 * 1024 * 1024)
+                            .map(|(p, b)| (p.display().to_string(), *b)),
+                    );
+                    return out;
+                }
+            }
+        }
+    }
+    kids.into_iter()
+        .filter(|(_, b)| *b >= 64 * 1024 * 1024)
+        .map(|(p, b)| (p.display().to_string(), b))
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn du_bytes(path: &std::path::Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    let mut bytes = 0;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let Ok(md) = e.metadata() else { continue };
+            if md.file_type().is_symlink() {
+                continue;
+            }
+            if md.is_dir() {
+                stack.push(e.path());
+            } else {
+                bytes += md.blocks() * 512;
+            }
+        }
+    }
+    bytes
+}
+
+#[cfg(target_os = "linux")]
+/// (privado, PSS, swap). Swap ausente (kernel sem swap) vale zero, não invalida a leitura.
+fn parse_smaps_rollup(text: &str) -> Option<(u64, u64, u64)> {
     let private =
         kb_field(text, "Private_Clean:")?.checked_add(kb_field(text, "Private_Dirty:")?)?;
-    Some((private, kb_field(text, "Pss:")?))
+    Some((
+        private,
+        kb_field(text, "Pss:")?,
+        kb_field(text, "Swap:").unwrap_or(0),
+    ))
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -886,9 +1088,21 @@ mod tests {
     }
 
     #[test]
+    fn zram_mm_stat_gives_original_and_ram_used() {
+        let text = "28569112576 16113906892 16523882496        0 25410187264   192843 14694228  2706349 15112335\n";
+        assert_eq!(parse_mm_stat(text), (28569112576, 16523882496));
+        assert_eq!(parse_mm_stat(""), (0, 0));
+    }
+
+    #[test]
     fn private_and_proportional_memory_are_not_rss() {
         let text = "Rss: 900 kB\nPss: 450 kB\nPrivate_Clean: 100 kB\nPrivate_Dirty: 200 kB\n";
-        assert_eq!(parse_smaps_rollup(text), Some((300 * 1024, 450 * 1024)));
+        assert_eq!(parse_smaps_rollup(text), Some((300 * 1024, 450 * 1024, 0)));
+        let swapped = format!("{text}Swap: 2048 kB\n");
+        assert_eq!(
+            parse_smaps_rollup(&swapped),
+            Some((300 * 1024, 450 * 1024, 2048 * 1024))
+        );
         assert_eq!(parse_smaps_rollup("Rss: 900 kB"), None);
         assert_eq!(kb_field("Pss: invalid kB", "Pss:"), None);
         assert_eq!(kb_field("Pss: 450 MB", "Pss:"), None);

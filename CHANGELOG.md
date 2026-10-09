@@ -4,6 +4,16 @@ As mudanças são registradas por versão. As notas descrevem funcionalidades di
 
 ## [Não lançado]
 
+### Adicionado
+
+- **Matar sobras**, botão no cabeçalho de todas as abas: junta o que a Faxina marcaria sozinha (processo de agente que já saiu, emulador escondido, script largado girando CPU) e os parados sem janela acima de 256 MB (desmarcados), mostra o motivo de cada um e mata o que ficar marcado.
+- Faxina reconhece **processo largado**: o pai virou o init ou o `systemd --user`, vive há 30 min ou mais e gastou em média meio núcleo ou mais a vida inteira. Caso real: um `python3 -` de heredoc que ficou 10 h preso num regex.
+
+### Corrigido
+
+- No Linux, a RAM em uso não batia com a soma das abas (55% no topo, 11 GB na Árvore). Faltava tudo que não é processo: agora Processos e Árvore mostram linhas de **Arquivos em RAM** (`/tmp`, `/dev/shm`, inclusive a parte que foi pro zram), **Swap comprimido de processos (zram)**, **Kernel** e o resto, com as pastas mais pesadas do `/tmp` e quem tem mais swap na dica. A barra de memória e o aviso de pressão usam a mesma conta.
+- O aviso de disputa agrupa repetidos ("Codex ×3") e explica o zram e os arquivos em RAM.
+
 ## [0.15.1] - 2026-09-28
 
 Patch do Gerenciador e da suíte de testes.
