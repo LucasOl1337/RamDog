@@ -130,6 +130,10 @@ pub struct Config {
     /// gravada antes delas; ver `Config::migrate`.
     #[serde(default)]
     pub config_rev: u32,
+    /// Aba Calor: matar sozinho o largado que come CPU há horas sem ninguém acima dele.
+    /// Desligado por padrão; cada morte fica registrada na aba e no log.
+    #[serde(default)]
+    pub heat_auto_kill: bool,
 }
 
 /// Revisão atual dos padrões. Subir quando um padrão novo precisar valer também para
@@ -393,21 +397,23 @@ pub enum ViewMode {
     Screens,
     Clean,
     Sweep,
+    Heat,
 }
 
 impl ViewMode {
     pub const CORE: [ViewMode; 3] = [ViewMode::List, ViewMode::Tree, ViewMode::Category];
-    pub const ADDONS: [ViewMode; 6] = [
+    pub const ADDONS: [ViewMode; 7] = [
         ViewMode::Sweep,
         ViewMode::Boot,
         ViewMode::Drains,
         ViewMode::Thermal,
+        ViewMode::Heat,
         ViewMode::Screens,
         ViewMode::Clean,
     ];
 
     pub fn available(self) -> bool {
-        if matches!(self, Self::Clean | Self::Sweep) {
+        if matches!(self, Self::Clean | Self::Sweep | Self::Heat) {
             return cfg!(target_os = "linux");
         }
         cfg!(any(windows, target_os = "linux"))
@@ -426,6 +432,7 @@ impl ViewMode {
                 | ViewMode::Screens
                 | ViewMode::Clean
                 | ViewMode::Sweep
+                | ViewMode::Heat
         )
     }
 
@@ -444,6 +451,7 @@ impl ViewMode {
             ViewMode::Screens => locale.text("Telas", "Screens"),
             ViewMode::Clean => locale.text("Limpeza", "Cleanup"),
             ViewMode::Sweep => locale.text("Faxina", "Sweep"),
+            ViewMode::Heat => locale.text("Calor", "Heat"),
         }
     }
 
@@ -457,6 +465,7 @@ impl ViewMode {
             ViewMode::Screens => "▦",
             ViewMode::Clean => "♻",
             ViewMode::Sweep => "✔",
+            ViewMode::Heat => "☀",
             _ => "",
         }
     }
@@ -491,6 +500,10 @@ impl ViewMode {
                 "O que está aberto sem uso, já separado em pode fechar, talvez e em uso: marque em massa, desmarque o que fica e feche tudo de uma vez",
                 "What is open but unused, sorted into can close, maybe, and in use: select in bulk, uncheck what stays, and close it all at once",
             ),
+            ViewMode::Heat => locale.text(
+                "Quem esquenta o PC: processos comendo CPU há horas, largados sem dono, com teto da CPU e ventoinha calma num botão",
+                "What heats the PC: processes eating CPU for hours, left behind with no owner, plus CPU cap and quiet fan in one button",
+            ),
         }
     }
 }
@@ -520,6 +533,7 @@ impl Default for Config {
             screen_snap: true,
             cmd_column: false,
             config_rev: CONFIG_REV,
+            heat_auto_kill: false,
         }
     }
 }

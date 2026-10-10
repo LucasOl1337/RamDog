@@ -284,6 +284,16 @@ fn base_name(p: &ProcInfo) -> &str {
     p.name_lower.strip_suffix(".exe").unwrap_or(&p.name_lower)
 }
 
+/// PID no fim do nome da scope (`app-maestri\x2dapp-1118925.scope`): quem a criou.
+/// Scope do uwsm termina em hexa aleatório de 8 dígitos, acima do pid_max, e não casa.
+fn scope_pid(unit: &str) -> Option<u32> {
+    let (_, tail) = unit.strip_suffix(".scope")?.rsplit_once('-')?;
+    if tail.is_empty() || tail.len() > 7 || !tail.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    tail.parse().ok()
+}
+
 fn is_service(p: &ProcInfo) -> Option<String> {
     let unit = p.launcher.unit.as_deref()?;
     if unit.ends_with(".service") && !unit.starts_with("app-") {
@@ -360,6 +370,293 @@ struct Inst {
     cpu_secs: f64,
 }
 
+/// Instâncias e quem está acima de quem. Base comum da Faxina e do Calor: as duas
+/// precisam saber se quem abriu um processo ainda está vivo.
+struct Graph<'a> {
+    procs: &'a [ProcInfo],
+    by_pid: HashMap<u32, usize>,
+    ids: Vec<identity::Identity>,
+    insts: Vec<Inst>,
+    inst_of: Vec<usize>,
+    /// Processo mais antigo vivo de cada unit: o principal dela. Quem mais estiver no
+    /// cgroup só herdou a unit de quem o abriu (o agente que rodava dentro do serviço).
+    unit_main: HashMap<&'a str, usize>,
+}
+
+impl<'a> Graph<'a> {
+    fn build(
+        procs: &'a [ProcInfo],
+        act: &dyn Fn(&ProcInfo) -> Act,
+        locked: &dyn Fn(&ProcInfo) -> bool,
+        cat: &dyn Fn(u32) -> Category,
+    ) -> Self {
+        let by_pid: HashMap<u32, usize> =
+            procs.iter().enumerate().map(|(i, p)| (p.pid, i)).collect();
+        let ids: Vec<identity::Identity> = procs.iter().map(identity::of).collect();
+
+        // Raiz de cada processo: sobe enquanto o pai tem a mesma identidade.
+        let root_of = |mut i: usize| -> usize {
+            for _ in 0..64 {
+                let Some(&pi) = by_pid.get(&procs[i].ppid) else {
+                    break;
+                };
+                if procs[i].ppid == 0 || ids[pi].key != ids[i].key {
+                    break;
+                }
+                i = pi;
+            }
+            i
+        };
+        let mut inst_of: Vec<usize> = vec![usize::MAX; procs.len()];
+        let mut insts: Vec<Inst> = Vec::new();
+        let mut by_root: HashMap<usize, usize> = HashMap::new();
+        for i in 0..procs.len() {
+            let r = root_of(i);
+            let n = *by_root.entry(r).or_insert_with(|| {
+                let rp = &procs[r];
+                insts.push(Inst {
+                    root: r,
+                    members: Vec::new(),
+                    kind: ids[r].kind,
+                    label: ids[r].label.clone(),
+                    protected: rp.pid <= 2 || cat(rp.pid) == Category::System,
+                    thin: THIN.contains(&base_name(rp)),
+                    kids: Vec::new(),
+                    parent: None,
+                    idle: u64::MAX,
+                    unfocused: None,
+                    observed: 0,
+                    window: false,
+                    cpu_secs: 0.0,
+                });
+                insts.len() - 1
+            });
+            inst_of[i] = n;
+            let p = &procs[i];
+            let a = act(p);
+            let it = &mut insts[n];
+            it.members.push(i);
+            it.protected |= locked(p);
+            it.idle = it.idle.min(a.idle);
+            it.unfocused = match (it.unfocused, a.unfocused) {
+                (Some(x), Some(y)) => Some(x.min(y)),
+                (x, y) => x.or(y),
+            };
+            it.observed = it.observed.max(a.observed);
+            it.window |= p.has_window;
+            #[cfg(target_os = "linux")]
+            {
+                it.cpu_secs += p.cpu_secs;
+            }
+        }
+        for n in 0..insts.len() {
+            let rp = &procs[insts[n].root];
+            if let Some(&pi) = by_pid.get(&rp.ppid).filter(|_| rp.ppid != 0) {
+                let parent = inst_of[pi];
+                if parent != n {
+                    insts[n].parent = Some(parent);
+                    insts[parent].kids.push(n);
+                }
+            }
+        }
+        let mut unit_main: HashMap<&str, usize> = HashMap::new();
+        for (i, p) in procs.iter().enumerate() {
+            let Some(unit) = p.launcher.unit.as_deref() else {
+                continue;
+            };
+            let e = unit_main.entry(unit).or_insert(i);
+            let cur = &procs[*e];
+            if (p.create_time, p.pid) < (cur.create_time, cur.pid) {
+                *e = i;
+            }
+        }
+        Self {
+            procs,
+            by_pid,
+            ids,
+            insts,
+            inst_of,
+            unit_main,
+        }
+    }
+
+    /// Unit `.service` de que a instância é o processo principal. Um script largado dentro
+    /// do cgroup de um serviço não é o serviço: parar a unit não é o jeito de tirá-lo.
+    fn service_main(&self, n: usize) -> Option<String> {
+        let i = self.insts[n].root;
+        let rp = &self.procs[i];
+        let unit = rp.launcher.unit.as_deref()?;
+        if self.unit_main.get(unit) != Some(&i) {
+            return None;
+        }
+        is_service(rp)
+    }
+
+    /// O app de verdade acima da instância, pulando shells.
+    fn real_parent(&self, n: usize) -> Option<usize> {
+        let mut cur = self.insts[n].parent;
+        for _ in 0..32 {
+            let c = cur?;
+            if self.insts[c].protected {
+                return None;
+            }
+            if !self.insts[c].thin {
+                return Some(c);
+            }
+            cur = self.insts[c].parent;
+        }
+        None
+    }
+
+    /// Primeiro pai que não é shell fino, protegido ou não: quem abriu.
+    fn opener(&self, n: usize) -> Option<usize> {
+        let mut cur = self.insts[n].parent;
+        for _ in 0..32 {
+            let c = cur?;
+            if self.insts[c].protected || !self.insts[c].thin {
+                return Some(c);
+            }
+            cur = self.insts[c].parent;
+        }
+        None
+    }
+
+    /// Largado: subindo pelos shells, o primeiro pai de verdade é o init ou o systemd do
+    /// usuário, ou seja, o terminal/agente que abriu já morreu e o kernel reparentou.
+    /// Quantos shells houver no meio não importa (`systemd → bash → bash → python3`).
+    fn detached(&self, n: usize) -> bool {
+        let mut cur = self.insts[n].parent;
+        for _ in 0..32 {
+            let Some(c) = cur else { return true };
+            let r = &self.procs[self.insts[c].root];
+            if r.pid == 1 || base_name(r) == "systemd" {
+                return true;
+            }
+            if self.insts[c].protected || !self.insts[c].thin {
+                return false;
+            }
+            cur = self.insts[c].parent;
+        }
+        false
+    }
+
+    /// A instância é o app pra quem a unit foi criada: Brave na `app-...-<PID do Brave>.scope`,
+    /// Sussurro na scope que o Hyprland abriu pra ele, Sonora no `app-sonora@autostart.service`.
+    /// Ficar pendurado no systemd do usuário é o normal de app aberto pela sessão.
+    fn session_app(&self, n: usize) -> bool {
+        let it = &self.insts[n];
+        let Some(unit) = self.procs[it.root].launcher.unit.as_deref() else {
+            return false;
+        };
+        // Scope com o PID de quem a criou no nome: se ele vive, ou é esta instância ou é
+        // outro app (o Maestri) de quem esta escapou.
+        if let Some(&i) = scope_pid(unit).and_then(|pid| self.by_pid.get(&pid)) {
+            return self.inst_of[i] == n;
+        }
+        self.unit_main.get(unit).is_some_and(|&i| self.inst_of[i] == n)
+    }
+
+    /// Largado de verdade: quem abriu saiu e a instância caiu na unit de outro (o terminal
+    /// ou agente morto), em vez de ser o app que a sessão abriu.
+    fn left_behind(&self, n: usize) -> bool {
+        self.detached(n) && !self.session_app(n)
+    }
+
+    /// Índices dos processos da instância e de tudo abaixo dela, sem os protegidos.
+    fn subtree(&self, n: usize) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut stack = vec![n];
+        let mut guard = 0;
+        while let Some(c) = stack.pop() {
+            guard += 1;
+            if guard > 4096 {
+                break;
+            }
+            if self.insts[c].protected {
+                continue;
+            }
+            out.extend(self.insts[c].members.iter().copied());
+            stack.extend(self.insts[c].kids.iter().copied());
+        }
+        out
+    }
+}
+
+/// De quem é uma instância, olhando pra cima.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Owner {
+    /// Sistema, o próprio RamDog ou algo que o usuário travou.
+    Protected,
+    /// Processo principal de uma unit `.service`: `unit` crua e o rótulo de mostrar.
+    Service { unit: String, label: String },
+    /// Quem abriu já saiu: acima só há shells e o systemd.
+    Detached,
+    /// Pendurado no systemd, mas é o app que a sessão abriu (Hyprland, autostart).
+    Session,
+    /// Tem dono vivo acima (terminal, agente, app). O rótulo dele, quando conhecido.
+    Owned(Option<String>),
+}
+
+/// Uma instância vista pelo Calor: dono, janela e o que sai se matar.
+#[derive(Clone, Debug)]
+pub struct Lineage {
+    pub pid: u32,
+    pub create_time: i64,
+    pub label: String,
+    pub kind: Kind,
+    pub owner: Owner,
+    /// Algum membro tem janela.
+    pub window: bool,
+    /// A raiz é um CLI de agente (Claude, Codex, jcode): sessão viva, não sobra.
+    pub agent_cli: bool,
+    pub members: Vec<u32>,
+    /// A instância e tudo abaixo dela, sem os protegidos.
+    pub kill: Vec<u32>,
+    /// CPU da vida inteira dos membros, em segundos.
+    pub cpu_secs: f64,
+}
+
+/// Dono de cada instância. Mesma regra de "largado" que a Faxina usa.
+pub fn lineage(
+    procs: &[ProcInfo],
+    locked: &dyn Fn(&ProcInfo) -> bool,
+    cat: &dyn Fn(u32) -> Category,
+) -> Vec<Lineage> {
+    let g = Graph::build(procs, &|_| Act::default(), locked, cat);
+    (0..g.insts.len())
+        .map(|n| {
+            let it = &g.insts[n];
+            let rp = &procs[it.root];
+            let owner = if it.protected {
+                Owner::Protected
+            } else if let Some(label) = g.service_main(n) {
+                Owner::Service {
+                    unit: rp.launcher.unit.clone().unwrap_or_default(),
+                    label,
+                }
+            } else if g.left_behind(n) {
+                Owner::Detached
+            } else if g.detached(n) {
+                Owner::Session
+            } else {
+                Owner::Owned(g.opener(n).map(|c| g.insts[c].label.clone()))
+            };
+            Lineage {
+                pid: rp.pid,
+                create_time: rp.create_time,
+                label: it.label.clone(),
+                kind: it.kind,
+                owner,
+                window: it.window,
+                agent_cli: identity::is_agent_cli(rp),
+                members: it.members.iter().map(|&i| procs[i].pid).collect(),
+                kill: g.subtree(n).into_iter().map(|i| procs[i].pid).collect(),
+                cpu_secs: it.cpu_secs,
+            }
+        })
+        .collect()
+}
+
 /// Classifica as instâncias. Função pura: o `Sweep` só fornece a atividade observada.
 pub fn classify(
     procs: &[ProcInfo],
@@ -370,74 +667,8 @@ pub fn classify(
     keep: &BTreeSet<String>,
     now_ft: i64,
 ) -> (Vec<Row>, usize) {
-    let by_pid: HashMap<u32, usize> = procs.iter().enumerate().map(|(i, p)| (p.pid, i)).collect();
-    let ids: Vec<identity::Identity> = procs.iter().map(identity::of).collect();
-
-    // Raiz de cada processo: sobe enquanto o pai tem a mesma identidade.
-    let root_of = |mut i: usize| -> usize {
-        for _ in 0..64 {
-            let Some(&pi) = by_pid.get(&procs[i].ppid) else {
-                break;
-            };
-            if procs[i].ppid == 0 || ids[pi].key != ids[i].key {
-                break;
-            }
-            i = pi;
-        }
-        i
-    };
-    let mut inst_of: Vec<usize> = vec![usize::MAX; procs.len()];
-    let mut insts: Vec<Inst> = Vec::new();
-    let mut by_root: HashMap<usize, usize> = HashMap::new();
-    for i in 0..procs.len() {
-        let r = root_of(i);
-        let n = *by_root.entry(r).or_insert_with(|| {
-            let rp = &procs[r];
-            insts.push(Inst {
-                root: r,
-                members: Vec::new(),
-                kind: ids[r].kind,
-                label: ids[r].label.clone(),
-                protected: rp.pid <= 2 || cat(rp.pid) == Category::System,
-                thin: THIN.contains(&base_name(rp)),
-                kids: Vec::new(),
-                parent: None,
-                idle: u64::MAX,
-                unfocused: None,
-                observed: 0,
-                window: false,
-                cpu_secs: 0.0,
-            });
-            insts.len() - 1
-        });
-        inst_of[i] = n;
-        let p = &procs[i];
-        let a = act(p);
-        let it = &mut insts[n];
-        it.members.push(i);
-        it.protected |= locked(p);
-        it.idle = it.idle.min(a.idle);
-        it.unfocused = match (it.unfocused, a.unfocused) {
-            (Some(x), Some(y)) => Some(x.min(y)),
-            (x, y) => x.or(y),
-        };
-        it.observed = it.observed.max(a.observed);
-        it.window |= p.has_window;
-        #[cfg(target_os = "linux")]
-        {
-            it.cpu_secs += p.cpu_secs;
-        }
-    }
-    for n in 0..insts.len() {
-        let rp = &procs[insts[n].root];
-        if let Some(&pi) = by_pid.get(&rp.ppid).filter(|_| rp.ppid != 0) {
-            let parent = inst_of[pi];
-            if parent != n {
-                insts[n].parent = Some(parent);
-                insts[parent].kids.push(n);
-            }
-        }
-    }
+    let g = Graph::build(procs, act, locked, cat);
+    let (by_pid, ids, insts) = (&g.by_pid, &g.ids, &g.insts);
 
     // Uso da subárvore: um terminal com um build rodando dentro está em uso.
     let mut sub_idle = vec![u64::MAX; insts.len()];
@@ -469,44 +700,10 @@ pub fn classify(
         (i, u)
     }
     for n in 0..insts.len() {
-        walk(n, &insts, &mut sub_idle, &mut sub_unfocused, 0);
+        walk(n, insts, &mut sub_idle, &mut sub_unfocused, 0);
     }
 
-    // O app de verdade acima da instância, pulando shells.
-    let real_parent = |n: usize| -> Option<usize> {
-        let mut cur = insts[n].parent;
-        for _ in 0..32 {
-            let c = cur?;
-            if insts[c].protected {
-                return None;
-            }
-            if !insts[c].thin {
-                return Some(c);
-            }
-            cur = insts[c].parent;
-        }
-        None
-    };
-    // Largado: subindo pelos shells, o primeiro pai de verdade é o init ou o systemd do
-    // usuário, ou seja, o terminal/agente que abriu já morreu e o kernel reparentou.
-    let detached = |n: usize| -> bool {
-        let mut cur = insts[n].parent;
-        for _ in 0..32 {
-            let Some(c) = cur else { return true };
-            let r = &procs[insts[c].root];
-            if r.pid == 1 || base_name(r) == "systemd" {
-                return true;
-            }
-            if insts[c].protected {
-                return false;
-            }
-            if !insts[c].thin {
-                return false;
-            }
-            cur = insts[c].parent;
-        }
-        false
-    };
+    let real_parent = |n: usize| g.real_parent(n);
     let recently_used = |n: usize| {
         insts[n].idle < RECENT_BUSY || insts[n].unfocused.is_some_and(|u| u < RECENT_FOCUS)
     };
@@ -549,9 +746,10 @@ pub fn classify(
             && avg_cores >= RUNAWAY_CORES
             && it.idle < 60
             && !it.window
-            && is_service(rp).is_none()
+            // Só o principal da unit é serviço: script largado no cgroup dela não se salva.
+            && g.service_main(n).is_none()
             && !identity::is_agent_cli(rp)
-            && detached(n);
+            && g.left_behind(n);
         let v = if keep.contains(&ids[it.root].key) {
             (Tier::Keep, Why::Pinned)
         } else if let Some((pt, en)) = leftover {
@@ -644,25 +842,11 @@ pub fn classify(
             continue;
         }
         // Tudo abaixo da instância, sem os protegidos.
-        let mut kill = Vec::new();
-        let mut stack = vec![n];
-        let mut guard = 0;
-        while let Some(c) = stack.pop() {
-            guard += 1;
-            if guard > 4096 {
-                break;
-            }
-            if insts[c].protected {
-                continue;
-            }
-            kill.extend(
-                insts[c]
-                    .members
-                    .iter()
-                    .map(|&i| (procs[i].pid, mem(&procs[i]))),
-            );
-            stack.extend(insts[c].kids.iter().copied());
-        }
+        let kill: Vec<(u32, u64)> = g
+            .subtree(n)
+            .into_iter()
+            .map(|i| (procs[i].pid, mem(&procs[i])))
+            .collect();
         let ram: u64 = kill.iter().map(|(_, m)| m).sum();
         let rp = &procs[it.root];
         let own = it.members.len();
@@ -1294,6 +1478,124 @@ mod tests {
             rows.iter().all(|r| r.pid != 71 || !matches!(r.why, Why::Runaway { .. })),
             "com o terminal vivo, quem abriu ainda está lá"
         );
+    }
+
+    /// Mesma vida do `python3 -c ...glob('**/bench_fila*.py')` que escapou: 10 h, 9,5 h de CPU.
+    #[cfg(target_os = "linux")]
+    fn burning(pid: u32, ppid: u32, name: &str) -> ProcInfo {
+        let mut p = proc(pid, ppid, name);
+        p.create_time = -10 * 3600 * 10_000_000;
+        p.cpu_secs = 9.5 * 3600.0;
+        p
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn runaway_behind_a_chain_of_shells_is_close() {
+        let mut outer = proc(50, 5, "bash");
+        outer.cmdline = "bash -lc ~/.agents/rodar.sh".into();
+        let mut inner = proc(52, 50, "bash");
+        inner.cmdline = "bash -c python3 -c ...".into();
+        let mut py = burning(53, 52, "python3");
+        py.cmdline = "python3 -c import glob; glob.glob('**/bench_fila*.py', recursive=True)".into();
+        let procs = [proc(1, 0, "systemd"), proc(5, 1, "systemd"), outer, inner, py];
+        let rows = run(&procs, &HashMap::new());
+        let r = rows
+            .iter()
+            .find(|r| matches!(r.why, Why::Runaway { .. }))
+            .expect("dois shells no meio não salvam o desgovernado");
+        assert_eq!(r.tier, Tier::Close);
+        let pids: Vec<u32> = r.kill.iter().map(|(p, _)| *p).collect();
+        assert!(pids.contains(&53));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn script_left_inside_a_service_cgroup_is_not_the_service() {
+        // O agente rodava dentro de um .service e saiu; o script herdou o cgroup dele.
+        let mut main = burning(40, 1, "malha-runner");
+        main.create_time -= 10_000_000;
+        main.launcher.unit = Some("malha-runner.service".into());
+        let mut py = burning(41, 5, "python3");
+        py.launcher.unit = Some("malha-runner.service".into());
+        let procs = [proc(1, 0, "systemd"), proc(5, 1, "systemd"), main, py];
+        let rows = run(&procs, &HashMap::new());
+        let py = rows.iter().find(|r| r.pid == 41).unwrap();
+        assert!(matches!(py.why, Why::Runaway { .. }), "{:?}", py.why);
+        let main = rows.iter().find(|r| r.pid == 40).unwrap();
+        assert_ne!(main.tier, Tier::Close, "o principal segue serviço");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn app_opened_by_the_session_is_not_left_behind() {
+        // Brave e Sussurro ficam pendurados no systemd do usuário por natureza: a scope é deles.
+        let mut brave = burning(10, 5, "brave");
+        brave.launcher.unit = Some("app-org.chromium.Chromium-10.scope".into());
+        let mut tk = burning(11, 5, "python3");
+        tk.launcher.unit = Some("app-Hyprland-gtk\\x2dlaunch-2d0b78d1.scope".into());
+        // Maestri vivo, e o vite que escapou dele pro systemd.
+        let mut maestri = proc(20, 5, "maestri-app");
+        maestri.has_window = true;
+        maestri.launcher.unit = Some("app-maestri\\x2dapp-20.scope".into());
+        let mut vite = burning(21, 5, "node");
+        vite.launcher.unit = Some("app-maestri\\x2dapp-20.scope".into());
+        // Maestri morto: só o script sobrou na scope dele, abaixo de um shell.
+        let mut sh = proc(30, 5, "bash");
+        sh.create_time = -11 * 3600 * 10_000_000;
+        sh.launcher.unit = Some("app-maestri\\x2dapp-999.scope".into());
+        let mut py = burning(31, 30, "python3");
+        py.launcher.unit = Some("app-maestri\\x2dapp-999.scope".into());
+        let procs = [
+            proc(1, 0, "systemd"),
+            proc(5, 1, "systemd"),
+            brave,
+            tk,
+            maestri,
+            vite,
+            sh,
+            py,
+        ];
+        let rows = run(&procs, &HashMap::new());
+        let runaway = |pid: u32| {
+            rows.iter()
+                .find(|r| r.pid == pid)
+                .is_some_and(|r| matches!(r.why, Why::Runaway { .. }))
+        };
+        assert!(!runaway(10), "Brave na própria scope");
+        assert!(!runaway(11), "app aberto pelo Hyprland");
+        assert!(runaway(21), "escapou do Maestri vivo");
+        assert!(runaway(31), "sobrou do Maestri morto");
+        let lin = lineage(&procs, &|p| p.pid == 1, &|_| Category::Other);
+        let of = |pid: u32| lin.iter().find(|l| l.members.contains(&pid)).unwrap();
+        assert_eq!(of(10).owner, Owner::Session);
+        assert_eq!(of(31).owner, Owner::Detached);
+    }
+
+    #[test]
+    fn lineage_names_the_owner_of_each_instance() {
+        let mut term = proc(10, 1, "foot");
+        term.has_window = true;
+        let mut svc = proc(40, 1, "hermes");
+        svc.launcher.unit = Some("hermes-gateway.service".into());
+        let procs = [
+            proc(1, 0, "systemd"),
+            proc(5, 1, "systemd"),
+            term,
+            proc(11, 10, "bash"),
+            proc(12, 11, "cargo"),
+            proc(50, 5, "bash"),
+            proc(51, 50, "python3"),
+            svc,
+        ];
+        let lin = lineage(&procs, &|p| p.pid == 1, &|_| Category::Other);
+        let of = |pid: u32| lin.iter().find(|l| l.members.contains(&pid)).unwrap();
+        assert_eq!(of(1).owner, Owner::Protected);
+        assert!(matches!(of(12).owner, Owner::Owned(Some(_))), "{:?}", of(12).owner);
+        assert_eq!(of(51).owner, Owner::Detached);
+        assert!(matches!(of(40).owner, Owner::Service { ref unit, .. } if unit == "hermes-gateway.service"));
+        assert!(of(10).window);
+        assert!(of(50).kill.contains(&51), "matar o shell leva o script");
     }
 
     #[test]

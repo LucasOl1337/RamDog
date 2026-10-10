@@ -13,6 +13,7 @@ use egui_extras::{Column, TableBuilder, TableRow};
 use crate::boot::{Boot, BootOut};
 use crate::categories::{self, classify, is_critical, Category};
 use crate::clean::{Clean, CleanOut};
+use crate::heat::{Heat, HeatOut};
 use crate::config::{Config, Locale, MemMetric, ViewMode};
 use crate::drains::{DrainOut, Drains};
 use crate::hwtemp::HwTemp;
@@ -410,6 +411,7 @@ pub struct App {
     screens: Screens,
     clean: Clean,
     sweep: Sweep,
+    heat: Heat,
     /// Última visão de processo (Lista/Árvore/Categorias) antes de entrar num addon.
     /// Clicar de novo no addon aceso volta para ela, em vez de cair sempre em Lista.
     last_core: ViewMode,
@@ -513,6 +515,7 @@ impl App {
             screens: Screens::new(),
             clean: Clean::new(),
             sweep: Sweep::new(),
+            heat: Heat::new(),
             last_core,
             thermal_edit: HashMap::new(),
             stab_pending: None,
@@ -612,6 +615,23 @@ impl App {
                 },
                 &|pid| cats.get(&pid).copied().unwrap_or(Category::Other),
             );
+        }
+        {
+            let locked = &self.cfg.locked;
+            let me = std::process::id();
+            let cats = &self.cats;
+            let evs = self.heat.observe(
+                &self.procs,
+                &|p| {
+                    is_critical(&p.name_lower, p.pid)
+                        || locked.contains(&p.name_lower)
+                        || p.pid == me
+                },
+                &|pid| cats.get(&pid).copied().unwrap_or(Category::Other),
+                self.cfg.heat_auto_kill,
+                self.cfg.locale,
+            );
+            self.handle_heat(evs);
         }
         self.row_cache.snapshot_changed();
         self.derived_dirty = true;
@@ -1481,7 +1501,8 @@ impl App {
             | ViewMode::Boot
             | ViewMode::Screens
             | ViewMode::Clean
-            | ViewMode::Sweep => {
+            | ViewMode::Sweep
+            | ViewMode::Heat => {
                 let list = self.cfg.view == ViewMode::List;
                 // Os addons não desenham esta tabela; nas outras as linhas de sistema
                 // ficam no topo, onde o usuário procura "quem está comendo a RAM".
@@ -3302,7 +3323,35 @@ impl App {
                     }
                 }
             }
+            ViewMode::Heat => {
+                let hw = self.hwtemp.clone();
+                let mut auto = self.cfg.heat_auto_kill;
+                let evs = self.heat.ui(ui, self.cfg.locale, &hw, &mut auto);
+                if auto != self.cfg.heat_auto_kill {
+                    self.cfg.heat_auto_kill = auto;
+                    self.cfg_dirty = true;
+                }
+                self.handle_heat(evs);
+            }
             _ => {}
+        }
+    }
+
+    fn handle_heat(&mut self, evs: Vec<HeatOut>) {
+        for ev in evs {
+            match ev {
+                HeatOut::Kill(pids) => {
+                    // A lista é da última varredura; confere o lock de novo.
+                    let pids: Vec<u32> = pids
+                        .into_iter()
+                        .filter(|pid| self.proc(*pid).is_some_and(|p| !self.is_locked(p)))
+                        .collect();
+                    if !pids.is_empty() {
+                        self.request_kill_many(&pids)
+                    }
+                }
+                HeatOut::Toast(m, err) => self.toast(m, err),
+            }
         }
     }
 
@@ -5337,6 +5386,7 @@ impl eframe::App for App {
                 ViewMode::Thermal,
                 ViewMode::Clean,
                 ViewMode::Sweep,
+                ViewMode::Heat,
             ];
             self.cfg.view = views[step % views.len()];
             self.cfg.mini = step % 10 == 8;
@@ -5518,6 +5568,7 @@ enum Icon {
     Display,
     Broom,
     Check,
+    Flame,
     Gear,
 }
 
@@ -5533,6 +5584,7 @@ impl Icon {
             ViewMode::Screens => Icon::Display,
             ViewMode::Clean => Icon::Broom,
             ViewMode::Sweep => Icon::Check,
+            ViewMode::Heat => Icon::Flame,
         }
     }
 }
@@ -5594,6 +5646,34 @@ fn paint_icon(p: &egui::Painter, c: egui::Pos2, color: Color32, icon: Icon) {
             p.line_segment([pos2(x - 2.5, y - 6.5), pos2(x + 2.5, y - 6.5)], s);
             p.circle_stroke(pos2(x, y + 3.5), 4.0, s);
             p.circle_filled(pos2(x, y + 3.5), 1.8, color);
+        }
+        Icon::Flame => {
+            p.add(egui::Shape::closed_line(
+                vec![
+                    pos2(x, y - 7.5),
+                    pos2(x + 3.0, y - 3.0),
+                    pos2(x + 5.5, y + 1.0),
+                    pos2(x + 5.0, y + 4.5),
+                    pos2(x + 2.5, y + 7.0),
+                    pos2(x - 2.5, y + 7.0),
+                    pos2(x - 5.0, y + 4.5),
+                    pos2(x - 5.5, y + 1.0),
+                    pos2(x - 3.5, y - 2.0),
+                    pos2(x - 2.0, y + 0.5),
+                ],
+                s,
+            ));
+            p.add(egui::Shape::convex_polygon(
+                vec![
+                    pos2(x, y + 1.0),
+                    pos2(x + 2.0, y + 4.0),
+                    pos2(x + 1.0, y + 6.0),
+                    pos2(x - 1.0, y + 6.0),
+                    pos2(x - 2.0, y + 4.0),
+                ],
+                color,
+                Stroke::NONE,
+            ));
         }
         Icon::Display => {
             p.rect_stroke(
@@ -5845,7 +5925,7 @@ impl App {
         for v in ViewMode::ADDONS {
             let on = self.cfg.view == v;
             let tip = if !v.available() {
-                if matches!(v, ViewMode::Clean | ViewMode::Sweep) {
+                if matches!(v, ViewMode::Clean | ViewMode::Sweep | ViewMode::Heat) {
                     format!(
                         "{} — {}",
                         v.label_for(self.cfg.locale),
