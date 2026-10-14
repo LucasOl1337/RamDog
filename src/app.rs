@@ -13,9 +13,9 @@ use egui_extras::{Column, TableBuilder, TableRow};
 use crate::boot::{Boot, BootOut};
 use crate::categories::{self, classify, is_critical, Category};
 use crate::clean::{Clean, CleanOut};
-use crate::heat::{Heat, HeatOut};
 use crate::config::{Config, Locale, MemMetric, ViewMode};
 use crate::drains::{DrainOut, Drains};
+use crate::heat::{Heat, HeatOut};
 use crate::hwtemp::HwTemp;
 use crate::identity;
 use crate::knowledge;
@@ -412,6 +412,7 @@ pub struct App {
     clean: Clean,
     sweep: Sweep,
     heat: Heat,
+    modes: crate::modes::Modes,
     /// Última visão de processo (Lista/Árvore/Categorias) antes de entrar num addon.
     /// Clicar de novo no addon aceso volta para ela, em vez de cair sempre em Lista.
     last_core: ViewMode,
@@ -516,6 +517,7 @@ impl App {
             clean: Clean::new(),
             sweep: Sweep::new(),
             heat: Heat::new(),
+            modes: crate::modes::Modes::load(),
             last_core,
             thermal_edit: HashMap::new(),
             stab_pending: None,
@@ -878,7 +880,9 @@ impl App {
             let zram_procs =
                 (l.zram_used as u128 * proc_swap.min(swap) as u128 / swap as u128) as u64;
             b.zram_swap = zram_procs;
-            b.ram_files = l.shmem.saturating_add(l.zram_used.saturating_sub(zram_procs));
+            b.ram_files = l
+                .shmem
+                .saturating_add(l.zram_used.saturating_sub(zram_procs));
             b.linux_kernel = l.kernel;
         }
         b.shared_and_cache = used.saturating_sub(b.measured());
@@ -1445,10 +1449,9 @@ impl App {
                         }
                     }
                     if !l.tmp_top.is_empty() {
-                        tip.push_str(locale.text(
-                            "\n\nPastas que mais pesam:",
-                            "\n\nHeaviest folders:",
-                        ));
+                        tip.push_str(
+                            locale.text("\n\nPastas que mais pesam:", "\n\nHeaviest folders:"),
+                        );
                         for (dir, bytes) in &l.tmp_top {
                             tip.push_str(&format!("\n{}  {dir}", fmt_bytes_short(*bytes)));
                         }
@@ -1503,25 +1506,30 @@ impl App {
             | ViewMode::Clean
             | ViewMode::Sweep
             | ViewMode::Heat => {
-                let list = self.cfg.view == ViewMode::List;
-                // Os addons não desenham esta tabela; nas outras as linhas de sistema
-                // ficam no topo, onde o usuário procura "quem está comendo a RAM".
-                let mut rows = if list { sys_rows } else { Vec::new() };
-                if list && self.cfg.group_apps {
-                    rows.extend(self.build_app_rows(hits));
-                    return rows;
+                // Os addons não desenham esta tabela: linhas de sistema só na Lista.
+                let sys_rows = if self.cfg.view == ViewMode::List {
+                    sys_rows
+                } else {
+                    Vec::new()
+                };
+                if self.cfg.view == ViewMode::List && self.cfg.group_apps {
+                    let rows = self.build_app_rows(hits);
+                    return self.place_sys_rows(rows, sys_rows, false);
                 }
                 self.groups.clear();
                 let mut pids = hits;
                 self.sort_pids(&mut pids, false);
-                rows.extend(pids.into_iter().map(|pid| Row::Proc {
-                    pid,
-                    depth: 0,
-                    has_children: false,
-                    expanded: false,
-                    dim: false,
-                }));
-                rows
+                let rows = pids
+                    .into_iter()
+                    .map(|pid| Row::Proc {
+                        pid,
+                        depth: 0,
+                        has_children: false,
+                        expanded: false,
+                        dim: false,
+                    })
+                    .collect();
+                self.place_sys_rows(rows, sys_rows, false)
             }
             ViewMode::Category => {
                 let mut groups: HashMap<Category, Vec<u32>> = HashMap::new();
@@ -1591,7 +1599,7 @@ impl App {
                     })
                     .collect();
                 self.sort_pids(&mut roots, true);
-                let mut rows = sys_rows;
+                let mut rows = Vec::new();
                 let mut stack: Vec<(u32, u8)> = roots.into_iter().rev().map(|p| (p, 0u8)).collect();
                 while let Some((pid, depth)) = stack.pop() {
                     let mut kids: Vec<u32> = self
@@ -1617,9 +1625,55 @@ impl App {
                         }
                     }
                 }
-                rows
+                self.place_sys_rows(rows, sys_rows, true)
             }
         }
+    }
+
+    /// As linhas de sistema só têm RAM. Ordenando por RAM elas entram pelo tamanho, no
+    /// meio dos apps; em qualquer outra coluna vão pro fim, para não empurrar quem está
+    /// comendo CPU, GPU ou disco pra baixo.
+    fn place_sys_rows(&self, rows: Vec<Row>, mut sys: Vec<Row>, tree: bool) -> Vec<Row> {
+        if sys.is_empty() {
+            return rows;
+        }
+        let mut rows = rows;
+        if self.sort != SortKey::Ram {
+            rows.extend(sys);
+            return rows;
+        }
+        let bytes = |r: &Row| match *r {
+            Row::System { bytes, .. } => bytes,
+            _ => 0,
+        };
+        // Só linha de topo é fronteira: filho de app aberto ou de árvore fica com o pai.
+        let ram_of = |r: &Row| match *r {
+            Row::Proc { pid, depth: 0, .. } => Some(
+                tree.then(|| self.subtree.get(&pid).copied())
+                    .flatten()
+                    .unwrap_or_else(|| self.proc(pid).map(|p| self.mem_of(p)).unwrap_or(0)),
+            ),
+            Row::AppHeader { gi } => self.groups.get(gi).map(|g| g.ram),
+            _ => None,
+        };
+        let desc = self.sort_desc;
+        sys.sort_by_key(|r| bytes(r));
+        if desc {
+            sys.reverse();
+        }
+        let mut sys = sys.into_iter().peekable();
+        let mut out = Vec::with_capacity(rows.len() + sys.len());
+        for row in rows {
+            if let Some(v) = ram_of(&row) {
+                while let Some(s) = sys.next_if(|s| if desc { bytes(s) > v } else { bytes(s) < v })
+                {
+                    out.push(s);
+                }
+            }
+            out.push(row);
+        }
+        out.extend(sys);
+        out
     }
 
     /// Linhas da visão Lista agrupadas por app.
@@ -3725,8 +3779,8 @@ impl App {
                                     ui.add_space(2.0);
                                     ui.label(num(ram_label).color(ram_color(ram, ui_text_color(ui_dark()))).strong())
                                         .on_hover_text(self.cfg.locale.text(
-                                            "Soma dos processos do app na métrica escolhida. RSS pode repetir páginas compartilhadas; PSS reparte essas páginas. ≥ indica soma parcial por leituras indisponíveis.",
-                                            "Sum of this app's processes in the selected metric. RSS may repeat shared pages; PSS distributes them. ≥ means the sum is partial because some readings are unavailable.",
+                                            "Soma dos processos do app na métrica escolhida. Residente (RSS) pode repetir memória compartilhada; RAM reparte essa memória. ≥ indica soma parcial por leituras indisponíveis.",
+                                            "Sum of this app's processes in the selected metric. Resident (RSS) may repeat shared memory; RAM splits it. ≥ means the sum is partial because some readings are unavailable.",
                                         ));
                                 });
                             });
@@ -5199,9 +5253,9 @@ impl App {
         let uss: u64 = measured.iter().map(|m| m.0).sum();
         let pss: u64 = measured.iter().map(|m| m.1).sum();
         if self.cfg.locale == Locale::Portuguese {
-            format!("Processos: {} PSS · {} privados · leitura de {}/{} processos.\nPSS divide páginas compartilhadas; privado conta apenas páginas exclusivas. Leituras ausentes não entram nas somas. A RAM global também inclui o kernel e outras alocações.", fmt_gb(pss), fmt_gb(uss), measured.len(), self.procs.len())
+            format!("Processos: {} de RAM · {} privados · leitura de {}/{} processos.\nRAM divide a memória compartilhada; privado conta apenas páginas exclusivas. Leituras ausentes não entram nas somas. A RAM global também inclui o kernel e outras alocações.", fmt_gb(pss), fmt_gb(uss), measured.len(), self.procs.len())
         } else {
-            format!("Processes: {} PSS · {} private · readings for {}/{} processes.\nPSS divides shared pages; private counts exclusive pages only. Missing readings are excluded from sums. Global RAM also includes the kernel and other allocations.", fmt_gb(pss), fmt_gb(uss), measured.len(), self.procs.len())
+            format!("Processes: {} RAM · {} private · readings for {}/{} processes.\nRAM splits shared memory; private counts exclusive pages only. Missing readings are excluded from sums. Global RAM also includes the kernel and other allocations.", fmt_gb(pss), fmt_gb(uss), measured.len(), self.procs.len())
         }
     }
 
@@ -5409,6 +5463,12 @@ impl eframe::App for App {
         // Fora do ingest: ele retorna cedo quando não há amostra nova, e a verificação
         // de assinatura chega no seu próprio ritmo.
         self.drain_sigs();
+        if let Some((msg, err)) = self.modes.tick() {
+            self.toast(msg, err);
+        }
+        if self.modes.busy.is_some() || !self.modes.list.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
 
         if self.applied_mini != self.cfg.mini {
             self.apply_window_mode(ctx);
@@ -6050,6 +6110,7 @@ impl App {
                     self.set_mini(true);
                 }
                 self.ui_purge_button(ui);
+                self.ui_modes_button(ui);
                 if v.is_addon() {
                     return;
                 }
@@ -6528,6 +6589,90 @@ impl App {
             }
         }
         (apps, pids, ram)
+    }
+
+    /// Modos da máquina (jogo, silencioso, noite...) num menu do cabeçalho. Só aparece com
+    /// `modes.json` configurado; o que cada modo faz mora nos comandos do arquivo.
+    fn ui_modes_button(&mut self, ui: &mut egui::Ui) {
+        let locale = self.cfg.locale;
+        if self.modes.list.is_empty() {
+            if let Some(e) = &self.modes.error {
+                ui.label(
+                    RichText::new(e)
+                        .size(12.0)
+                        .color(Color32::from_rgb(230, 120, 100)),
+                );
+            }
+            return;
+        }
+        let on = self.modes.on_names();
+        let label = if on.is_empty() {
+            locale.text("Modos", "Modes").to_string()
+        } else {
+            format!("{} {}", locale.text("Modo:", "Mode:"), on.join(" + "))
+        };
+        let fill = if on.is_empty() { SURFACE } else { ACCENT_BG };
+        let button = egui::Button::new(RichText::new(format!("{label} ⏷")).size(13.0))
+            .fill(fill)
+            .stroke(Stroke::NONE)
+            .corner_radius(8.0);
+        let resp = ui.add(button).on_hover_text(locale.text(
+            "Liga e desliga os modos da máquina: jogo, silencioso, noite, desempenho.",
+            "Turns machine modes on and off: game, quiet, night, performance.",
+        ));
+        let popup = ui.make_persistent_id("ramdog-modes");
+        if resp.clicked() {
+            ui.memory_mut(|m| m.toggle_popup(popup));
+        }
+        egui::popup_below_widget(
+            ui,
+            popup,
+            &resp,
+            egui::PopupCloseBehavior::CloseOnClickOutside,
+            |ui| {
+                ui.set_min_width(260.0);
+                ui.spacing_mut().item_spacing.y = 6.0;
+                let mut flip = None;
+                for (i, m) in self.modes.list.iter().enumerate() {
+                    let state = self.modes.active.get(i).copied().flatten();
+                    ui.horizontal(|ui| {
+                        if self.modes.busy == Some(i) {
+                            ui.spinner();
+                        } else {
+                            let (dot, c) = match state {
+                                Some(true) => ("●", Color32::from_rgb(110, 200, 120)),
+                                Some(false) => ("○", MUTED),
+                                None => ("…", MUTED),
+                            };
+                            ui.label(RichText::new(dot).color(c).size(14.0));
+                        }
+                        let b = if state == Some(true) {
+                            crate::kit::primary(&m.name)
+                        } else {
+                            crate::kit::button(&m.name)
+                        };
+                        let r = ui.add_enabled(self.modes.busy.is_none(), b);
+                        let r = if m.hint.is_empty() {
+                            r
+                        } else {
+                            r.on_hover_text(&m.hint)
+                        };
+                        if r.clicked() {
+                            flip = Some(i);
+                        }
+                        let word = match state {
+                            Some(true) => locale.text("ligado", "on"),
+                            Some(false) => locale.text("desligado", "off"),
+                            None => "",
+                        };
+                        ui.label(RichText::new(word).size(12.0).color(MUTED));
+                    });
+                }
+                if let Some(i) = flip {
+                    self.modes.toggle(i);
+                }
+            },
+        );
     }
 
     /// Super botão no cabeçalho: mata de uma vez as sobras que a Faxina acha.

@@ -68,6 +68,21 @@ Termination is immediate: there is no confirmation dialog. Protection comes from
 
 Slots store position as a fraction of the monitor's **work area**, never as pixels — changing resolution, scale or monitor does not break a scene. If a slot's monitor is gone, it falls back to the primary. On Windows, RamDog subtracts invisible window shadow bounds (`DWMWA_EXTENDED_FRAME_BOUNDS`) when positioning, so half the screen is truly half the screen.
 
+### Machine modes
+
+**Modes** in the header turns machine profiles on and off (game, quiet, night, performance…). RamDog does not know what a mode does: it runs the shell commands from `modes.json`, next to `config.json` (`~/.config/RamDog/modes.json` on Linux, `%APPDATA%\RamDog\modes.json` on Windows). Without that file the button is hidden.
+
+```json
+{ "modes": [
+  { "name": "Quiet", "hint": "CPU cap and quiet fan curve",
+    "on": "sudo -n systemctl enable --now cpu-teto ventoinha-calma",
+    "off": "sudo -n systemctl disable --now cpu-teto ventoinha-calma",
+    "state": "systemctl is-active -q cpu-teto" }
+] }
+```
+
+`state` exits 0 when the mode is on. Every `state` runs again every 5 s and right after any click, so a mode that turns another one off (performance stopping quiet) shows up correctly. The header shows the modes that are on (`Mode: Game + Quiet`). Commands run as your user, without a terminal: anything that needs root must work with `sudo -n`.
+
 ## What each system covers
 
 | | Windows | Omarchy / Hyprland | Other Linux | macOS |

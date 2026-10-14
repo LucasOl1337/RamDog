@@ -85,9 +85,15 @@ pub enum Tier {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Why {
     Leftover(&'static str, &'static str),
-    AgentGone { agent: String, idle: u64 },
+    AgentGone {
+        agent: String,
+        idle: u64,
+    },
     /// Quem abriu já saiu e o processo segue gastando CPU sem ninguém olhar.
-    Runaway { cores: f64, age: u64 },
+    Runaway {
+        cores: f64,
+        age: u64,
+    },
     IdleHidden(u64),
     Unfocused(u64),
     Busy(u64),
@@ -553,7 +559,9 @@ impl<'a> Graph<'a> {
         if let Some(&i) = scope_pid(unit).and_then(|pid| self.by_pid.get(&pid)) {
             return self.inst_of[i] == n;
         }
-        self.unit_main.get(unit).is_some_and(|&i| self.inst_of[i] == n)
+        self.unit_main
+            .get(unit)
+            .is_some_and(|&i| self.inst_of[i] == n)
     }
 
     /// Largado de verdade: quem abriu saiu e a instância caiu na unit de outro (o terminal
@@ -1475,7 +1483,8 @@ mod tests {
             "órfão quieto não é desgovernado"
         );
         assert!(
-            rows.iter().all(|r| r.pid != 71 || !matches!(r.why, Why::Runaway { .. })),
+            rows.iter()
+                .all(|r| r.pid != 71 || !matches!(r.why, Why::Runaway { .. })),
             "com o terminal vivo, quem abriu ainda está lá"
         );
     }
@@ -1497,8 +1506,15 @@ mod tests {
         let mut inner = proc(52, 50, "bash");
         inner.cmdline = "bash -c python3 -c ...".into();
         let mut py = burning(53, 52, "python3");
-        py.cmdline = "python3 -c import glob; glob.glob('**/bench_fila*.py', recursive=True)".into();
-        let procs = [proc(1, 0, "systemd"), proc(5, 1, "systemd"), outer, inner, py];
+        py.cmdline =
+            "python3 -c import glob; glob.glob('**/bench_fila*.py', recursive=True)".into();
+        let procs = [
+            proc(1, 0, "systemd"),
+            proc(5, 1, "systemd"),
+            outer,
+            inner,
+            py,
+        ];
         let rows = run(&procs, &HashMap::new());
         let r = rows
             .iter()
@@ -1591,9 +1607,15 @@ mod tests {
         let lin = lineage(&procs, &|p| p.pid == 1, &|_| Category::Other);
         let of = |pid: u32| lin.iter().find(|l| l.members.contains(&pid)).unwrap();
         assert_eq!(of(1).owner, Owner::Protected);
-        assert!(matches!(of(12).owner, Owner::Owned(Some(_))), "{:?}", of(12).owner);
+        assert!(
+            matches!(of(12).owner, Owner::Owned(Some(_))),
+            "{:?}",
+            of(12).owner
+        );
         assert_eq!(of(51).owner, Owner::Detached);
-        assert!(matches!(of(40).owner, Owner::Service { ref unit, .. } if unit == "hermes-gateway.service"));
+        assert!(
+            matches!(of(40).owner, Owner::Service { ref unit, .. } if unit == "hermes-gateway.service")
+        );
         assert!(of(10).window);
         assert!(of(50).kill.contains(&51), "matar o shell leva o script");
     }

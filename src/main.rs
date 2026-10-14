@@ -18,12 +18,6 @@ mod clean;
 mod clean;
 mod config;
 #[cfg(target_os = "linux")]
-#[path = "heat_linux.rs"]
-mod heat;
-#[cfg(not(target_os = "linux"))]
-#[path = "heat_stub.rs"]
-mod heat;
-#[cfg(target_os = "linux")]
 mod desktop_linux;
 #[cfg(windows)]
 mod drains;
@@ -38,6 +32,12 @@ mod fans_linux;
 mod gerenciador;
 #[cfg(target_os = "linux")]
 mod gpu_linux;
+#[cfg(target_os = "linux")]
+#[path = "heat_linux.rs"]
+mod heat;
+#[cfg(not(target_os = "linux"))]
+#[path = "heat_stub.rs"]
+mod heat;
 mod hwtemp;
 mod icons;
 mod identity;
@@ -46,6 +46,7 @@ mod knowledge;
 #[cfg(target_os = "linux")]
 mod linux;
 mod metrics;
+mod modes;
 mod pressure;
 mod procs;
 mod sampler;

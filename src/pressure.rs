@@ -201,7 +201,10 @@ fn swap_text(p: &Snapshot, locale: Locale) -> String {
         if p.ram_files >= GB {
             t.push_str(&format!(
                 "{} {} {}",
-                locale.text("; arquivos em RAM (/tmp) somam", "; files in RAM (/tmp) add up to"),
+                locale.text(
+                    "; arquivos em RAM (/tmp) somam",
+                    "; files in RAM (/tmp) add up to"
+                ),
                 fmt_gb(p.ram_files),
                 locale.text("e só saem apagando", "and only go away when deleted")
             ));
@@ -226,7 +229,11 @@ fn thief_list(thieves: &[Thief], locale: Locale) -> String {
     groups
         .into_iter()
         .map(|(label, kind, n)| {
-            let count = if n > 1 { format!(" ×{n}") } else { String::new() };
+            let count = if n > 1 {
+                format!(" ×{n}")
+            } else {
+                String::new()
+            };
             format!("{label}{count} ({})", kind.short_for(locale))
         })
         .collect::<Vec<_>>()

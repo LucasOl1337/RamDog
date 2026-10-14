@@ -285,7 +285,9 @@ impl MemMetric {
     pub fn label_for(self, locale: Locale) -> &'static str {
         match self {
             #[cfg(target_os = "linux")]
-            MemMetric::Proportional => locale.text("Proporcional (PSS)", "Proportional (PSS)"),
+            MemMetric::Proportional => {
+                locale.text("RAM (compartilhada dividida)", "RAM (shared split)")
+            }
             MemMetric::WorkingSet => {
                 if cfg!(target_os = "linux") {
                     locale.text("Residente (RSS)", "Resident (RSS)")
@@ -312,7 +314,7 @@ impl MemMetric {
     pub fn short_for(self, locale: Locale) -> &'static str {
         match self {
             #[cfg(target_os = "linux")]
-            MemMetric::Proportional => locale.text("RAM PSS", "RAM PSS"),
+            MemMetric::Proportional => locale.text("RAM", "RAM"),
             MemMetric::WorkingSet => locale.text("RAM", "RAM"),
             MemMetric::Private => locale.text("RAM priv.", "Private RAM"),
             MemMetric::Commit => {
@@ -335,8 +337,8 @@ impl MemMetric {
             return match (self, locale) {
             (MemMetric::WorkingSet, Locale::Portuguese) => "RAM residente (RSS), incluindo páginas compartilhadas. A soma pode contar a mesma página em vários processos.",
             (MemMetric::WorkingSet, Locale::English) => "Resident RAM (RSS), including shared pages. The sum may count the same page in several processes.",
-            (MemMetric::Proportional, Locale::Portuguese) => "RAM proporcional (PSS): divide cada página compartilhada entre os processos que a usam. Totais incluem apenas leituras acessíveis; — indica indisponível.",
-            (MemMetric::Proportional, Locale::English) => "Proportional RAM (PSS): divides each shared page among the processes using it. Totals include readable values only; — means unavailable.",
+            (MemMetric::Proportional, Locale::Portuguese) => "RAM de cada processo, com a memória compartilhada dividida entre quem usa: a soma não conta a mesma coisa duas vezes. Totais incluem apenas leituras acessíveis; — indica indisponível.",
+            (MemMetric::Proportional, Locale::English) => "RAM used by each process, with shared memory split among the processes using it, so the sum never counts the same page twice. Totals include readable values only; — means unavailable.",
             (MemMetric::Private, Locale::Portuguese) => "RAM exclusiva (USS): Private_Clean + Private_Dirty de smaps_rollup. Totais incluem apenas leituras acessíveis; — indica indisponível.",
             (MemMetric::Private, Locale::English) => "Private RAM (USS): Private_Clean + Private_Dirty from smaps_rollup. Totals include readable values only; — means unavailable.",
             (MemMetric::Commit, Locale::Portuguese) => "Espaço de endereçamento virtual reservado. Não representa RAM consumida nem memória confirmada (commit).",

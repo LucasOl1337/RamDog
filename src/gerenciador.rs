@@ -1272,8 +1272,8 @@ impl Gerenciador {
             tip.push_str(&format!(" +{more}"));
         }
         tip.push_str(self.t(
-            "\nMemória em PSS: páginas compartilhadas divididas entre quem usa, sem contar duas vezes.",
-            "\nMemory in PSS: shared pages split between users, never counted twice.",
+            "\nMemória compartilhada dividida entre quem usa, sem contar duas vezes.",
+            "\nShared memory split between users, never counted twice.",
         ));
         tip
     }
