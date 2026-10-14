@@ -4,10 +4,23 @@ As mudanças são registradas por versão. As notas descrevem funcionalidades di
 
 ## [Não lançado]
 
+## [0.16.0] - 2026-10-14
+
+Modos da máquina no cabeçalho, aba Calor, Matar sobras e a RAM que não é de processo.
+
+Patch notes: [v0.16.0](docs/releases/v0.16.0.md).
+
 ### Adicionado
 
+- **Modos** no cabeçalho de todas as abas: botões que ligam e desligam perfis da máquina (jogo, silencioso, noite, desempenho…). O RamDog lê os comandos de `modes.json`, ao lado do `config.json`: `on`, `off` e `state` (sai 0 = ligado). O botão mostra o que está ligado ("Modo: Jogo + Silencioso") e relê o estado de todos a cada 5 s e depois de cada clique. Sem o arquivo, o botão não aparece.
+- Aba **Calor** (Linux): Tctl, ventoinha da CPU, watts do RAPL e clock médio; lista "Comendo CPU" separada em Largado, Serviço e Em uso, com matar por linha e "Matar todos os largados"; botão **Modo silencioso** para `cpu-teto` e `ventoinha-calma`.
 - **Matar sobras**, botão no cabeçalho de todas as abas: junta o que a Faxina marcaria sozinha (processo de agente que já saiu, emulador escondido, script largado girando CPU) e os parados sem janela acima de 256 MB (desmarcados), mostra o motivo de cada um e mata o que ficar marcado.
 - Faxina reconhece **processo largado**: o pai virou o init ou o `systemd --user`, vive há 30 min ou mais e gastou em média meio núcleo ou mais a vida inteira. Caso real: um `python3 -` de heredoc que ficou 10 h preso num regex.
+
+### Mudado
+
+- As linhas que não são processo (zram, kernel, arquivos em RAM, bibliotecas e cache) deixaram de ficar fixas no topo. Ordenando por RAM elas entram no meio dos apps pelo tamanho; em qualquer outra coluna vão pro fim da lista.
+- A coluna **RAM PSS** virou só **RAM**. A métrica é a mesma (memória compartilhada dividida entre quem usa); as dicas explicam sem sigla.
 
 ### Corrigido
 
