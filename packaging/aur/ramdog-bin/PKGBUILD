@@ -1,6 +1,6 @@
 # Maintainer: LucasOl1337 <https://github.com/LucasOl1337>
 pkgname=ramdog-bin
-pkgver=0.14.0
+pkgver=0.16.0
 pkgrel=1
 pkgdesc='Process manager that groups apps, counts memory with PSS and shows where each process came from (built for Omarchy/Hyprland)'
 arch=('x86_64' 'aarch64')
@@ -13,7 +13,7 @@ optdepends=(
   'polkit: cleanup and fan-control helpers'
   'pacman-contrib: pacman cache cleanup (paccache)'
   'nvidia-utils: NVIDIA GPU load and VRAM per process'
-  'lm_sensors: sensor drivers for the Thermal view'
+  'lm_sensors: sensor drivers for Temperature → Sensors & fans'
   'librsvg: SVG app icons'
 )
 provides=('ramdog')
@@ -23,8 +23,8 @@ source=("ramdog-${pkgver}.png::https://raw.githubusercontent.com/LucasOl1337/Ram
 source_x86_64=("RamDog-linux-x86_64-${pkgver}.tar.gz::https://github.com/LucasOl1337/RamDog/releases/download/v${pkgver}/RamDog-linux-x86_64.tar.gz")
 source_aarch64=("RamDog-linux-aarch64-${pkgver}.tar.gz::https://github.com/LucasOl1337/RamDog/releases/download/v${pkgver}/RamDog-linux-aarch64.tar.gz")
 sha256sums=('293465684639e0055fb0f6daba78779da8e638fa010c2c92fbf5aedb48c9c693')
-sha256sums_x86_64=('392fcaec5c83ba1cc3ef7220a58661f237e7ec300300e9d3b9e0d6f7c758cfd0')
-sha256sums_aarch64=('f09ae887528e14753c4acda38d11793965970045f8bf406dec6bc94685a2ac93')
+sha256sums_x86_64=('ebd715d4d35e732c0146897dbcb57cf0f370d6f4f188053e5c80bf2bf6812ff7')
+sha256sums_aarch64=('7070a0931e9bf51a7ec436b86337dc947fd21bd2a4c3cf99ca6fc55697440b45')
 
 package() {
   install -Dm755 ramdog "${pkgdir}/usr/bin/ramdog"
