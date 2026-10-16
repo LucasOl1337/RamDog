@@ -6,7 +6,7 @@
   <rect x="255" y="50" width="146" height="54" rx="27" fill="#8E65E8"/>
   <text x="281" y="87" font-size="25" fill="#FFFFFF" font-weight="700">v0.16.0</text>
   <text x="56" y="145" font-size="25" fill="#FFD6A0" font-weight="700" letter-spacing="3">NOTAS DA ATUALIZAÇÃO</text>
-  <text x="1020" y="88" font-size="18" fill="#BCB1D2" text-anchor="end">14 OUT 2026</text>
+  <text x="1020" y="88" font-size="18" fill="#BCB1D2" text-anchor="end">16 OUT 2026</text>
   <path d="M56 178H1144" stroke="#76638C" opacity=".5"/>
   <text x="56" y="224" font-size="23" fill="#D8CFE7">Menos abas, mais claras. E os perfis da máquina viraram botão.</text>
   <rect x="56" y="264" width="6" height="28" rx="3" fill="#8E65E8"/>

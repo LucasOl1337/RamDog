@@ -4,7 +4,7 @@ As mudanças são registradas por versão. As notas descrevem funcionalidades di
 
 ## [Não lançado]
 
-## [0.16.0] - 2026-10-14
+## [0.16.0] - 2026-10-16
 
 Abas reorganizadas por ferramenta, modos da máquina no cabeçalho, Quem esquenta, Matar sobras e a RAM que não é de processo.
 
