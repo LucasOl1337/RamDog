@@ -13,7 +13,7 @@ use egui_extras::{Column, TableBuilder, TableRow};
 use crate::boot::{Boot, BootOut};
 use crate::categories::{self, classify, is_critical, Category};
 use crate::clean::{Clean, CleanOut};
-use crate::config::{Config, Locale, MemMetric, ViewMode};
+use crate::config::{Config, Locale, MemMetric, Tool, ViewMode};
 use crate::drains::{DrainOut, Drains};
 use crate::heat::{Heat, HeatOut};
 use crate::hwtemp::HwTemp;
@@ -415,7 +415,8 @@ pub struct App {
     modes: crate::modes::Modes,
     /// Última visão de processo (Lista/Árvore/Categorias) antes de entrar num addon.
     /// Clicar de novo no addon aceso volta para ela, em vez de cair sempre em Lista.
-    last_core: ViewMode,
+    /// Última sub-aba aberta de cada ferramenta, para voltar nela pela barra lateral.
+    last_page: HashMap<Tool, ViewMode>,
     /// Visão Térmico: valor local de slider por fan + quando o usuário mexeu pela última vez.
     /// Por ~2.5s depois de mexer, o slider mostra o valor local em vez do reportado pelo
     /// helper — sem isso o slider "volta" enquanto o helper ainda não aplicou/reportou.
@@ -450,13 +451,10 @@ impl App {
             cfg.view = ViewMode::List;
         }
         let mini = cfg.mini;
-        // Abrir direto num addon é legítimo (foi assim que fechou), mas o botão de voltar
-        // precisa de um destino desde o primeiro frame.
-        let last_core = if cfg.view.is_addon() {
-            ViewMode::List
-        } else {
-            cfg.view
-        };
+        let last_page: HashMap<Tool, ViewMode> = Tool::of(cfg.view)
+            .map(|t| (t, cfg.view))
+            .into_iter()
+            .collect();
         let is_admin = procs::is_admin();
         let sampler = sampler::spawn(cc.egui_ctx.clone(), cfg.refresh_ms);
         let (sig_tx, sig_rx) = std::sync::mpsc::channel();
@@ -518,7 +516,7 @@ impl App {
             sweep: Sweep::new(),
             heat: Heat::new(),
             modes: crate::modes::Modes::load(),
-            last_core,
+            last_page,
             thermal_edit: HashMap::new(),
             stab_pending: None,
             // `main` já abriu a janela no modo lido da config — nada a aplicar no 1º frame.
@@ -1375,11 +1373,20 @@ impl App {
         // e na própria célula quando a Disputa está ligada (`cpu_cell_disputa`).
         let cores = pressure::cores(cpu_pct, ncpu as u32);
         if cores >= 0.8 {
-            (format!("{cpu_pct:.0}%"), Color32::from_rgb(255, 150, 90))
+            (
+                format!("{}%", pt_num(cpu_pct as f64, 0)),
+                Color32::from_rgb(255, 150, 90),
+            )
         } else if cores >= 0.25 {
-            (format!("{cpu_pct:.1}%"), Color32::from_rgb(230, 210, 120))
+            (
+                format!("{}%", pt_num(cpu_pct as f64, 1)),
+                Color32::from_rgb(230, 210, 120),
+            )
         } else if cpu_pct >= 0.05 {
-            (format!("{cpu_pct:.1}%"), Color32::from_rgb(200, 200, 200))
+            (
+                format!("{}%", pt_num(cpu_pct as f64, 1)),
+                Color32::from_rgb(200, 200, 200),
+            )
         } else {
             ("–".into(), Color32::from_gray(110))
         }
@@ -2297,10 +2304,11 @@ impl App {
         let held = self.settle_zombies(&killed);
         self.after_kill();
         let poupados = if skipped_locked > 0 {
-            if english {
-                format!(", {skipped_locked} protected process(es) skipped")
-            } else {
-                format!(", {skipped_locked} protegido(s) poupado(s)")
+            match (english, skipped_locked) {
+                (true, 1) => ", 1 protected process skipped".to_string(),
+                (true, n) => format!(", {n} protected processes skipped"),
+                (false, 1) => ", 1 protegido poupado".to_string(),
+                (false, n) => format!(", {n} protegidos poupados"),
             }
         } else {
             String::new()
@@ -2699,11 +2707,8 @@ impl App {
     /// medidor que só sabe dizer "0%" quando a carga real oscila em 0,3–2% parece travado —
     /// mesmo funcionando certo. Acima de 10% a casa decimal só seria ruído.
     fn fmt_pct(p: f32) -> String {
-        if p < 10.0 {
-            format!("{:.1}%", p)
-        } else {
-            format!("{:.0}%", p)
-        }
+        let decimals = if p < 10.0 { 1 } else { 0 };
+        format!("{}%", pt_num(p as f64, decimals))
     }
 
     fn meter_bar(
@@ -2980,8 +2985,8 @@ impl App {
         };
         let tip = if !has_fans && cfg!(target_os = "linux") {
             self.cfg.locale.text(
-                "Abra Térmico e ative o controle de ventoinhas com autenticação.",
-                "Open Thermal and enable authenticated fan control.",
+                "Abra Temperatura → Sensores e ventoinhas e ative o controle de ventoinhas.",
+                "Open Temperature → Sensors & fans and enable fan control.",
             )
         } else if !has_fans {
             self.cfg.locale.text("Controle de fans indisponível: precisa de admin e do hwtemp.exe ao lado do ramdog.exe.", "Fan control is unavailable: it needs admin rights and hwtemp.exe beside ramdog.exe.")
@@ -4397,11 +4402,11 @@ impl App {
                     ui.add_space(40.0);
                     ui.label(RichText::new(locale.text("Sem leitura de sensores", "No sensor readings")).strong().size(15.0));
                     let why = if cfg!(target_os = "macos") {
-                        locale.text("A visão Térmico no macOS ainda não está ligada.", "Thermal view is not connected on macOS yet.")
+                        locale.text("Sensores e ventoinhas ainda não estão ligados no macOS.", "Sensors & fans are not connected on macOS yet.")
                     } else if cfg!(target_os = "linux") {
                         locale.text("Nenhum sensor em /sys/class/hwmon. Sem coretemp/k10temp/zenpower o kernel não expôs temperatura.", "No sensor under /sys/class/hwmon. Without coretemp/k10temp/zenpower, the kernel exposed no temperature.")
                     } else if !cfg!(windows) {
-                        locale.text("A visão Térmico ainda é só Windows: depende do helper hwtemp.exe (LibreHardwareMonitorLib).", "Thermal view is still Windows-only here: it needs hwtemp.exe (LibreHardwareMonitorLib).")
+                        locale.text("Sensores e ventoinhas dependem do helper hwtemp.exe (LibreHardwareMonitorLib), que não está ao lado do RamDog.", "Sensors & fans need the hwtemp.exe helper (LibreHardwareMonitorLib) next to RamDog.")
                     } else if cmd.is_none() {
                         locale.text("hwtemp.exe não foi achado ao lado do ramdog.exe — reinstale com o helper junto.", "hwtemp.exe was not found beside ramdog.exe — reinstall with the helper included.")
                     } else {
@@ -4665,11 +4670,11 @@ impl App {
                     let sub = if n_temps > 1 {
                         format!(
                             "{} · {}",
-                            h.name,
+                            sensor_label(&h.name, locale),
                             locale.text("sensor mais quente", "hottest sensor")
                         )
                     } else {
-                        h.name.clone()
+                        sensor_label(&h.name, locale).to_string()
                     };
                     ui.label(RichText::new(sub).color(MUTED).size(11.0));
                     ui.add_space(3.0);
@@ -5615,6 +5620,32 @@ impl eframe::App for App {
 
 // ---------- Fluente: sidebar, cabeçalho, cards e preferências ----------
 
+/// Plataforma desta build, como aparece no rodapé da barra lateral e nas notas de versão:
+/// `Windows`, `macOS`, `Linux` e, no desktop de referência, `Linux · Omarchy`.
+pub fn platform_tag() -> &'static str {
+    static TAG: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    TAG.get_or_init(|| {
+        if cfg!(windows) {
+            "Windows"
+        } else if cfg!(target_os = "macos") {
+            "macOS"
+        } else if std::env::var_os("OMARCHY_PATH").is_some()
+            || std::path::Path::new("/usr/share/omarchy").is_dir()
+            || std::env::var_os("HOME")
+                .map(|h| {
+                    std::path::Path::new(&h)
+                        .join(".local/share/omarchy")
+                        .is_dir()
+                })
+                .unwrap_or(false)
+        {
+            "Linux · Omarchy"
+        } else {
+            "Linux"
+        }
+    })
+}
+
 /// Ícones da barra lateral, desenhados a traço. Não dependem de fonte de símbolo: o
 /// Segoe UI Symbol do Windows e o fallback do Linux desenham ⚡♨▦ cada um do seu jeito.
 #[derive(Clone, Copy)]
@@ -5633,6 +5664,15 @@ enum Icon {
 }
 
 impl Icon {
+    fn of_tool(t: Tool) -> Icon {
+        match t {
+            Tool::Free => Icon::Broom,
+            Tool::Temperature => Icon::Thermo,
+            Tool::Startup => Icon::Bolt,
+            Tool::Screens => Icon::Display,
+        }
+    }
+
     fn of(v: ViewMode) -> Icon {
         match v {
             ViewMode::List => Icon::List,
@@ -5972,64 +6012,54 @@ impl App {
                 go = Some(v);
             }
         }
-        ui.add_space(12.0);
-        ui.horizontal(|ui| {
+        if Tool::ALL.iter().any(|t| t.available()) {
             ui.add_space(12.0);
-            ui.label(
-                RichText::new(self.cfg.locale.text("COMPLEMENTOS", "ADD-ONS"))
-                    .size(10.5)
-                    .color(MUTED),
-            );
-        });
-        ui.add_space(2.0);
-        for v in ViewMode::ADDONS {
-            let on = self.cfg.view == v;
-            let tip = if !v.available() {
-                if matches!(v, ViewMode::Clean | ViewMode::Sweep | ViewMode::Heat) {
-                    format!(
-                        "{} — {}",
-                        v.label_for(self.cfg.locale),
-                        self.cfg
-                            .locale
-                            .text("por enquanto só no Linux.", "Linux only for now.")
-                    )
-                } else {
-                    format!(
-                        "{} — {}",
-                        v.label_for(self.cfg.locale),
-                        self.cfg.locale.text(
-                            "indisponível nesta versão para Linux/macOS.",
-                            "unavailable on this Linux/macOS build."
-                        )
-                    )
-                }
-            } else if on {
-                format!(
-                    "{}\n\n{}{}.",
-                    v.tip_for(self.cfg.locale),
-                    self.cfg
-                        .locale
-                        .text("Clique para voltar a ", "Click to return to "),
-                    self.last_core.label_for(self.cfg.locale)
-                )
-            } else {
-                v.tip_for(self.cfg.locale).to_string()
-            };
+            ui.horizontal(|ui| {
+                ui.add_space(12.0);
+                ui.label(
+                    RichText::new(self.cfg.locale.text("FERRAMENTAS", "TOOLS"))
+                        .size(10.5)
+                        .color(MUTED),
+                );
+            });
+            ui.add_space(2.0);
+        }
+        let current = Tool::of(self.cfg.view);
+        // Ferramenta que não existe nesta plataforma some em vez de ficar cinza: o macOS
+        // não precisa de um menu de coisas que só o Linux faz.
+        for t in Tool::ALL.into_iter().filter(|t| t.available()) {
             if nav_item(
                 ui,
-                Icon::of(v),
-                v.label_for(self.cfg.locale),
-                on,
-                v.available(),
-                &tip,
+                Icon::of_tool(t),
+                t.label_for(self.cfg.locale),
+                current == Some(t),
+                true,
+                t.tip_for(self.cfg.locale),
             )
             .clicked()
             {
-                go = Some(v);
+                go = self
+                    .last_page
+                    .get(&t)
+                    .copied()
+                    .filter(|v| v.available())
+                    .or_else(|| t.available_pages().next());
             }
         }
         ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-            ui.add_space(4.0);
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.add_space(12.0);
+                ui.label(
+                    RichText::new(format!("v{} · {}", env!("CARGO_PKG_VERSION"), platform_tag()))
+                        .size(10.5)
+                        .color(MUTED),
+                )
+                .on_hover_text(self.cfg.locale.text(
+                    "Versão e plataforma desta build. A barra lateral só mostra o que funciona nela.",
+                    "Version and platform of this build. The sidebar only shows what works on it.",
+                ));
+            });
             if self.is_admin {
                 ui.horizontal(|ui| {
                     ui.add_space(12.0);
@@ -6061,19 +6091,58 @@ impl App {
                 self.show_prefs = !self.show_prefs;
             }
         });
-        let Some(v) = go else { return };
+        if let Some(v) = go {
+            self.go_view(v);
+        }
+    }
+
+    fn go_view(&mut self, v: ViewMode) {
         if self.cfg.view == v {
-            if v.is_addon() {
-                self.cfg.view = self.last_core;
-                self.cfg_dirty = true;
-            }
             return;
         }
-        if !self.cfg.view.is_addon() {
-            self.last_core = self.cfg.view;
+        if let Some(t) = Tool::of(v) {
+            self.last_page.insert(t, v);
         }
         self.cfg.view = v;
         self.cfg_dirty = true;
+    }
+
+    /// Sub-abas da ferramenta aberta, em pílula, logo depois do título.
+    fn ui_subtabs(&mut self, ui: &mut egui::Ui, t: Tool) {
+        let pages: Vec<ViewMode> = t.available_pages().collect();
+        if pages.len() < 2 {
+            return;
+        }
+        let mut go = None;
+        egui::Frame::new()
+            .fill(SURFACE)
+            .corner_radius(9.0)
+            .inner_margin(egui::Margin::same(3))
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                ui.spacing_mut().button_padding = Vec2::new(12.0, 4.0);
+                for v in pages {
+                    let on = self.cfg.view == v;
+                    let b = egui::Button::new(
+                        RichText::new(v.page_label_for(self.cfg.locale))
+                            .size(13.0)
+                            .color(if on { TEXT } else { MUTED }),
+                    )
+                    .fill(if on { SURFACE_HI } else { Color32::TRANSPARENT })
+                    .stroke(Stroke::NONE)
+                    .corner_radius(7.0);
+                    if ui
+                        .add(b)
+                        .on_hover_text(v.tip_for(self.cfg.locale))
+                        .clicked()
+                    {
+                        go = Some(v);
+                    }
+                }
+            });
+        if let Some(v) = go {
+            self.go_view(v);
+        }
     }
 
     /// Cabeçalho: título da visão, contagem, busca, agrupamento e Mini.
@@ -6081,12 +6150,16 @@ impl App {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
             let v = self.cfg.view;
-            let title = if v == ViewMode::List {
-                self.cfg.locale.text("Processos", "Processes")
-            } else {
-                v.label_for(self.cfg.locale)
+            let tool = Tool::of(v);
+            let title = match (v, tool) {
+                (ViewMode::List, _) => self.cfg.locale.text("Processos", "Processes"),
+                (_, Some(t)) => t.label_for(self.cfg.locale),
+                _ => v.label_for(self.cfg.locale),
             };
             ui.label(RichText::new(title).size(17.0).strong());
+            if let Some(t) = tool {
+                self.ui_subtabs(ui, t);
+            }
             if !v.is_addon() {
                 let count = if self.cfg.locale == Locale::Portuguese {
                     format!("{} · {} na tela", self.procs.len(), self.row_cache.shown_count())
@@ -6403,13 +6476,23 @@ impl App {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 10.0;
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(text)
-                                        .size(12.5)
-                                        .color(Color32::from_rgb(255, 171, 145)),
-                                )
-                                .wrap(),
+                            // Reserva a largura do botão; senão o texto quebra na largura toda e
+                            // a última palavra de cada linha fica embaixo do "Ver disputa".
+                            let text_w = (ui.available_width() - 150.0).max(200.0);
+                            ui.allocate_ui_with_layout(
+                                Vec2::new(text_w, 0.0),
+                                Layout::top_down(Align::Min),
+                                |ui| {
+                                    ui.set_width(text_w);
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(text)
+                                                .size(12.5)
+                                                .color(Color32::from_rgb(255, 171, 145)),
+                                        )
+                                        .wrap(),
+                                    );
+                                },
                             );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 let btn = egui::Button::new(
@@ -6521,7 +6604,7 @@ impl App {
                 let sys_total = b.non_process();
                 let text = RichText::new(format!(
                     "{}  {}",
-                    locale.text("▣ Sistema (não-processo)", "▣ System (non-process)"),
+                    locale.text("▣ Fora de processo", "▣ Not a process"),
                     fmt_bytes_short(sys_total)
                 ))
                     .color(if on { col } else { MUTED })

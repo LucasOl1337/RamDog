@@ -639,9 +639,17 @@ impl Screens {
             RichText::new(format!(
                 "{} {} · {} {}",
                 self.mons.len(),
-                locale.text("monitor(es)", "monitor(s)"),
+                if self.mons.len() == 1 {
+                    locale.text("monitor", "monitor")
+                } else {
+                    locale.text("monitores", "monitors")
+                },
                 self.wins.len(),
-                locale.text("janela(s) organizáveis", "arrangeable window(s)"),
+                if self.wins.len() == 1 {
+                    locale.text("janela organizável", "arrangeable window")
+                } else {
+                    locale.text("janelas organizáveis", "arrangeable windows")
+                },
             ))
             .small()
             .color(MUTED),

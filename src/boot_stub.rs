@@ -28,7 +28,7 @@ impl Boot {
     ) -> Vec<BootOut> {
         ui.add_space(16.0);
         ui.label(cfg.locale.text(
-            "A visão Partida lista o que o Windows dispara no boot e no logon.",
+            "Ao ligar lista o que o Windows dispara no boot e no logon.",
             "Startup lists what Windows launches at boot and sign-in.",
         ));
         ui.add_space(8.0);

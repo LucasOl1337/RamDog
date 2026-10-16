@@ -22,8 +22,8 @@ impl Clean {
         _locked: &dyn Fn(&ProcInfo) -> bool,
         locale: Locale,
     ) -> Vec<CleanOut> {
-        ui.heading(locale.text("Limpeza", "Cleanup"));
-        ui.label(locale.text("A visão Limpeza ainda é só Linux: cache do usuário, lixeira, pacman, journal, coredumps e sobras na RAM.", "Cleanup is currently Linux-only: user cache, trash, pacman, journals, coredumps, and leftover RAM."));
+        ui.heading(locale.text("RAM e disco", "Memory & disk"));
+        ui.label(locale.text("RAM e disco ainda é só Linux: cache do usuário, lixeira, pacman, journal, coredumps e sobras na RAM.", "Memory & disk is currently Linux-only: user cache, trash, pacman, journals, coredumps, and leftover RAM."));
         Vec::new()
     }
 }

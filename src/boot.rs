@@ -725,9 +725,8 @@ impl Boot {
 
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new(locale.text("Partida", "Startup")).strong().size(16.0));
             ui.label(
-                RichText::new(locale.text("— tudo que o Windows dispara no boot e no logon, sem o recorte do Gerenciador de Tarefas", "— everything Windows starts at boot and sign-in, beyond Task Manager's limited list"))
+                RichText::new(locale.text("Tudo que o Windows dispara no boot e no logon, sem o recorte do Gerenciador de Tarefas.", "Everything Windows starts at boot and sign-in, beyond Task Manager's limited list."))
                     .color(MUTED),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1698,12 +1697,12 @@ Clique para ver só estas.",
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if on_startup {
                                     ui.label(
-                                        RichText::new(locale.text("já na partida", "already in startup"))
+                                        RichText::new(locale.text("já sobe ao ligar", "already starts"))
                                             .small()
                                             .color(Color32::from_rgb(120, 200, 140)),
                                     );
                                 } else if ui
-                                    .add(egui::Button::new(RichText::new(locale.text("+ Partida", "+ Startup")).small().color(Color32::WHITE)).fill(ACCENT_BG))
+                                    .add(egui::Button::new(RichText::new(locale.text("+ Ao ligar", "+ At startup")).small().color(Color32::WHITE)).fill(ACCENT_BG))
                                     .on_hover_text(locale.text("Cria um atalho na pasta Iniciar do seu usuário — sem UAC", "Creates a shortcut in your user's Startup folder — no UAC"))
                                     .clicked()
                                 {

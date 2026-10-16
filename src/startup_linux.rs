@@ -29,9 +29,13 @@ pub struct Entry {
 impl Entry {
     pub fn kind_for(&self, locale: Locale) -> String {
         match &self.source {
-            Source::Unit { user: _, unit } => format!(
+            Source::Unit { user, unit } => format!(
                 "{} · {}",
-                locale.text("Usuário", "User"),
+                if *user {
+                    locale.text("Usuário", "User")
+                } else {
+                    locale.text("Sistema", "System")
+                },
                 unit.rsplit('.').next().unwrap_or("unit")
             ),
             Source::Desktop { .. } => locale.text("Autostart XDG", "XDG autostart").to_string(),

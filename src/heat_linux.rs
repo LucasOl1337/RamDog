@@ -912,8 +912,8 @@ impl Heat {
                 ui.colored_label(
                     Color32::from_rgb(230, 170, 90),
                     locale.text(
-                        "O ESTABILIZAR do Térmico também está mexendo nas ventoinhas: os dois brigam pelo mesmo PWM. Desligue um deles.",
-                        "Thermal's STABILIZE is also driving the fans: both fight over the same PWM. Turn one of them off.",
+                        "O ESTABILIZAR de Sensores e ventoinhas também está mexendo nas ventoinhas: os dois brigam pelo mesmo PWM. Desligue um deles.",
+                        "STABILIZE in Sensors & fans is also driving the fans: both fight over the same PWM. Turn one of them off.",
                     ),
                 );
             }

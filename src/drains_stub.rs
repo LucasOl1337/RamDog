@@ -24,8 +24,8 @@ impl Drains {
     ) -> Vec<DrainOut> {
         ui.add_space(16.0);
         ui.label(locale.text(
-            "Desperdício (Defender, serviços, Appx) é específico do Windows.",
-            "Drains (Defender, services, Appx) are Windows-only.",
+            "Segundo plano (Defender, serviços, Appx) só existe no Windows e no Linux.",
+            "Background (Defender, services, Appx) is only on Windows and Linux.",
         ));
         ui.add_space(8.0);
         ui.label(locale.text("No Linux e no macOS o RamDog lista, categoriza e finaliza processos — essa aba não tem equivalente.", "On Linux and macOS, RamDog lists, categorizes, and terminates processes — this tab has no equivalent."));

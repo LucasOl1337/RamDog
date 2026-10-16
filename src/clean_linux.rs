@@ -708,7 +708,7 @@ impl Clean {
             out.push(CleanOut::Toast(msg, err));
         }
 
-        crate::kit::intro(ui, locale.text("Cache do kernel, zombies e o que está ocupando disco sem precisar. Nada aqui é apagado sem um clique de confirmação. Apps abertos sem uso ficam na aba Faxina.", "Kernel cache, zombies, and what is occupying disk unnecessarily. Nothing is deleted without a confirmation click. Unused open apps live in the Sweep tab."));
+        crate::kit::intro(ui, locale.text("Cache do kernel, zombies e o que está ocupando disco sem precisar. Nada aqui é apagado sem um clique de confirmação. Apps abertos sem uso ficam em Apps parados.", "Kernel cache, zombies, and disk space you do not need. Nothing is deleted without a confirmation click. Unused open apps are under Idle apps."));
         ui.add_space(8.0);
 
         egui::ScrollArea::vertical()
@@ -810,7 +810,7 @@ impl Clean {
         let zombies = Self::zombies(procs, locked);
         let title = format!("Zombies · {}", zombies.len());
         section(ui, &title, |ui| {
-            ui.label(RichText::new(locale.text("Apps abertos sem uso ficam na aba Faxina, que classifica e fecha em massa. Aqui sobram os zombies: já morreram, e quem resolve é o pai.", "Unused open apps live in the Sweep tab, which sorts and closes them in bulk. What remains here are zombies: already dead, fixed only by their parent.")).color(MUTED));
+            ui.label(RichText::new(locale.text("Apps abertos sem uso ficam em Apps parados, que classifica e fecha em massa. Aqui sobram os zombies: já morreram, e quem resolve é o pai.", "Unused open apps are under Idle apps, which sorts and closes them in bulk. Zombies are already dead: only their parent can clear them.")).color(MUTED));
             ui.add_space(4.0);
             if zombies.is_empty() {
                 ui.label(

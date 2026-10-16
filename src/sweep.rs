@@ -174,9 +174,9 @@ impl Why {
             }
             Why::Service(unit) => {
                 if en {
-                    format!("systemd service ({unit}); stop it in Drains")
+                    format!("systemd service ({unit}); stop it in Startup → Background")
                 } else {
-                    format!("serviço do systemd ({unit}); pare pelo Desperdício")
+                    format!("serviço do systemd ({unit}); pare em Inicialização → Segundo plano")
                 }
             }
             Why::Pinned => locale
@@ -1266,10 +1266,10 @@ impl Sweep {
                         let base = crate::app::launcher_label(r.detail.clone(), locale);
                         let detail = match (r.children, locale) {
                             (0, _) => base,
-                            (n, Locale::English) => {
-                                format!("{base} · takes {n} child process(es)")
-                            }
-                            (n, _) => format!("{base} · leva {n} filho(s) junto"),
+                            (1, Locale::English) => format!("{base} · takes 1 child process"),
+                            (n, Locale::English) => format!("{base} · takes {n} child processes"),
+                            (1, _) => format!("{base} · leva 1 filho junto"),
+                            (n, _) => format!("{base} · leva {n} filhos junto"),
                         };
                         ui.horizontal(|ui| {
                             ui.add_space(26.0);

@@ -37,7 +37,7 @@ RamDog was built for machines that run browsers, dev servers, AI coding agents a
 - **Memory that adds up.** On Linux the RAM column uses PSS, which splits shared pages among the processes that use them. Group totals, category totals and the top meters match what the app really costs.
 - **Where it came from.** The origin column follows the parent chain and inherited environment to name the terminal, agent (Claude Code, Codex, Cursor, Gemini, Hermes…), editor or `npm run` script behind a process, even after the parent is gone.
 - **Safe to click.** Hyprland, UWSM, Quickshell, systemd and other session-critical processes cannot be killed. Lock anything else you want protected. Row order freezes under the pointer so you never kill the row that just moved.
-- **Clean up what you forgot.** Sweep sorts open apps into *can close*, *maybe* and *in use* from what it observed, and closes your selection in bulk. Cleanup handles kernel cache, zombies, `~/.cache`, pacman cache and journal.
+- **Clean up what you forgot.** **Free up → Idle apps** sorts open apps into *can close*, *maybe* and *in use* from what it observed, and closes your selection in bulk. **Memory & disk** handles kernel cache, zombies, `~/.cache`, pacman cache and journal.
 - **Native, small, fast.** A single Rust binary (egui), no Electron, no daemon. It reads `/proc` directly and stays light during long sessions.
 
 ## Install
@@ -86,7 +86,7 @@ The interface starts in your system language (English or Portuguese) and can be 
 
 - **Protected session.** Hyprland, UWSM and Quickshell are classified as System and can never be killed from RamDog.
 - **Hyprland windows.** The Screens view draws your monitors to scale, moves windows across them, snaps to grids and saves scenes, through `hyprctl` and the Hyprland 0.55+ Lua API.
-- **systemd and pacman.** Startup and Drains manage user and system units and XDG autostart. Cleanup knows the pacman cache, orphans and the journal. Executables are checked with SHA-256 against the local pacman database.
+- **systemd and pacman.** **Startup** manages user and system units and XDG autostart, both what starts at boot and what is running in the background. **Free up → Memory & disk** knows the pacman cache, orphans and the journal. Executables are checked with SHA-256 against the local pacman database.
 - **NVIDIA and AMD together.** GPU load and VRAM per process from `nvidia-smi` and DRM, on the same machine.
 - **One instance.** `ramdog-launch` runs RamDog as a transient `ramdog.service`, detached from the terminal. Launching it again focuses the open window.
 
@@ -119,27 +119,32 @@ Other Linux desktops get everything except Screens, which needs Hyprland. Detail
 
 ## A tour
 
+The sidebar has three ways to look at your processes and, below them, up to four **tools**. Tools with more than one page show them as tabs at the top. A tool your system can't run is not in the sidebar at all, and the bottom of the sidebar tells you which build you are on (`v0.16.0 · Linux · Omarchy`).
+
 | | |
 |---|---|
-| <img src="docs/media/en/categories.png" alt="Categories view grouped by app"><br>**Categories.** AI / Agents, Dev, Browser, Games, Personal, System and Other, with apps grouped inside each one. Override any process manually. | <img src="docs/media/en/tree.png" alt="Tree view"><br>**Tree.** Parent → children with subtree RAM and CPU. Kill a whole tree with `Shift+Del`. |
-| <img src="docs/media/en/sweep.png" alt="Sweep view"><br>**Sweep.** What is open but unused, with the reason on each row. Close the selection in one go. | <img src="docs/media/en/startup.png" alt="Startup view"><br>**Startup.** Everything that starts with your session: systemd units, XDG autostart, and on Windows the registry, tasks, services and UWP. |
-| <img src="docs/media/en/thermal.png" alt="Thermal view"><br>**Thermal.** hwmon sensors and fan RPM. STABILIZE holds fans steady and ramps only when it gets hot, through an authenticated helper. | <img src="docs/media/en/mini.png" alt="Mini mode HUD"><br>**Mini mode.** A borderless HUD with CPU, RAM, GPU and disk, their temperatures and fan RPM. |
-| <img src="docs/media/en/cleanup.png" alt="Cleanup view"><br>**Cleanup.** Kernel cache, zombies with their parents, `~/.cache`, trash, pacman cache, journal and orphans, each with a confirmation. | **Drains.** State, RAM and start/stop/enable/disable for systemd services (Defender, services, UWP and Run keys on Windows).<br><br>**Screens.** Your monitors drawn to scale: move windows between them, snap to grids and save scenes that survive resolution changes. Hyprland and Windows. |
+| <img src="docs/media/en/categories.png" alt="Categories view grouped by app"><br>**Categories** `all platforms`<br>AI / Agents, Dev, Browser, Games, Personal, System and Other, with apps grouped inside each one. Override any process manually. | <img src="docs/media/en/tree.png" alt="Tree view"><br>**Tree** `all platforms`<br>Parent → children with subtree RAM and CPU. Kill a whole tree with `Shift+Del`. |
+| <img src="docs/media/en/sweep.png" alt="Free up, Idle apps page"><br>**Free up → Idle apps** `Linux`<br>What is open but unused, with the reason on each row. Close the selection in one go. | <img src="docs/media/en/cleanup.png" alt="Free up, Memory and disk page"><br>**Free up → Memory & disk** `Linux`<br>Kernel cache, zombies with their parents, `~/.cache`, trash, pacman cache, journal and orphans, each with a confirmation. |
+| <img src="docs/media/en/thermal.png" alt="Temperature, Sensors and fans page"><br>**Temperature → Sensors & fans** `Linux` `Windows`<br>Every sensor and fan RPM. STABILIZE holds fans steady and ramps only when it gets hot. **What's heating** (Linux) lists who is burning CPU: left-behind processes, services and apps in use. | <img src="docs/media/en/startup.png" alt="Startup, At startup page"><br>**Startup → At startup** `Linux` `Windows`<br>Everything that starts with your session: systemd units and XDG autostart, or on Windows the registry, tasks, services and UWP. **Background** shows what is running now, largest first, with stop, restart and boot toggles. |
+| <img src="docs/media/en/mini.png" alt="Mini mode HUD"><br>**Mini mode** `all platforms`<br>A borderless HUD with CPU, RAM, GPU and disk, their temperatures and fan RPM. | **Screens** `Hyprland` `Windows`<br>Your monitors drawn to scale: move windows between them, snap to grids and save scenes that survive resolution changes.<br><br>**Modes** `all platforms`<br>A header menu that turns your own machine profiles (game, quiet, night…) on and off from a `modes.json`. |
 
 ## Platforms
 
-| | Omarchy / Hyprland | Other Linux | Windows | macOS |
+Each release ships one build per system. They share the process views; the tools follow what each system can actually do.
+
+| | Linux · Omarchy | Other Linux | Windows | macOS |
 |---|---|---|---|---|
-| Processes, tree, categories, origin, kill, lock | ✓ | ✓ | ✓ | ✓ |
-| Group by app | ✓ | ✓ | ✓ | ✓ |
+| Processes, Tree, Categories, origin, kill, lock | ✓ | ✓ | ✓ | ✓ |
+| Group by app, Mini mode, Modes | ✓ | ✓ | ✓ | ✓ |
 | Memory metric | PSS / USS / RSS | PSS / USS / RSS | Working set / private / commit | RSS |
-| Sweep and Cleanup | ✓ | ✓ | – | – |
-| Startup and Drains | systemd + XDG | systemd + XDG | Registry, tasks, services, UWP, Defender | – |
-| Screens | ✓ (Hyprland) | – | ✓ | – |
-| Thermal and fans | hwmon + PWM | hwmon + PWM | LibreHardwareMonitor helper | – |
+| **Free up** (Idle apps, Memory & disk) | ✓ | ✓ | – | – |
+| **Temperature** → Sensors & fans | hwmon + PWM | hwmon + PWM | LibreHardwareMonitor helper | – |
+| **Temperature** → What's heating | ✓ | ✓ | – | – |
+| **Startup** (At startup, Background) | systemd + XDG | systemd + XDG | Registry, tasks, services, UWP, Defender | – |
+| **Screens** | ✓ (Hyprland) | – | ✓ | – |
 | GPU per process | NVIDIA, AMD, Intel | NVIDIA, AMD, Intel | NVIDIA | – |
 
-Linux is the most complete platform and Omarchy is where releases are tested by hand. Windows has its own native backends. macOS covers the core process views. The [reference](docs/reference.md) lists every feature and limit per system.
+Linux is the most complete build and Omarchy is where releases are tested by hand. Windows has its own native backends. macOS covers the process views and Mini mode. The [reference](docs/reference.md) lists every feature and limit per system.
 
 ## How RamDog counts memory
 

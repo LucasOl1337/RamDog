@@ -6,25 +6,32 @@ As mudanças são registradas por versão. As notas descrevem funcionalidades di
 
 ## [0.16.0] - 2026-10-14
 
-Modos da máquina no cabeçalho, aba Calor, Matar sobras e a RAM que não é de processo.
+Abas reorganizadas por ferramenta, modos da máquina no cabeçalho, Quem esquenta, Matar sobras e a RAM que não é de processo.
 
 Patch notes: [v0.16.0](docs/releases/v0.16.0.md).
 
 ### Adicionado
 
+- A barra lateral mostra a plataforma do build no rodapé ("v0.16.0 · Linux · Omarchy", "· Windows", "· macOS"), e o README ganhou a tabela **Plataformas** com o que cada sistema tem.
 - **Modos** no cabeçalho de todas as abas: botões que ligam e desligam perfis da máquina (jogo, silencioso, noite, desempenho…). O RamDog lê os comandos de `modes.json`, ao lado do `config.json`: `on`, `off` e `state` (sai 0 = ligado). O botão mostra o que está ligado ("Modo: Jogo + Silencioso") e relê o estado de todos a cada 5 s e depois de cada clique. Sem o arquivo, o botão não aparece.
-- Aba **Calor** (Linux): Tctl, ventoinha da CPU, watts do RAPL e clock médio; lista "Comendo CPU" separada em Largado, Serviço e Em uso, com matar por linha e "Matar todos os largados"; botão **Modo silencioso** para `cpu-teto` e `ventoinha-calma`.
-- **Matar sobras**, botão no cabeçalho de todas as abas: junta o que a Faxina marcaria sozinha (processo de agente que já saiu, emulador escondido, script largado girando CPU) e os parados sem janela acima de 256 MB (desmarcados), mostra o motivo de cada um e mata o que ficar marcado.
-- Faxina reconhece **processo largado**: o pai virou o init ou o `systemd --user`, vive há 30 min ou mais e gastou em média meio núcleo ou mais a vida inteira. Caso real: um `python3 -` de heredoc que ficou 10 h preso num regex.
+- **Temperatura → Quem esquenta** (Linux): Tctl, ventoinha da CPU, watts do RAPL e clock médio; lista "Comendo CPU" separada em Largado, Serviço e Em uso, com matar por linha e "Matar todos os largados"; botão **Modo silencioso** para `cpu-teto` e `ventoinha-calma`.
+- **Matar sobras**, botão no cabeçalho de todas as abas: junta o que Apps parados marcaria sozinho (processo de agente que já saiu, emulador escondido, script largado girando CPU) e os parados sem janela acima de 256 MB (desmarcados), mostra o motivo de cada um e mata o que ficar marcado.
+- **Apps parados** reconhece **processo largado**: o pai virou o init ou o `systemd --user`, vive há 30 min ou mais e gastou em média meio núcleo ou mais a vida inteira. Caso real: um `python3 -` de heredoc que ficou 10 h preso num regex.
 
 ### Mudado
 
+- **Abas por ferramenta.** As sete abas de complemento viraram quatro ferramentas, cada uma com subabas no cabeçalho: **Liberar** (Apps parados, RAM e disco; antes Faxina e Limpeza), **Temperatura** (Sensores e ventoinhas, Quem esquenta; antes Térmico e Calor), **Inicialização** (Ao ligar, Segundo plano; antes Partida e Desperdício) e **Telas**. Em inglês: Free up (Idle apps, Memory & disk), Temperature (Sensors & fans, What's heating), Startup (At startup, Background) e Screens. Cada ferramenta lembra a última subaba aberta, e as views salvas no `config.json` continuam valendo.
+- Ferramenta sem backend na plataforma some da barra em vez de abrir uma tela de aviso: no macOS ficam só Processos, Árvore e Categorias; Liberar e Quem esquenta são só Linux.
 - As linhas que não são processo (zram, kernel, arquivos em RAM, bibliotecas e cache) deixaram de ficar fixas no topo. Ordenando por RAM elas entram no meio dos apps pelo tamanho; em qualquer outra coluna vão pro fim da lista.
 - A coluna **RAM PSS** virou só **RAM**. A métrica é a mesma (memória compartilhada dividida entre quem usa); as dicas explicam sem sigla.
 
 ### Corrigido
 
 - No Linux, a RAM em uso não batia com a soma das abas (55% no topo, 11 GB na Árvore). Faltava tudo que não é processo: agora Processos e Árvore mostram linhas de **Arquivos em RAM** (`/tmp`, `/dev/shm`, inclusive a parte que foi pro zram), **Swap comprimido de processos (zram)**, **Kernel** e o resto, com as pastas mais pesadas do `/tmp` e quem tem mais swap na dica. A barra de memória e o aviso de pressão usam a mesma conta.
+- O rótulo Sistema/Usuário das unidades systemd em Ao ligar saía trocado.
+- Em inglês, o nome do sensor, o chip "CPU hog" e o chip de RAM fora de processo apareciam em português.
+- O texto do aviso de pressão passava por baixo do botão "Ver disputa" em janela estreita.
+- Plurais certos nos avisos ("1 processo fechado à força", "1 monitor", "leva 1 filho junto") nas duas línguas; porcentagens com vírgula em português; memória dos serviços Linux em MB/GB como no resto do app.
 - O aviso de disputa agrupa repetidos ("Codex ×3") e explica o zram e os arquivos em RAM.
 
 ## [0.15.1] - 2026-09-28

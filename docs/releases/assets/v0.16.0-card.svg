@@ -8,23 +8,23 @@
   <text x="56" y="145" font-size="25" fill="#FFD6A0" font-weight="700" letter-spacing="3">NOTAS DA ATUALIZAÇÃO</text>
   <text x="1020" y="88" font-size="18" fill="#BCB1D2" text-anchor="end">14 OUT 2026</text>
   <path d="M56 178H1144" stroke="#76638C" opacity=".5"/>
-  <text x="56" y="224" font-size="23" fill="#D8CFE7">Ordenou por CPU, CPU em cima. E os perfis da máquina viraram botão.</text>
+  <text x="56" y="224" font-size="23" fill="#D8CFE7">Menos abas, mais claras. E os perfis da máquina viraram botão.</text>
   <rect x="56" y="264" width="6" height="28" rx="3" fill="#8E65E8"/>
   <text x="80" y="287" font-size="26" fill="#8E65E8" font-weight="700">NOVIDADES</text>
   <circle cx="86" cy="326" r="6" fill="#8E65E8"/>
-  <text x="108" y="334" font-size="25" fill="#F8F5FF" font-weight="700">Modos no cabeçalho</text>
-  <text x="560" y="334" font-size="20" fill="#C9BEE0">Jogo, silencioso, noite e desempenho com um clique.</text>
+  <text x="108" y="334" font-size="25" fill="#F8F5FF" font-weight="700">Abas por ferramenta</text>
+  <text x="560" y="334" font-size="20" fill="#C9BEE0">Liberar, Temperatura, Inicialização e Telas.</text>
   <circle cx="86" cy="370" r="6" fill="#8E65E8"/>
-  <text x="108" y="378" font-size="25" fill="#F8F5FF" font-weight="700">Aba Calor</text>
-  <text x="560" y="378" font-size="20" fill="#C9BEE0">Quem come CPU, largados e o modo silencioso.</text>
+  <text x="108" y="378" font-size="25" fill="#F8F5FF" font-weight="700">Modos no cabeçalho</text>
+  <text x="560" y="378" font-size="20" fill="#C9BEE0">Jogo, silencioso, noite e desempenho com um clique.</text>
   <rect x="56" y="428" width="6" height="28" rx="3" fill="#30BCEF"/>
   <text x="80" y="451" font-size="26" fill="#30BCEF" font-weight="700">MELHORIAS</text>
   <circle cx="86" cy="490" r="6" fill="#30BCEF"/>
   <text x="108" y="498" font-size="25" fill="#F8F5FF" font-weight="700">Lista respeita a coluna</text>
   <text x="560" y="498" font-size="20" fill="#C9BEE0">Zram e kernel entram pelo tamanho, não fixos no topo.</text>
   <circle cx="86" cy="534" r="6" fill="#30BCEF"/>
-  <text x="108" y="542" font-size="25" fill="#F8F5FF" font-weight="700">Coluna "RAM"</text>
-  <text x="560" y="542" font-size="20" fill="#C9BEE0">Sem sigla PSS; a conta é a mesma.</text>
+  <text x="108" y="542" font-size="25" fill="#F8F5FF" font-weight="700">Plataforma à vista</text>
+  <text x="560" y="542" font-size="20" fill="#C9BEE0">Linux, Windows ou macOS: o que não roda some.</text>
   <path d="M56 580H1144" stroke="#76638C" opacity=".5"/>
   <text x="56" y="622" font-size="23" fill="#FFD6A0" font-weight="700">Menos coisa fixa no caminho, mais controle da máquina.</text>
   <text x="56" y="656" font-size="18" fill="#BCB1D2">Notas completas e pacotes: github.com/LucasOl1337/RamDog/releases/tag/v0.16.0</text>

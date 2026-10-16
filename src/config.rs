@@ -381,13 +381,11 @@ impl MemMetric {
     }
 }
 
-/// As visões do app, em dois grupos.
+/// As visões do app.
 ///
-/// `CORE` é o que o RamDog é — processo, RAM e CPU — e mora nas abas do topo, junto da
-/// busca e dos filtros que só fazem sentido ali. `ADDONS` são assuntos vizinhos (o que sobe
-/// no boot, o que o Windows gasta sozinho, temperatura, organização de telas): cada um tem
-/// sua própria tela inteira e nada a ver com a busca de processo, então são botões com nome
-/// no bloco de cima, longe das abas de processo, em vez de disputarem espaço com elas.
+/// `CORE` é o que o RamDog é — processo, RAM e CPU — e mora no topo da barra lateral, com a
+/// busca e os filtros que só fazem sentido ali. As outras são assuntos vizinhos, cada uma com
+/// a tela inteira, e aparecem como sub-abas de uma [`Tool`].
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub enum ViewMode {
     List,
@@ -404,25 +402,17 @@ pub enum ViewMode {
 
 impl ViewMode {
     pub const CORE: [ViewMode; 3] = [ViewMode::List, ViewMode::Tree, ViewMode::Category];
-    pub const ADDONS: [ViewMode; 7] = [
-        ViewMode::Sweep,
-        ViewMode::Boot,
-        ViewMode::Drains,
-        ViewMode::Thermal,
-        ViewMode::Heat,
-        ViewMode::Screens,
-        ViewMode::Clean,
-    ];
 
+    /// O que não tem backend nesta plataforma some da barra lateral em vez de abrir uma
+    /// página dizendo "não disponível". No macOS ficam só as visões de processo.
     pub fn available(self) -> bool {
-        if matches!(self, Self::Clean | Self::Sweep | Self::Heat) {
-            return cfg!(target_os = "linux");
+        match self {
+            Self::List | Self::Tree | Self::Category => true,
+            Self::Clean | Self::Sweep | Self::Heat => cfg!(target_os = "linux"),
+            Self::Boot | Self::Drains | Self::Screens | Self::Thermal => {
+                cfg!(any(windows, target_os = "linux"))
+            }
         }
-        cfg!(any(windows, target_os = "linux"))
-            || matches!(
-                self,
-                Self::List | Self::Tree | Self::Category | Self::Thermal
-            )
     }
 
     pub fn is_addon(self) -> bool {
@@ -436,10 +426,6 @@ impl ViewMode {
                 | ViewMode::Sweep
                 | ViewMode::Heat
         )
-    }
-
-    pub fn label(self) -> &'static str {
-        self.label_for(Locale::Portuguese)
     }
 
     pub fn label_for(self, locale: Locale) -> &'static str {
@@ -457,23 +443,17 @@ impl ViewMode {
         }
     }
 
-    /// Glifo do addon, desenhado antes do nome no botão. Só BMP — o fallback é a
-    /// Segoe UI Symbol, que cobre estes quatro.
-    pub fn icon(self) -> &'static str {
+    /// Nome curto da visão como sub-aba da sua ferramenta.
+    pub fn page_label_for(self, locale: Locale) -> &'static str {
         match self {
-            ViewMode::Boot => "⚡",
-            ViewMode::Drains => "⚠",
-            ViewMode::Thermal => "♨",
-            ViewMode::Screens => "▦",
-            ViewMode::Clean => "♻",
-            ViewMode::Sweep => "✔",
-            ViewMode::Heat => "☀",
-            _ => "",
+            ViewMode::Sweep => locale.text("Apps parados", "Idle apps"),
+            ViewMode::Clean => locale.text("RAM e disco", "Memory & disk"),
+            ViewMode::Thermal => locale.text("Sensores e ventoinhas", "Sensors & fans"),
+            ViewMode::Heat => locale.text("Quem esquenta", "What's heating"),
+            ViewMode::Boot => locale.text("Ao ligar", "At startup"),
+            ViewMode::Drains => locale.text("Segundo plano", "Background"),
+            _ => self.label_for(locale),
         }
-    }
-
-    pub fn tip(self) -> &'static str {
-        self.tip_for(Locale::Portuguese)
     }
 
     pub fn tip_for(self, locale: Locale) -> &'static str {
@@ -505,6 +485,77 @@ impl ViewMode {
             ViewMode::Heat => locale.text(
                 "Quem esquenta o PC: processos comendo CPU há horas, largados sem dono, com teto da CPU e ventoinha calma num botão",
                 "What heats the PC: processes eating CPU for hours, left behind with no owner, plus CPU cap and quiet fan in one button",
+            ),
+        }
+    }
+}
+
+/// Ferramentas da barra lateral: cada uma junta as visões vizinhas que respondem à mesma
+/// pergunta, e as visões viram sub-abas no cabeçalho. Eram sete botões soltos — Faxina e
+/// Limpeza fechavam sobras, Térmico e Calor falavam de temperatura, Partida e Desperdício
+/// listavam os mesmos serviços do systemd — e não dava pra saber por qual começar.
+///
+/// A `ViewMode` continua sendo o que a config grava; a ferramenta é só o agrupamento.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Tool {
+    Free,
+    Temperature,
+    Startup,
+    Screens,
+}
+
+impl Tool {
+    pub const ALL: [Tool; 4] = [Tool::Free, Tool::Temperature, Tool::Startup, Tool::Screens];
+
+    /// Sub-abas na ordem do cabeçalho, inclusive as que esta plataforma não tem.
+    pub fn pages(self) -> &'static [ViewMode] {
+        match self {
+            Tool::Free => &[ViewMode::Sweep, ViewMode::Clean],
+            Tool::Temperature => &[ViewMode::Thermal, ViewMode::Heat],
+            Tool::Startup => &[ViewMode::Boot, ViewMode::Drains],
+            Tool::Screens => &[ViewMode::Screens],
+        }
+    }
+
+    pub fn available_pages(self) -> impl Iterator<Item = ViewMode> {
+        self.pages().iter().copied().filter(|v| v.available())
+    }
+
+    /// Ferramenta sem nenhuma página nesta plataforma não aparece na barra lateral.
+    pub fn available(self) -> bool {
+        self.available_pages().next().is_some()
+    }
+
+    pub fn of(v: ViewMode) -> Option<Tool> {
+        Tool::ALL.into_iter().find(|t| t.pages().contains(&v))
+    }
+
+    pub fn label_for(self, locale: Locale) -> &'static str {
+        match self {
+            Tool::Free => locale.text("Liberar", "Free up"),
+            Tool::Temperature => locale.text("Temperatura", "Temperature"),
+            Tool::Startup => locale.text("Inicialização", "Startup"),
+            Tool::Screens => locale.text("Telas", "Screens"),
+        }
+    }
+
+    pub fn tip_for(self, locale: Locale) -> &'static str {
+        match self {
+            Tool::Free => locale.text(
+                "Feche o que está aberto sem uso e recupere RAM e disco",
+                "Close what is open but unused, and get RAM and disk back",
+            ),
+            Tool::Temperature => locale.text(
+                "Sensores, ventoinhas e quem está esquentando o PC",
+                "Sensors, fans, and what is heating the PC",
+            ),
+            Tool::Startup => locale.text(
+                "O que sobe com o PC e o que roda em segundo plano",
+                "What starts with the PC and what runs in the background",
+            ),
+            Tool::Screens => locale.text(
+                "Monitores, janelas e cenários de trabalho",
+                "Monitors, windows, and work layouts",
             ),
         }
     }
@@ -600,6 +651,32 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_side_view_lives_in_exactly_one_tool() {
+        let all = [
+            ViewMode::List,
+            ViewMode::Tree,
+            ViewMode::Category,
+            ViewMode::Boot,
+            ViewMode::Drains,
+            ViewMode::Thermal,
+            ViewMode::Screens,
+            ViewMode::Clean,
+            ViewMode::Sweep,
+            ViewMode::Heat,
+        ];
+        for v in all {
+            let owners = Tool::ALL.iter().filter(|t| t.pages().contains(&v)).count();
+            assert_eq!(owners, usize::from(v.is_addon()), "{v:?}");
+        }
+        // A barra lateral esconde ferramenta sem página: no macOS não sobra nenhuma.
+        assert_eq!(
+            Tool::Temperature.available(),
+            cfg!(any(windows, target_os = "linux"))
+        );
+        assert_eq!(Tool::Free.available(), cfg!(target_os = "linux"));
+    }
 
     #[test]
     fn locale_round_trip_and_legacy_default() {

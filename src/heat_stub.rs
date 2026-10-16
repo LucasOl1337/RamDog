@@ -34,8 +34,8 @@ impl Heat {
         _auto: &mut bool,
     ) -> Vec<HeatOut> {
         ui.label(locale.text(
-            "A visão Calor ainda é só Linux: CPU por processo, largados e o modo silencioso.",
-            "Heat is currently Linux-only: per-process CPU, left-behind processes, and quiet mode.",
+            "Quem esquenta ainda é só Linux: CPU por processo, largados e o modo silencioso.",
+            "What's heating is currently Linux-only: per-process CPU, left-behind processes, and quiet mode.",
         ));
         Vec::new()
     }

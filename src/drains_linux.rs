@@ -1,4 +1,4 @@
-use egui::{Align, Color32, Layout, RichText};
+use egui::{Align, Color32, Layout, RichText, Vec2};
 use serde_json::json;
 
 use crate::app::MUTED;
@@ -113,70 +113,112 @@ impl Drains {
                                 sub.push_str(&e.description);
                             }
                             ui.scope(|ui| {
-                                ui.set_max_width((ui.available_width() - 610.0).max(160.0));
+                                ui.set_max_width((ui.available_width() - 520.0).max(160.0));
                                 kit::two_lines(ui, RichText::new(&e.name), &sub);
                             });
+                            // Colunas de largura fixa, da direita pra esquerda: boot, ação,
+                            // estado e RAM. Serviço protegido não mostra botão nenhum, em vez
+                            // de quatro botões apagados que não fazem nada.
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if let Source::Unit { user, unit } = &e.source {
-                                    if ui
-                                        .add_enabled(
-                                            e.can_toggle && !self.action.busy(),
-                                            kit::button(if e.enabled {
-                                                locale.text(
-                                                    "Não iniciar no boot",
-                                                    "Do not start at boot",
-                                                )
+                                let busy = self.action.busy();
+                                let h = 24.0;
+                                ui.allocate_ui_with_layout(
+                                    Vec2::new(150.0, h),
+                                    Layout::right_to_left(Align::Center),
+                                    |ui| {
+                                        ui.set_min_width(150.0);
+                                        if e.protected {
+                                            kit::badge(ui, locale.text("protegido", "protected"), MUTED)
+                                                .on_hover_text(locale.text(
+                                                    "Essencial para a sessão ou o sistema: o RamDog não para nem desliga.",
+                                                    "Essential to the session or system: RamDog will not stop or disable it.",
+                                                ));
+                                        } else if e.can_toggle {
+                                            let label = if e.enabled {
+                                                locale.text("Não subir no boot", "Don't start at boot")
                                             } else {
-                                                locale.text("Iniciar no boot", "Start at boot")
-                                            }),
-                                        )
-                                        .clicked()
-                                    {
-                                        let e = e.clone();
-                                        self.action
-                                            .start(move || startup_linux::toggle(&e, !e.enabled));
-                                    }
-                                    for (label, action, enabled) in [
-                                        (locale.text("Iniciar", "Start"), "start", !e.active),
-                                        (locale.text("Reiniciar", "Restart"), "restart", e.active),
-                                        (locale.text("Parar", "Stop"), "stop", e.active),
-                                    ] {
-                                        if ui
-                                            .add_enabled(
-                                                enabled && !e.protected && !self.action.busy(),
-                                                kit::button(label),
-                                            )
-                                            .clicked()
-                                        {
-                                            let (user, unit) = (*user, unit.clone());
-                                            self.action.start(move || {
-                                                startup_linux::unit_action(user, action, &unit)
-                                            });
+                                                locale.text("Subir no boot", "Start at boot")
+                                            };
+                                            if ui
+                                                .add_enabled_ui(!busy, |ui| {
+                                                    ui.add_sized([150.0, h], kit::button(label))
+                                                })
+                                                .inner
+                                                .clicked()
+                                            {
+                                                let e = e.clone();
+                                                self.action.start(move || {
+                                                    startup_linux::toggle(&e, !e.enabled)
+                                                });
+                                            }
                                         }
-                                    }
-                                }
-                                if e.protected {
-                                    kit::badge(ui, locale.text("protegido", "protected"), MUTED);
-                                }
-                                if e.active {
-                                    kit::badge(
-                                        ui,
-                                        locale.text("em execução", "running"),
-                                        Color32::from_rgb(120, 200, 140),
-                                    );
-                                }
-                                ui.label(
-                                    RichText::new(
-                                        e.memory
-                                            .map(|m| format!("{:.1} MiB", m as f64 / 1048576.0))
-                                            .unwrap_or_else(|| {
-                                                locale
-                                                    .text("RAM indisponível", "RAM unavailable")
-                                                    .into()
-                                            }),
-                                    )
-                                    .monospace()
-                                    .size(12.5),
+                                    },
+                                );
+                                ui.allocate_ui_with_layout(
+                                    Vec2::new(170.0, h),
+                                    Layout::right_to_left(Align::Center),
+                                    |ui| {
+                                        ui.set_min_width(170.0);
+                                        let Source::Unit { user, unit } = &e.source else {
+                                            return;
+                                        };
+                                        if e.protected {
+                                            return;
+                                        }
+                                        let actions: &[(&str, &str)] = if e.active {
+                                            &[
+                                                (locale.text("Reiniciar", "Restart"), "restart"),
+                                                (locale.text("Parar", "Stop"), "stop"),
+                                            ]
+                                        } else {
+                                            &[(locale.text("Iniciar", "Start"), "start")]
+                                        };
+                                        for (label, action) in actions {
+                                            if ui
+                                                .add_enabled_ui(!busy, |ui| {
+                                                    ui.add_sized([80.0, h], kit::button(label))
+                                                })
+                                                .inner
+                                                .clicked()
+                                            {
+                                                let (user, unit, action) =
+                                                    (*user, unit.clone(), *action);
+                                                self.action.start(move || {
+                                                    startup_linux::unit_action(user, action, &unit)
+                                                });
+                                            }
+                                        }
+                                    },
+                                );
+                                ui.allocate_ui_with_layout(
+                                    Vec2::new(90.0, h),
+                                    Layout::right_to_left(Align::Center),
+                                    |ui| {
+                                        ui.set_min_width(90.0);
+                                        if e.active {
+                                            kit::badge(
+                                                ui,
+                                                locale.text("em execução", "running"),
+                                                Color32::from_rgb(120, 200, 140),
+                                            );
+                                        }
+                                    },
+                                );
+                                ui.allocate_ui_with_layout(
+                                    Vec2::new(90.0, h),
+                                    Layout::right_to_left(Align::Center),
+                                    |ui| {
+                                        ui.set_min_width(90.0);
+                                        ui.label(
+                                            RichText::new(
+                                                e.memory
+                                                    .map(crate::app::fmt_bytes)
+                                                    .unwrap_or_else(|| "—".into()),
+                                            )
+                                            .monospace()
+                                            .size(12.5),
+                                        );
+                                    },
                                 );
                             });
                         });

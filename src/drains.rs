@@ -360,8 +360,7 @@ impl Drains {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new(locale.text("Desperdício do Windows", "Windows overhead")).strong().size(16.0));
-                ui.label(RichText::new(locale.text("— o que consome RAM/CPU sem você pedir, e o que dá para fazer a respeito", "— what uses RAM/CPU without asking, and what you can do about it")).color(muted));
+                ui.label(RichText::new(locale.text("O que o Windows gasta de RAM e CPU sem você pedir, e o que dá para fazer a respeito.", "What Windows spends in RAM and CPU without asking, and what you can do about it.")).color(muted));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button(locale.text("Atualizar", "Refresh")).clicked() {
                         self.last_refresh = None;
@@ -583,7 +582,7 @@ impl Drains {
             });
 
             ui.add_space(8.0);
-            ui.label(RichText::new(locale.text("O que sobe com o PC (registro, pasta Iniciar, tarefas, serviços) está na visão Partida — não o recorte do Gerenciador de Tarefas.", "What starts with the PC (registry, Startup folder, tasks, services) is in the Startup view — beyond Task Manager's limited list.")).color(muted).small());
+            ui.label(RichText::new(locale.text("O que sobe com o PC (registro, pasta Iniciar, tarefas, serviços) está na sub-aba Ao ligar — não o recorte do Gerenciador de Tarefas.", "What starts with the PC (registry, Startup folder, tasks, services) is under At startup — beyond Task Manager's limited list.")).color(muted).small());
             ui.add_space(12.0);
         });
 

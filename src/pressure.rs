@@ -37,7 +37,7 @@ impl StealKind {
             StealKind::SoftwareGpu => "GPU no CPU",
             StealKind::Leftover => "sobra",
             StealKind::CredentialSpin => "loop",
-            StealKind::CheapCpu => "núcleo",
+            StealKind::CheapCpu => "CPU alta",
         }
     }
 
@@ -49,7 +49,7 @@ impl StealKind {
             StealKind::SoftwareGpu => "GPU on CPU",
             StealKind::Leftover => "leftover",
             StealKind::CredentialSpin => "loop",
-            StealKind::CheapCpu => "CPU-only",
+            StealKind::CheapCpu => "CPU hog",
         }
     }
 
@@ -496,6 +496,6 @@ mod tests {
         }];
         let text = banner_for(&Snapshot::default(), &thieves, Locale::English).expect("banner");
         assert_eq!(text, "Contention: RamDog (CPU with little RAM).");
-        assert_eq!(StealKind::CheapCpu.chip_for(Locale::English), "CPU-only");
+        assert_eq!(StealKind::CheapCpu.chip_for(Locale::English), "CPU hog");
     }
 }

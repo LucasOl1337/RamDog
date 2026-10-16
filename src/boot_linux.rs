@@ -249,7 +249,7 @@ impl Boot {
                             ui.label(
                                 egui::RichText::new(
                                     e.memory
-                                        .map(|n| format!("{:.1} MiB", n as f64 / 1048576.0))
+                                        .map(crate::app::fmt_bytes)
                                         .unwrap_or_else(|| "—".into()),
                                 )
                                 .monospace()

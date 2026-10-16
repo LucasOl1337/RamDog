@@ -525,9 +525,9 @@ impl Gerenciador {
         self.sampler.force.store(true, Ordering::Relaxed);
         if !errs.is_empty() && e.windows.is_empty() {
             let msg = if self.pt() {
-                format!("{}: sem permissão para {} processo(s)", e.name, errs.len())
+                format!("{}: sem permissão para {}", e.name, plural_pt(errs.len()))
             } else {
-                format!("{}: no permission for {} process(es)", e.name, errs.len())
+                format!("{}: no permission for {}", e.name, plural_en(errs.len()))
             };
             self.toast(msg, true);
         }
@@ -571,9 +571,17 @@ impl Gerenciador {
         );
         self.sampler.force.store(true, Ordering::Relaxed);
         let mut msg = if self.pt() {
-            format!("{}: {killed} processo(s) forçado(s)", e.name)
+            format!(
+                "{}: {} à força",
+                e.name,
+                if killed == 1 {
+                    "1 processo fechado".to_string()
+                } else {
+                    format!("{killed} processos fechados")
+                }
+            )
         } else {
-            format!("{}: {killed} process(es) force-quit", e.name)
+            format!("{}: force-quit {}", e.name, plural_en(killed))
         };
         if skipped > 0 {
             msg.push_str(&if self.pt() {
@@ -1288,15 +1296,15 @@ impl Gerenciador {
             ui.horizontal(|ui| {
                 let q = if self.pt() {
                     format!(
-                        "Forçar {} ({} processo(s))? O que não foi salvo se perde.",
+                        "Forçar {} ({})? O que não foi salvo se perde.",
                         e.name,
-                        e.pids.len()
+                        plural_pt(e.pids.len())
                     )
                 } else {
                     format!(
-                        "Force quit {} ({} process(es))? Unsaved work is lost.",
+                        "Force quit {} ({})? Unsaved work is lost.",
                         e.name,
-                        e.pids.len()
+                        plural_en(e.pids.len())
                     )
                 };
                 ui.label(RichText::new(q).color(pal.danger));
@@ -1588,6 +1596,22 @@ fn focus_window(_address: &str, locale: Locale) -> Result<(), String> {
             "Showing a window requires Hyprland",
         )
         .into())
+}
+
+fn plural_pt(n: usize) -> String {
+    if n == 1 {
+        "1 processo".into()
+    } else {
+        format!("{n} processos")
+    }
+}
+
+fn plural_en(n: usize) -> String {
+    if n == 1 {
+        "1 process".into()
+    } else {
+        format!("{n} processes")
+    }
 }
 
 #[cfg(target_os = "linux")]

@@ -36,7 +36,7 @@ O RamDog foi feito pra máquina que roda navegador, dev server, agente de IA e j
 - **Memória que bate.** No Linux a coluna RAM usa PSS, que divide as páginas compartilhadas entre quem as usa. Grupo, categoria e medidores somam o que o app custa de verdade.
 - **De onde veio.** A coluna de origem segue a cadeia de pais e o ambiente herdado e mostra o terminal, agente (Claude Code, Codex, Cursor, Gemini, Hermes…), editor ou script `npm run` por trás do processo, mesmo depois que o pai morreu.
 - **Seguro de clicar.** Hyprland, UWSM, Quickshell, systemd e outros processos da sessão não morrem pelo RamDog. Tranque o que mais quiser proteger. A ordem das linhas congela sob o ponteiro, então você nunca mata a linha que acabou de mudar de lugar.
-- **Limpa o que ficou esquecido.** A Faxina separa os apps abertos em *pode fechar*, *talvez* e *em uso* pelo que observou e fecha a seleção de uma vez. A Limpeza cuida de cache do kernel, zumbis, `~/.cache`, cache do pacman e journal.
+- **Limpa o que ficou esquecido.** **Liberar → Apps parados** separa os apps abertos em *pode fechar*, *talvez* e *em uso* pelo que observou e fecha a seleção de uma vez. **RAM e disco** cuida de cache do kernel, zumbis, `~/.cache`, cache do pacman e journal.
 - **Nativo, pequeno, rápido.** Um binário Rust (egui), sem Electron e sem daemon. Lê o `/proc` direto e fica leve em sessão longa.
 
 ## Instalar
@@ -69,7 +69,7 @@ O [Omarchy](https://omarchy.org/) é o desktop Linux de referência do RamDog. A
 
 - **Sessão protegida.** Hyprland, UWSM e Quickshell são Sistema e nunca morrem pelo RamDog.
 - **Janelas do Hyprland.** Telas desenha os monitores em escala, move janelas entre eles, encaixa em grades e salva cenas, via `hyprctl` e a API Lua do Hyprland 0.55+.
-- **systemd e pacman.** Partida e Desperdício cuidam das units de usuário e sistema e do autostart XDG. A Limpeza conhece o cache do pacman, os órfãos e o journal. Executáveis são conferidos por SHA-256 contra o banco local do pacman.
+- **systemd e pacman.** **Inicialização** cuida das units de usuário e sistema e do autostart XDG, tanto o que sobe ao ligar quanto o que está rodando em segundo plano. **Liberar → RAM e disco** conhece o cache do pacman, os órfãos e o journal. Executáveis são conferidos por SHA-256 contra o banco local do pacman.
 - **NVIDIA e AMD juntas.** Carga e VRAM de GPU por processo via `nvidia-smi` e DRM, na mesma máquina.
 - **Uma instância.** O `ramdog-launch` roda o RamDog como `ramdog.service` transitório, solto do terminal. Chamar de novo foca a janela aberta.
 
@@ -100,11 +100,32 @@ Teclas: digite pra buscar, ↑/↓ pra escolher, Enter mostra o app, Delete fech
 
 ## Um passeio
 
+A barra lateral tem três jeitos de olhar os processos e, embaixo, até quatro **ferramentas**. Ferramenta com mais de uma página mostra as páginas em abas no topo. O que o seu sistema não roda nem aparece na barra, e o rodapé dela diz qual versão você tem (`v0.16.0 · Linux · Omarchy`).
+
 | | |
 |---|---|
-| <img src="docs/media/categorias.png" alt="Categorias"><br>**Categorias.** IA / Agentes, Dev, Navegador, Jogos, Pessoal, Sistema e Outros, com os apps agrupados dentro. | <img src="docs/media/arvore.png" alt="Árvore"><br>**Árvore.** Pai → filhos com RAM e CPU da subárvore. Mata a árvore inteira com `Shift+Del`. |
-| <img src="docs/media/partida.png" alt="Partida"><br>**Partida.** Tudo que sobe com a sessão: units do systemd, autostart XDG e, no Windows, registro, tarefas, serviços e UWP. | <img src="docs/media/termico.png" alt="Térmico"><br>**Térmico.** Sensores hwmon e RPM. O ESTABILIZAR segura as ventoinhas e só acelera quando esquenta, por um helper autenticado. |
-| <img src="docs/media/telas.png" alt="Telas"><br>**Telas.** Mapa dos monitores, grades e cenas no Hyprland (e no Windows). | <img src="docs/media/limpeza.png" alt="Limpeza"><br>**Limpeza.** Cache do kernel, zumbis com seus pais, `~/.cache`, lixeira, pacman, journal e órfãos, tudo com confirmação. |
+| <img src="docs/media/categorias.png" alt="Categorias"><br>**Categorias** `todas as plataformas`<br>IA / Agentes, Dev, Navegador, Jogos, Pessoal, Sistema e Outros, com os apps agrupados dentro. | <img src="docs/media/arvore.png" alt="Árvore"><br>**Árvore** `todas as plataformas`<br>Pai → filhos com RAM e CPU da subárvore. Mata a árvore inteira com `Shift+Del`. |
+| <img src="docs/media/faxina.png" alt="Liberar, página Apps parados"><br>**Liberar → Apps parados** `Linux`<br>O que está aberto e ninguém usa, com o motivo em cada linha. Fecha a seleção de uma vez. | <img src="docs/media/limpeza.png" alt="Liberar, página RAM e disco"><br>**Liberar → RAM e disco** `Linux`<br>Cache do kernel, zumbis com seus pais, `~/.cache`, lixeira, pacman, journal e órfãos, tudo com confirmação. |
+| <img src="docs/media/termico.png" alt="Temperatura, página Sensores e ventoinhas"><br>**Temperatura → Sensores e ventoinhas** `Linux` `Windows`<br>Todos os sensores e o RPM. O ESTABILIZAR segura as ventoinhas e só acelera quando esquenta. **Quem esquenta** (Linux) mostra quem come CPU: largados, serviços e apps em uso. | <img src="docs/media/partida.png" alt="Inicialização, página Ao ligar"><br>**Inicialização → Ao ligar** `Linux` `Windows`<br>Tudo que sobe com a sessão: units do systemd e autostart XDG ou, no Windows, registro, tarefas, serviços e UWP. **Segundo plano** mostra o que está rodando agora, do maior pro menor, com parar, reiniciar e subir no boot. |
+| <img src="docs/media/mini.png" alt="Modo mini"><br>**Modo mini** `todas as plataformas`<br>Um HUD sem borda com CPU, RAM, GPU e disco, as temperaturas e o RPM. | **Telas** `Hyprland` `Windows`<br>Os monitores em escala: move janelas entre eles, encaixa em grades e salva cenas que sobrevivem à troca de resolução.<br><br>**Modos** `todas as plataformas`<br>Menu no cabeçalho que liga e desliga os seus perfis da máquina (jogo, silencioso, noite…) a partir de um `modes.json`. |
+
+## Plataformas
+
+Cada release sai com uma versão por sistema. As visões de processo são as mesmas; as ferramentas seguem o que cada sistema consegue fazer.
+
+| | Linux · Omarchy | Outros Linux | Windows | macOS |
+|---|---|---|---|---|
+| Processos, Árvore, Categorias, origem, matar, trancar | ✓ | ✓ | ✓ | ✓ |
+| Agrupar por app, Modo mini, Modos | ✓ | ✓ | ✓ | ✓ |
+| Métrica de memória | PSS / USS / RSS | PSS / USS / RSS | Working set / privada / commit | RSS |
+| **Liberar** (Apps parados, RAM e disco) | ✓ | ✓ | – | – |
+| **Temperatura** → Sensores e ventoinhas | hwmon + PWM | hwmon + PWM | helper LibreHardwareMonitor | – |
+| **Temperatura** → Quem esquenta | ✓ | ✓ | – | – |
+| **Inicialização** (Ao ligar, Segundo plano) | systemd + XDG | systemd + XDG | Registro, tarefas, serviços, UWP, Defender | – |
+| **Telas** | ✓ (Hyprland) | – | ✓ | – |
+| GPU por processo | NVIDIA, AMD, Intel | NVIDIA, AMD, Intel | NVIDIA | – |
+
+O Linux é a versão mais completa e o Omarchy é onde cada release é testada à mão. O Windows tem backends nativos próprios. O macOS cobre as visões de processo e o modo mini. A [referência](docs/reference.md) (em inglês) lista cada recurso e limite por sistema.
 
 ## Como o RamDog conta memória
 

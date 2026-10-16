@@ -14,11 +14,20 @@ New installs follow the system language: Portuguese when the system locale is Po
 - **Honest zombie handling.** A zombie is already dead and holds no memory. RamDog asks its live parent to reap it, names the process holding the entry, and offers to terminate that parent when appropriate instead of claiming the zombie itself was killed.
 - **Categories.** AI / Agents, Dev, Browser, Games, Personal, System and Other — automatic rules with a manual per-process override.
 - **Kill, tree and lock.** Terminate a process or its tree (process plus children). A lock prevents RamDog from terminating the protected process. Critical OS processes (`System`/`csrss`/`dwm` on Windows; `systemd`/`kthreadd`/`Hyprland`/`UWSM`/`Quickshell`/`gnome-shell`/`Xorg` on Linux; `kernel_task`/`launchd`/`WindowServer` on macOS) are always protected.
-- **Views.** The sidebar holds the process views, **Processes** (flat list), **Tree** (parent → children, subtree RAM) and **Categories** (grouped), and below them the **Add-ons**: **Sweep**, **Startup**, **Drains**, **Thermal**, **Screens** and **Cleanup**. Clicking one swaps the window content. On Linux, Startup and Drains use systemd/XDG, Screens uses Hyprland, Thermal uses hwmon with authenticated PWM control, Sweep sorts open-but-unused apps into can close / maybe / in use and closes whatever you select in bulk, and Cleanup combines kernel cache and zombies with disk locations (`~/.cache`, trash, pacman, journal, coredumps and orphans). See the [Linux guide](../linux/README.md).
+- **Views and tools.** The sidebar holds the process views, **Processes** (flat list), **Tree** (parent → children, subtree RAM) and **Categories** (grouped), and below them the **Tools**. A tool with more than one page shows its pages as tabs next to the title, and the tool remembers the last tab you used:
+
+  | Tool | Pages | Platforms |
+  |---|---|---|
+  | **Free up** | **Idle apps** (open-but-unused apps sorted into can close / maybe / in use, closed in bulk) · **Memory & disk** (kernel cache, zombies, `~/.cache`, trash, pacman, journal, coredumps, orphans) | Linux |
+  | **Temperature** | **Sensors & fans** (sensors, fan RPM, PWM and STABILIZE) · **What's heating** (CPU hogs split into left behind, service and in use; quiet mode) | Sensors & fans: Linux, Windows. What's heating: Linux |
+  | **Startup** | **At startup** (what starts with the session or the PC) · **Background** (services running now, largest first, with stop / restart / start-at-boot; on Windows, Defender, optional services, Appx and Run keys) | Linux, Windows |
+  | **Screens** | monitor map, grids and scenes | Hyprland, Windows |
+
+  A tool or page your system can't run is not shown at all. The bottom of the sidebar shows the version and build (`Windows`, `macOS`, `Linux` or `Linux · Omarchy`). See the [Linux guide](../linux/README.md) for the Linux backends.
 - **Group by app** (on by default). In Processes and Categories, recognized families (Claude, Codex, Grok, ChatGPT, Cursor, Gemini, Hermes, Maestri, OpenCode), Python/Node projects and processes with the same executable become one row (`brave · 18 processes · 1.81 GB`) summing RAM, CPU, GPU and disk. On Linux the sum uses PSS, so shared pages are not counted once per process. The **✖** action terminates the whole app. Groups start collapsed; click **▶** to see their PIDs. Family keys follow versioned installs (`mise`, PATH, the ChatGPT folder), the agent-launched `node`, and interpreters that rename themselves (`python3.11` shown as `hermes`). Outside those families, the key is the executable path rather than its name, so two `worker` processes from different folders never merge. A single-process app is not grouped. The **Largest now** footer also sums by app.
 - **Readable CPU column.** On Windows, process allocation uses `CycleTime` (counted at context switches), not kernel/user time — Windows charges that in 15.625 ms slices and assigns the whole slice to whoever ran at the tick, making bursty processes flicker between 0% and 15%. The total comes from `GetSystemTimes`, so a busy machine does not dilute the culprit. Linux compares `/proc/*/stat` against the machine's online cores, not RamDog's own affinity. Both use a time-bound 1-second moving average so the list stays still long enough to read; the raw last-interval value remains in the tooltip.
 - **Meters.** CPU and RAM are shown at the top on all three operating systems. Windows uses NVML for NVIDIA; Linux uses `nvidia-smi` plus DRM/hwmon for NVIDIA/AMD/Intel. Disk percentage is PDH on Windows and `/proc/diskstats` on Linux; it is unavailable on macOS.
-- **Thermal.** On Windows, embedded [TempHUD](https://github.com/LucasOl1337/TempHUD) provides CPU/GPU/RAM/motherboard sensors, SuperIO fan control (manual percentage or Auto/BIOS) and **STABILIZE** — fans locked to 50% up to 80 °C, a linear ramp to 100% at 92 °C and an immediate ceiling at 95 °C. The `hwtemp.exe` helper restores BIOS control if RamDog exits. Fans require admin; without them, the view still shows available readings. Linux reads `/sys/class/hwmon` and offers PWM/STABILIZE through compatible authenticated helpers that restore the prior state when they exit.
+- **Temperature → Sensors & fans.** On Windows, embedded [TempHUD](https://github.com/LucasOl1337/TempHUD) provides CPU/GPU/RAM/motherboard sensors, SuperIO fan control (manual percentage or Auto/BIOS) and **STABILIZE** — fans locked to 50% up to 80 °C, a linear ramp to 100% at 92 °C and an immediate ceiling at 95 °C. The `hwtemp.exe` helper restores BIOS control if RamDog exits. Fans require admin; without them, the view still shows available readings. Linux reads `/sys/class/hwmon` and offers PWM/STABILIZE through compatible authenticated helpers that restore the prior state when they exit.
 - **Startup.** Everything that starts with the PC, not just Task Manager's subset: `Run` and `RunOnce` (HKCU, HKLM and Wow64), the complete Startup folder (`.lnk`, `.vbs`, `.cmd`), scheduled boot/logon tasks, automatic services, UWP apps, Winlogon and Active Setup. The outer filter is **starts with the PC / does not start / broken**, with three clickable counters. Inside each block, startup phase runs from the surface inward: your programs, at sign-in, with the machine, before Windows. Each band shows entry and currently-running counts and collapses on click. The startup check answers “starts with the PC”; the **Now** column answers “has a process running”. The inner grouping can be changed to source type, phase, type or flat list. Linux reads systemd (user and system) and XDG autostart.
 - **Screens.** The monitor map is drawn to scale: drag a window between monitors and drop it into a grid zone (halves, thirds, quadrants, primary+2, …). **Distribute** spreads everything on one monitor across the selected grid. **Scenes** save the arrangement as a fraction of the work area, not pixels, so presets survive resolution, scale and monitor changes; applying a scene moves open windows and launches missing ones when their windows appear. On Linux the backend is Hyprland (including Omarchy).
 - **What is this, can I kill it?** The Windows details panel contains a catalog of 80 processes: what they do, why they are open and the risk of terminating them — 🟢 safe, 🟡 Windows restarts it, 🔴 it takes down the session.
@@ -33,7 +42,7 @@ New installs follow the system language: Portuguese when the system locale is Po
 | Terminate tree (process + children) | `Shift+Del`, `Shift`+**✖**, right-click → Terminate tree, or the bottom panel |
 | Protect / unprotect | **🔒**/**🔓** on the row, right-click or the bottom panel. Protected processes are never terminated by RamDog |
 | Manual category | right-click → Category, or the combo in the bottom panel (`auto` returns to automatic rules) |
-| Views | **Processes**, **Tree** and **Categories** at the top of the sidebar; **Sweep**, **Startup**, **Drains**, **Thermal**, **Screens** and **Cleanup** under **Add-ons**. Startup/Drains/Screens/Thermal are also implemented on Linux (systemd, Hyprland and hwmon) |
+| Views | **Processes**, **Tree** and **Categories** at the top of the sidebar; **Free up**, **Temperature**, **Startup** and **Screens** under **Tools**, with their pages as tabs next to the title |
 | Group by app | **Group by app** in Processes and Categories; groups start collapsed, **▶**/**▼** reveal PIDs, **Expand all**/**Collapse** apply to the whole list, and **✖** in the header terminates every process in that app |
 | Filter | search by name / PID / command; category chips (click toggles, double-click isolates); `hide below N MB` and the `RAM column shows` control on the right |
 | Origin | *Origin* is the first living ancestor that is not a generic host (cmd, bash, node, …); the full chain is clickable in the bottom panel (**Go to parent**) |
@@ -43,9 +52,9 @@ New installs follow the system language: Portuguese when the system locale is Po
 
 Termination is immediate: there is no confirmation dialog. Protection comes from the **lock** (🔒 in the context menu) — a locked process survives `Del`, **✖** and tree termination. While the pointer is over the table, row order is **frozen** so **✖** never lands on a process that just moved.
 
-**Startup** (Windows) lists what starts at boot and logon, with the source of each entry (`Run`, Startup folder, scheduled task, service, UWP, Winlogon, Active Setup), whether it is currently running and the executable's real path. Enable, disable and remove apply to the entry; the process itself remains terminable from List view. Machine entries (HKLM, services and tasks) require admin — without elevation, RamDog starts one elevated PowerShell action with **one UAC prompt per action**.
+**Startup → At startup** (Windows) lists what starts at boot and logon, with the source of each entry (`Run`, Startup folder, scheduled task, service, UWP, Winlogon, Active Setup), whether it is currently running and the executable's real path. Enable, disable and remove apply to the entry; the process itself remains terminable from List view. Machine entries (HKLM, services and tasks) require admin — without elevation, RamDog starts one elevated PowerShell action with **one UAC prompt per action**.
 
-**Drains** (Windows) reads directly through the Service Control Manager and registry, without PowerShell. **Actions** use direct Win32 when RamDog is already elevated; otherwise they start one elevated PowerShell action with **one UAC prompt per action**. On macOS, the view exists only to explain that it is unavailable.
+**Startup → Background** (Windows) reads directly through the Service Control Manager and registry, without PowerShell. **Actions** use direct Win32 when RamDog is already elevated; otherwise they start one elevated PowerShell action with **one UAC prompt per action**.
 
 | Section | What it can do | Reversible? |
 |---|---|---|
@@ -89,10 +98,12 @@ Slots store position as a fraction of the monitor's **work area**, never as pixe
 |---|---|---|---|---|
 | List, tree, categories, origin, kill, lock | yes | yes | yes | yes |
 | Group by app / agent families | yes | yes | yes | yes |
-| Startup | Run, tasks, services, UWP… | systemd + XDG | systemd + XDG | — |
-| Drains | Defender, services, Appx, Run | systemd services | systemd services | notice |
-| Screens | DWM / `SetWindowPos` | native Hyprland | — | notice |
-| Thermal | `hwtemp.exe` (admin) | hwmon + authenticated PWM | hwmon + authenticated PWM | — |
+| Free up (Idle apps, Memory & disk) | — | yes | yes | — |
+| Startup → At startup | Run, tasks, services, UWP… | systemd + XDG | systemd + XDG | — |
+| Startup → Background | Defender, services, Appx, Run | systemd services | systemd services | — |
+| Screens | DWM / `SetWindowPos` | native Hyprland | — | — |
+| Temperature → Sensors & fans | `hwtemp.exe` (admin) | hwmon + authenticated PWM | hwmon + authenticated PWM | — |
+| Temperature → What's heating | — | yes | yes | — |
 | GPU | NVIDIA (NVML) | NVIDIA / AMD / Intel | NVIDIA / AMD / Intel | — |
 | Top disk meter | PDH `% Idle` | `/proc/diskstats` | `/proc/diskstats` | — |
 | Executable integrity | Authenticode | pacman SHA-256 | pacman SHA-256 (Arch) | — |
@@ -106,19 +117,20 @@ Slots store position as a fraction of the monitor's **work area**, never as pixe
 
 **Windows only**
 
-- Drains (Defender, services, Appx and Startup).
-- Screens: `EnumDisplayMonitors`, `EnumWindows`, `SetWindowPos` and DWM (to subtract invisible window shadow). On macOS, the equivalent is the Accessibility API and requires explicit system permission; the view exists only to explain that.
+- Startup → Background: Defender, services, Appx and Run keys.
+- Screens: `EnumDisplayMonitors`, `EnumWindows`, `SetWindowPos` and DWM (to subtract invisible window shadow).
 - Startup: complete reading (HKLM, tasks and services) works without admin; enabling/disabling/removing machine entries requires elevation, requested through UAC when needed.
 - Digital signature: `WinVerifyTrust` exists only on Windows. The field is hidden on macOS.
-- Thermal: sensors and fans through `hwtemp.exe` (LibreHardwareMonitor). Without admin, Tctl/DIMM/fans are unavailable; NVIDIA GPU still reads. Only motherboard SuperIO fans are controlled — the GPU follows its own curve.
+- Temperature: sensors and fans through `hwtemp.exe` (LibreHardwareMonitor). Without admin, Tctl/DIMM/fans are unavailable; NVIDIA GPU still reads. Only motherboard SuperIO fans are controlled — the GPU follows its own curve.
 - CPU/RAM temperature: `hwtemp.exe` (LibreHardwareMonitor), elevated. Without helper/admin/sensor, the value is “—”.
 - Top and per-process GPU: **NVIDIA** (`nvml.dll`). Without the driver, the value is “—”.
 - `MsMpEng.exe` is kernel-protected: the Defender section reduces its work but does not terminate it. With Tamper Protection enabled, pausing real-time protection may have no effect.
 
 **Linux only**
 
-- Startup/Drains: systemd services and XDG autostart with startup presets. Screens: Hyprland (including Omarchy), map, arrangement and scenes. Icons come from desktop entries; SHA-256 integrity comes from the local pacman database, not Authenticode.
-- Thermal: hwmon (CPU, GPU, DIMM when available), manual/automatic PWM and authenticated-helper STABILIZE; requires a driver that permits PWM writes.
+- Startup (At startup and Background): systemd services and XDG autostart with startup presets. Screens: Hyprland (including Omarchy), map, arrangement and scenes. Icons come from desktop entries; SHA-256 integrity comes from the local pacman database, not Authenticode.
+- Temperature → Sensors & fans: hwmon (CPU, GPU, DIMM when available), manual/automatic PWM and authenticated-helper STABILIZE; requires a driver that permits PWM writes.
+- Free up and Temperature → What's heating read `/proc` and systemd. "Left behind" means the parent became init or `systemd --user`, the process is 30 min or older and it averaged half a core or more over its life.
 - Top disk meter: `%util` and bytes/s from `/proc/diskstats` (whole disks; partitions, loop devices and zram excluded).
 - With no display (plain SSH, no `WAYLAND_DISPLAY`/`DISPLAY`), the window cannot open.
 - Runtime X11/Wayland libraries are required (`libxkbcommon`, `libwayland`, `libX11`, GL).
@@ -126,7 +138,7 @@ Slots store position as a fraction of the monitor's **work area**, never as pixe
 
 **macOS only**
 
-- No Drains, Screens, CPU temperature or NVML. The top disk meter has no Task Manager-style idle percentage.
+- The macOS build has the process views, Mini mode and Modes, with no tools in the sidebar: no Free up, Temperature, Startup or Screens, no CPU temperature and no NVML. The top disk meter has no Task Manager-style idle percentage. Screens would need the Accessibility API, which requires explicit system permission.
 - Gatekeeper may block the binary the first time it opens.
 
 ## How it measures
