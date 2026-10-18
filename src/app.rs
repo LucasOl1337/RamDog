@@ -1,7 +1,10 @@
 //! Interface egui: lista / árvore / categorias, detalhes, kill, lock.
 
 mod table;
-use table::{ProcessQuery, ResourceFilter, Row, RowCache, RowCacheAction, SortKey, SysRow};
+use table::{
+    born_since_rebuild, insert_by_value, ProcessQuery, ResourceFilter, Row, RowCache,
+    RowCacheAction, SortKey, SysRow,
+};
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::Ordering;
@@ -403,6 +406,11 @@ pub struct App {
     scroll_to_selected: bool,
     /// Frame cache owns invalidation, pending snapshots and hover-protected order.
     row_cache: RowCache,
+    /// PIDs que existiam na última montagem da lista. Com a ordem congelada, quem não está
+    /// aqui nasceu depois e ainda não tem linha: vai para `born_frozen`.
+    pids_at_rebuild: HashSet<u32>,
+    /// Nascidos com a ordem congelada. A linha `Row::CpuGap` mostra o CPU deles.
+    born_frozen: Vec<u32>,
     derived: UiDerived,
     derived_dirty: bool,
     table_rect: Option<egui::Rect>,
@@ -506,6 +514,8 @@ impl App {
             is_admin,
             scroll_to_selected: false,
             row_cache: RowCache::default(),
+            pids_at_rebuild: HashSet::new(),
+            born_frozen: Vec::new(),
             derived: UiDerived::default(),
             derived_dirty: true,
             table_rect: None,
@@ -1521,6 +1531,7 @@ impl App {
                 };
                 if self.cfg.view == ViewMode::List && self.cfg.group_apps {
                     let rows = self.build_app_rows(hits);
+                    let rows = self.place_cpu_gap(rows, &search);
                     return self.place_sys_rows(rows, sys_rows, false);
                 }
                 self.groups.clear();
@@ -1536,6 +1547,7 @@ impl App {
                         dim: false,
                     })
                     .collect();
+                let rows = self.place_cpu_gap(rows, &search);
                 self.place_sys_rows(rows, sys_rows, false)
             }
             ViewMode::Category => {
@@ -1681,6 +1693,52 @@ impl App {
         }
         out.extend(sys);
         out
+    }
+
+    /// Ordenando por CPU na Lista, a coluna tem que somar o medidor do topo. A linha
+    /// `CpuGap` entra pelo valor, no meio dos apps, e fica mesmo quando o buraco é pequeno:
+    /// é nela que aparecem os processos que nascerem enquanto a ordem estiver congelada.
+    fn place_cpu_gap(&self, mut rows: Vec<Row>, search: &str) -> Vec<Row> {
+        if self.cfg.view != ViewMode::List || self.sort != SortKey::Cpu || !search.is_empty() {
+            return rows;
+        }
+        let Some(gap) = self.cpu_gap() else {
+            return rows;
+        };
+        insert_by_value(
+            &mut rows,
+            Row::CpuGap,
+            gap.total(),
+            self.sort_desc,
+            |r| match *r {
+                Row::Proc { pid, depth: 0, .. } => self.proc(pid).map(|p| p.cpu_pct),
+                Row::AppHeader { gi } => self.groups.get(gi).map(|g| g.cpu),
+                _ => None,
+            },
+        );
+        rows
+    }
+
+    /// Conteúdo da linha `CpuGap` agora. `None` sem leitura do medidor do topo.
+    fn cpu_gap(&self) -> Option<CpuGap> {
+        let split = self.cpu_split()?;
+        let parents = by_name(
+            self.procs
+                .iter()
+                .filter(|p| p.cpu_children_pct >= 0.05)
+                .map(|p| (p.name.as_str(), p.cpu_children_pct)),
+        );
+        let born = by_name(
+            self.born_frozen
+                .iter()
+                .filter_map(|pid| self.proc(*pid))
+                .map(|p| (p.name.as_str(), p.cpu_pct)),
+        );
+        Some(CpuGap {
+            split,
+            parents,
+            born,
+        })
     }
 
     /// Linhas da visão Lista agrupadas por app.
@@ -1962,6 +2020,7 @@ impl App {
                         }
                     }
                 }
+                self.born_frozen = born_since_rebuild(&keep, &self.pids_at_rebuild);
                 self.refresh_groups();
                 self.row_cache.reconcile(&keep, shown_count, |gi| {
                     self.groups.get(gi).map(|g| g.pids.as_slice())
@@ -1970,6 +2029,8 @@ impl App {
             }
             RowCacheAction::Rebuild => {
                 let rows = self.build_rows();
+                self.pids_at_rebuild = self.procs.iter().map(|p| p.pid).collect();
+                self.born_frozen.clear();
                 let shown_count = self.table_query().count_matches(&self.search);
                 self.row_cache.rebuilt(key, rows.clone(), shown_count);
                 rows
@@ -3526,6 +3587,11 @@ impl App {
             .unwrap_or(1)
             .max(1);
         let row_x = self.table_rect.map(|r| r.x_range());
+        let cpu_gap = rows
+            .iter()
+            .any(|r| matches!(r, Row::CpuGap))
+            .then(|| self.cpu_gap())
+            .flatten();
         // Divisórias de coluna quase invisíveis: com listras zebradas, linha vertical em
         // toda coluna é tinta dobrada.
         ui.visuals_mut().widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, SURFACE);
@@ -3680,6 +3746,53 @@ impl App {
                             });
                             row.col(|_ui| {});
                             row.response().on_hover_text(self.sys_row_tip(kind));
+                        }
+                        Row::CpuGap => {
+                            let Some(gap) = &cpu_gap else {
+                                for _ in 0..9 {
+                                    row.col(|_ui| {});
+                                }
+                                return;
+                            };
+                            let color = Color32::from_rgb(255, 171, 145);
+                            let total = gap.total();
+                            row.col(|ui| {
+                                Self::row_line(ui, row_x);
+                                ui.add_space(4.0);
+                                let (r, _) = ui.allocate_exact_size(Vec2::splat(AVATAR), egui::Sense::hover());
+                                ui.painter().rect_filled(r, 7.0, color.gamma_multiply(0.22));
+                                ui.painter().rect_filled(Rect::from_center_size(r.center(), Vec2::splat(9.0)), 2.0, color);
+                                ui.add_space(2.0);
+                                let sub = gap.summary(self.cfg.locale);
+                                ui.vertical(|ui| {
+                                    ui.spacing_mut().item_spacing.y = 1.0;
+                                    ui.label(RichText::new(self.cfg.locale.text("Fora da lista", "Not listed")).color(color).size(13.0));
+                                    ui.add(egui::Label::new(RichText::new(sub).color(MUTED).size(11.5)).truncate());
+                                });
+                            });
+                            row.col(|_ui| {});
+                            row.col(|ui| {
+                                let (txt, c) = Self::cpu_cell(total, self.ncpu);
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    ui.label(num(txt).color(c).strong());
+                                });
+                            });
+                            // GPU, VRAM, Disco, Tempo
+                            for _ in 0..4 {
+                                row.col(|_ui| {});
+                            }
+                            row.col(|ui| {
+                                let note = if gap.born.is_empty() {
+                                    self.cfg.locale.text("não é um processo", "not a process").to_string()
+                                } else if self.cfg.locale == Locale::Portuguese {
+                                    format!("{} novos ainda sem linha", gap.born.len())
+                                } else {
+                                    format!("{} new without a row yet", gap.born.len())
+                                };
+                                ui.add(egui::Label::new(RichText::new(note).weak().size(11.5)).truncate());
+                            });
+                            row.col(|_ui| {});
+                            row.response().on_hover_text(gap.tip(self.cfg.locale));
                         }
                         Row::CatHeader { cat, count, total, collapsed } => {
                             let (cat, count, total, collapsed) = (*cat, *count, *total, *collapsed);
@@ -7089,6 +7202,127 @@ impl App {
     }
 }
 
+/// O que a linha `Row::CpuGap` mostra: o buraco do medidor, quem recolheu os processos
+/// curtos (o kernel credita o filho ao pai) e quem nasceu com a ordem congelada.
+#[derive(Clone, Debug, PartialEq)]
+struct CpuGap {
+    split: CpuSplit,
+    /// Pais que recolheram filhos curtos: % em filhos já encerrados.
+    parents: Vec<NameShare>,
+    /// Nascidos depois do congelamento: % de CPU.
+    born: Vec<NameShare>,
+}
+
+/// Processos somados pelo nome: um build solta quarenta `clang++`, e quarenta linhas
+/// de 0,7% escondem que juntos são 27%.
+#[derive(Clone, Debug, PartialEq)]
+struct NameShare {
+    name: String,
+    count: usize,
+    pct: f32,
+}
+
+impl NameShare {
+    fn label(&self) -> String {
+        if self.count > 1 {
+            format!("{} ×{} {}", self.name, self.count, App::fmt_pct(self.pct))
+        } else {
+            format!("{} {}", self.name, App::fmt_pct(self.pct))
+        }
+    }
+}
+
+/// Soma por nome, do maior pro menor (empate: nome, pra ordem não piscar).
+fn by_name<'a>(items: impl Iterator<Item = (&'a str, f32)>) -> Vec<NameShare> {
+    let mut acc: HashMap<&str, (usize, f32)> = HashMap::new();
+    for (name, pct) in items {
+        let e = acc.entry(name).or_default();
+        e.0 += 1;
+        e.1 += pct;
+    }
+    let mut out: Vec<NameShare> = acc
+        .into_iter()
+        .map(|(name, (count, pct))| NameShare {
+            name: name.to_string(),
+            count,
+            pct,
+        })
+        .collect();
+    out.sort_by(|a, b| b.pct.total_cmp(&a.pct).then_with(|| a.name.cmp(&b.name)));
+    out
+}
+
+impl CpuGap {
+    /// Os nascidos já estão em `split.listed`, mas sem linha: entram aqui pra coluna
+    /// visível continuar somando o medidor.
+    fn total(&self) -> f32 {
+        self.split.unlisted() + self.born.iter().map(|b| b.pct).sum::<f32>()
+    }
+
+    /// Texto curto da coluna "Quem abriu": os maiores responsáveis primeiro.
+    fn summary(&self, locale: Locale) -> String {
+        let mut parts: Vec<String> = self
+            .born
+            .iter()
+            .filter(|b| b.pct >= 0.5)
+            .take(3)
+            .map(|b| format!("{} {}", locale.text("novo:", "new:"), b.label()))
+            .collect();
+        let kids: Vec<String> = self
+            .parents
+            .iter()
+            .filter(|p| p.pct >= 0.5)
+            .take(3)
+            .map(NameShare::label)
+            .collect();
+        if !kids.is_empty() {
+            parts.push(format!(
+                "{} {}",
+                locale.text("filhos curtos de", "short children of"),
+                kids.join(", ")
+            ));
+        }
+        if parts.is_empty() {
+            return locale
+                .text(
+                    "processos de vida curta e kernel",
+                    "short-lived processes and kernel",
+                )
+                .to_string();
+        }
+        parts.join(" · ")
+    }
+
+    fn tip(&self, locale: Locale) -> String {
+        let mut t = locale
+            .text(
+                "CPU que o medidor do topo cobrou e nenhuma outra linha mostra. Com ela, a coluna soma o medidor.\n\n",
+                "CPU the top meter charged that no other row shows. With it, the column adds up to the meter.\n\n",
+            )
+            .to_string();
+        t.push_str(&self.split.explain(locale));
+        if !self.parents.is_empty() {
+            t.push_str(locale.text(
+                "\n\nQuem recolheu os processos curtos (o kernel credita o filho ao pai):",
+                "\n\nWho reaped the short-lived processes (the kernel credits the child to the parent):",
+            ));
+            for p in self.parents.iter().take(8) {
+                t.push_str(&format!("\n  {}", p.label()));
+            }
+        }
+        if !self.born.is_empty() {
+            t.push_str(locale.text(
+                "\n\nNasceram com a ordem congelada (ganham linha quando o mouse sair da tabela):",
+                "\n\nStarted while the order was frozen (they get a row when the pointer leaves the table):",
+            ));
+            for b in self.born.iter().take(8) {
+                t.push_str(&format!("\n  {}", b.label()));
+            }
+        }
+        t
+    }
+}
+
 /// Medidor do topo (o que o kernel cobrou de todos os núcleos) contra a soma da lista.
 /// A diferença é o que nenhuma linha mostra: processo que nasceu e morreu entre duas
 /// amostras, interrupções e trabalho do kernel fora de qualquer PID.
@@ -7665,5 +7899,48 @@ mod number_tests {
         assert_eq!(format_num(1234.5, 1, true), "1,234.5");
         assert_eq!(format_num(15.84, 1, true), "15.8");
         assert_eq!(format_num(999.0, 0, true), "999");
+    }
+}
+
+#[cfg(test)]
+mod cpu_gap_tests {
+    use super::{by_name, CpuGap, CpuSplit, Locale};
+
+    fn gap(born: &[(&str, f32)], parents: &[(&str, f32)]) -> CpuGap {
+        CpuGap {
+            split: CpuSplit {
+                total: 100.0,
+                listed: 79.0,
+                children: 15.0,
+            },
+            parents: by_name(parents.iter().copied()),
+            born: by_name(born.iter().copied()),
+        }
+    }
+
+    #[test]
+    fn row_adds_the_unlisted_gap_and_processes_born_while_frozen() {
+        // Medidor 100%, vivos somam 79% (o cue4mesh novo incluso, mas sem linha). A linha
+        // tem que levar os 21% do buraco mais os 36% do nascido, senão a coluna fecha em 64%.
+        let g = gap(&[("cue4mesh", 36.0)], &[]);
+        assert!((g.total() - 57.0).abs() < 1e-4);
+        assert!((gap(&[], &[]).total() - 21.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn summary_names_who_is_behind_the_gap() {
+        // Quarenta clang++ de 0,5% cada somam 20% e passam o cue4mesh: o nome que pesa
+        // aparece uma vez, com a contagem.
+        let mut born = vec![("cue4mesh", 15.0), ("sh", 0.1)];
+        born.extend(std::iter::repeat_n(("clang++", 0.5), 40));
+        let g = gap(&born, &[("dotnet", 12.0), ("node", 11.0)]);
+        assert_eq!(
+            g.summary(Locale::Portuguese),
+            "novo: clang++ ×40 20% · novo: cue4mesh 15% · filhos curtos de dotnet 12%, node 11%"
+        );
+        assert_eq!(
+            gap(&[], &[]).summary(Locale::English),
+            "short-lived processes and kernel"
+        );
     }
 }

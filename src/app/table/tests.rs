@@ -517,3 +517,52 @@ fn snapshot_query_and_cache_preserve_hover_then_apply_filter_and_new_order() {
     );
     assert_eq!(cache.rows(), vec![row(3)]);
 }
+
+#[test]
+fn cpu_gap_row_enters_by_value_without_splitting_an_open_app() {
+    // Cabeçalho do app (40%) com dois filhos abertos, depois um processo de 5%.
+    let mut rows = vec![
+        Row::AppHeader { gi: 0 },
+        Row::Proc {
+            pid: 2,
+            depth: 1,
+            has_children: false,
+            expanded: false,
+            dim: false,
+        },
+        Row::Proc {
+            pid: 3,
+            depth: 1,
+            has_children: false,
+            expanded: false,
+            dim: false,
+        },
+        row(4),
+    ];
+    let value_of = |r: &Row| match *r {
+        Row::AppHeader { .. } => Some(40.0),
+        Row::Proc {
+            pid: 4, depth: 0, ..
+        } => Some(5.0),
+        _ => None,
+    };
+    insert_by_value(&mut rows, Row::CpuGap, 21.0, true, value_of);
+    assert_eq!(rows[3], Row::CpuGap);
+    assert_eq!(rows[4], row(4));
+
+    let mut top = vec![row(4)];
+    insert_by_value(&mut top, Row::CpuGap, 60.0, true, value_of);
+    assert_eq!(top, vec![Row::CpuGap, row(4)]);
+
+    let mut asc = vec![row(4)];
+    insert_by_value(&mut asc, Row::CpuGap, 60.0, false, value_of);
+    assert_eq!(asc, vec![row(4), Row::CpuGap]);
+}
+
+#[test]
+fn processes_born_after_the_rebuild_are_the_ones_without_a_row() {
+    let at_rebuild: HashSet<u32> = [1, 2, 3].into_iter().collect();
+    // 2 morreu, 7 e 5 nasceram com a ordem congelada.
+    let keep: HashSet<u32> = [1, 3, 7, 5].into_iter().collect();
+    assert_eq!(born_since_rebuild(&keep, &at_rebuild), vec![5, 7]);
+}
